@@ -37,13 +37,13 @@ def change_stock(stock_code):
     st.session_state.show_whale = False
     st.session_state.topic_results = None
 
-# --- [強化版] 真 AI 聯網分析函數：具備自動重試與模型偵測 ---
+# --- [修正版] 真 AI 聯網分析函數 ---
 def get_ai_analysis_robust(topic, api_key):
     if not api_key:
         return "ERROR: Missing Key", []
 
-    # 嘗試多個穩定的模型名稱，避免 404 錯誤
-    models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]
+    # 使用乾淨且正確的 Google API 網址格式
+    models_to_try = ["gemini-1.5-flash", "gemini-1.5-flash-latest"]
     
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
     必須嚴格回傳 JSON 格式：
@@ -53,7 +53,7 @@ def get_ai_analysis_robust(topic, api_key):
         {"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}
       ]
     }
-    注意：不要輸出任何 Markdown 標記（如 ```json），直接輸出純 JSON 字串。"""
+    注意：代號必須是 4 位數字。直接輸出純 JSON。"""
 
     payload = {
         "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
@@ -64,23 +64,19 @@ def get_ai_analysis_robust(topic, api_key):
 
     last_error = ""
     for model in models_to_try:
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model}:generateContent?key={api_key}"
+        # 修正網址拼接問題
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         try:
             response = requests.post(url, json=payload, timeout=25)
             if response.status_code == 200:
                 res_json = response.json()
                 content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-                
-                # 清理格式
                 clean_json = re.sub(r'```json\n?|```', '', content).strip()
-                
-                # 提取聯網參考來源
                 grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
                 links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
-                
                 return json.loads(clean_json), list(set(links))
             else:
-                last_error = f"API {response.status_code}: {response.text[:100]}"
+                last_error = f"API {response.status_code}: {response.text[:50]}"
         except Exception as e:
             last_error = str(e)
             continue
@@ -102,13 +98,14 @@ def get_stock_data(stock_id):
 def get_stock_news(query):
     try:
         encoded_q = urllib.parse.quote(f"{query} 股票")
-        url = f"[https://news.google.com/rss/search?q=](https://news.google.com/rss/search?q=){encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        url = f"https://news.google.com/rss/search?q={encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
         res = requests.get(url, timeout=5)
         root = ET.fromstring(res.text)
         news = []
         for item in root.findall('.//item')[:6]:
             t = item.find('title').text
-            news.append({"title": t, "link": item.find('link').text, "sentiment": "🟢" if any(x in t for x in ["漲","成長","買超"]) else ("🔴" if any(x in t for x in ["跌","賣超","警訊"]) else "⚪")})
+            sentiment = "🟢" if any(x in t for x in ["漲","成長","買超","利多"]) else ("🔴" if any(x in t for x in ["跌","賣超","警訊"]) else "⚪")
+            news.append({"title": t, "link": item.find('link').text, "sentiment": sentiment})
         return news
     except: return []
 
@@ -129,36 +126,35 @@ with st.sidebar:
     st.markdown("---")
     
     st.markdown("### 🧠 AI 聯網議題選股")
-    topic_q = st.text_input("輸入議題 (如: 矽光子、代理人AI)")
+    topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     user_api_key = st.text_input("🔑 Gemini API Key", type="password", help="請貼入您在 Google AI Studio 申請的金鑰。")
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
         if topic_q:
             if not user_api_key:
-                st.warning("請先輸入 API Key。")
+                st.warning("請先輸入您的 API Key。")
             else:
                 st.session_state.topic_results = "LOADING"
             
     st.markdown("---")
-    if st.button("🔄 重新整理快取", use_container_width=True):
+    if st.button("🔄 重新整理系統", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
 # ==========================================
-# 主畫面
+# 主畫面開始
 # ==========================================
 st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
 # --- 處理 AI 議題結果 ---
 if st.session_state.topic_results == "LOADING":
-    with st.spinner(f"🤖 AI 正在連線搜尋並推演「{topic_q}」..."):
+    with st.spinner(f"🤖 AI 正在聯網搜尋並分析「{topic_q}」..."):
         data, links = get_ai_analysis_robust(topic_q, user_api_key)
         if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
             st.session_state.show_whale = False
         else:
-            st.error(f"AI 解析失敗。錯誤訊息：{data}")
-            st.info("💡 建議：請確認 API Key 是否複製完整（不可包含前後空白），或稍後再試。")
+            st.error(f"AI 解析失敗：{data}")
             st.session_state.topic_results = None
 
 if isinstance(st.session_state.topic_results, dict):
@@ -252,7 +248,7 @@ if curr_id:
         
         st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;'><b>AI 判定：{'📈 趨勢強勁' if cur_p > ma20 else '📉 處於弱勢'}</b></div>", unsafe_allow_html=True)
         
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線", "KD (9,3,3)", "成交張數"))
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線與均線", "KD (9,3,3)", "成交張數"))
         fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist.index, y=hist['K'], name='K值', line=dict(color='orange')), row=2, col=1)
         fig.add_trace(go.Scatter(x=hist.index, y=hist['D'], name='D值', line=dict(color='cyan')), row=2, col=1)
