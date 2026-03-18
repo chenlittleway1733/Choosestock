@@ -37,7 +37,7 @@ def change_stock(stock_code):
     st.session_state.show_whale = False
     st.session_state.topic_results = None
 
-# --- [防彈修正] 真 AI 聯網分析函數 (多重備援機制) ---
+# --- [真相大白版] 真 AI 聯網分析函數 ---
 def get_ai_analysis_final(topic, api_key):
     if not api_key:
         return "ERROR: 未輸入金鑰", []
@@ -45,13 +45,8 @@ def get_ai_analysis_final(topic, api_key):
     # 確保金鑰乾淨無空白
     api_key = api_key.strip()
     
-    # 定義多重備援模型清單，解決 404 找不到模型的問題
-    models = [
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro-latest",
-        "gemini-pro"
-    ]
+    # 只使用最穩定的 gemini-1.5-flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
     必須嚴格回傳 JSON 格式：
@@ -61,50 +56,44 @@ def get_ai_analysis_final(topic, api_key):
         {"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}
       ]
     }
-    確保代號為純數字。不要輸出 Markdown 標記語法。"""
+    確保代號為純數字。直接輸出 JSON 字串，不要有 ```json 標籤。"""
 
-    last_error = ""
+    # 組合 1：帶有 Google Search 工具 (需要較高權限)
+    payload_search = {
+        "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "tools": [{"googleSearch": {}}],
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
+    
+    # 組合 2：降級版純 AI 預測 (不需要搜尋權限，絕對安全)
+    payload_basic = {
+        "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
 
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    try:
+        # 第一波：嘗試聯網搜尋
+        response = requests.post(url, json=payload_search, timeout=20)
         
-        # 組合 1：帶有 Google Search 工具
-        payload_search = {
-            "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
-            "systemInstruction": {"parts": [{"text": system_prompt}]},
-            "tools": [{"googleSearch": {}}] # 使用官方最新的工具命名
-        }
-        
-        # 組合 2：最保守的純 AI 預測 (不帶 Search，防止 API 權限報錯)
-        payload_basic = {
-            "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
-            "systemInstruction": {"parts": [{"text": system_prompt}]}
-        }
-
-        # 針對支援 JSON 強制的模型加上參數
-        if "1.5" in model:
-            payload_search["generationConfig"] = {"responseMimeType": "application/json"}
-            payload_basic["generationConfig"] = {"responseMimeType": "application/json"}
-
-        try:
-            # 第一波嘗試：帶聯網搜尋
-            response = requests.post(url, json=payload_search, timeout=20)
-            if response.status_code == 200:
-                return parse_ai_response(response.json())
-            
-            # 如果失敗 (例如 404 或不支援搜尋)，第二波嘗試：純 AI 解析
-            response_basic = requests.post(url, json=payload_basic, timeout=20)
-            if response_basic.status_code == 200:
-                return parse_ai_response(response_basic.json())
-            
-            last_error = str(response_basic.status_code)
-        except Exception as e:
-            last_error = str(e)
-            continue # 無論發生什麼錯，繼續嘗試下一個模型
-            
-    return f"所有 AI 模型皆無法連線 (代碼: {last_error})", []
+        if response.status_code == 200:
+            return parse_ai_response(response.json())
+        else:
+            # 如果失敗 (例如 API Key 不支援搜尋)，自動啟動第二波：純 AI 解析
+            res_basic = requests.post(url, json=payload_basic, timeout=20)
+            if res_basic.status_code == 200:
+                return parse_ai_response(res_basic.json())
+            else:
+                # 如果還是失敗，直接回傳 Google 官方的真實錯誤訊息
+                err_msg = res_basic.json().get('error', {}).get('message', res_basic.text)
+                return f"Google API 拒絕連線 (代碼: {res_basic.status_code})。原因：{err_msg}", []
+                
+    except Exception as e:
+        return f"網路連線異常: {str(e)}", []
 
 def parse_ai_response(res_json):
+    content = ""
     try:
         content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
         # 清理 JSON 字串
@@ -113,8 +102,8 @@ def parse_ai_response(res_json):
         grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
         links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
         return json.loads(clean_json), list(set(links))
-    except:
-        return "回傳資料格式解析失敗，請再試一次。", []
+    except Exception as e:
+        return f"JSON 格式解析失敗: {str(e)}。AI 原文: {content[:100]}...", []
 
 # --- 基礎數據函數 ---
 @st.cache_data(ttl=3600)
@@ -131,7 +120,7 @@ def get_stock_data(stock_id):
 def get_stock_news(query):
     try:
         encoded_q = urllib.parse.quote(f"{query} 股票")
-        url = f"https://news.google.com/rss/search?q={encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        url = f"[https://news.google.com/rss/search?q=](https://news.google.com/rss/search?q=){encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
         res = requests.get(url, timeout=5)
         root = ET.fromstring(res.text)
         news = []
@@ -180,13 +169,14 @@ st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
 # --- 處理 AI 議題結果 ---
 if st.session_state.topic_results == "LOADING":
-    with st.spinner(f"🤖 AI 正在連線搜尋並推演「{topic_q}」..."):
+    with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
         data, links = get_ai_analysis_final(topic_q, user_api_key)
         if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
             st.session_state.show_whale = False
         else:
-            st.error(f"AI 解析失敗：{data}")
+            # 顯示最真實的錯誤訊息
+            st.error(f"AI 解析失敗。\n\n詳細原因：{data}")
             st.session_state.topic_results = None
 
 if isinstance(st.session_state.topic_results, dict):
