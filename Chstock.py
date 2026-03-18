@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 # 系統介面與狀態設定
 # ==========================================
 st.set_page_config(page_title="台股智慧選股系統", layout="wide")
-st.title("📈 台股短線智能選股與分析系統")
+st.title("📈 台股短線智能選股與分析系統001")
 
 # 實作重新整理按鈕邏輯
 if st.button("🔄 重新整理 / 獲取最新重大訊息與報價"):
