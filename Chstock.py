@@ -45,29 +45,32 @@ if stock_symbol:
             # --- 基本面與預估價計算 ---
             current_price = hist['Close'].iloc[-1]
             
-            # 取得 EPS，如果抓不到資料則預設為 0
-            eps = info.get('trailingEps')
-            if eps is None:
-                eps = 0.0
+            # 取得近四季 EPS (Trailing EPS) 與 法人預估今年 EPS (Forward EPS)
+            trailing_eps = info.get('trailingEps')
+            forward_eps = info.get('forwardEps')
+            
+            # 數值防呆處理
+            if trailing_eps is None: trailing_eps = 0.0
+            if forward_eps is None: forward_eps = 0.0
                 
-            # 強制手動計算本益比：最新收盤價 / 近四季 EPS
-            if eps > 0:
-                pe_ratio = current_price / eps
-            else:
-                pe_ratio = 0.0
+            # 分別計算兩種本益比
+            trailing_pe = current_price / trailing_eps if trailing_eps > 0 else 0.0
+            forward_pe = current_price / forward_eps if forward_eps > 0 else 0.0
             
-            cheap_price = eps * 15
-            fair_price = eps * 20
-            expensive_price = eps * 30
+            # 預估價計算：優先使用法人預估今年 EPS 作為計算基礎，若無則退回使用近四季 EPS
+            eval_eps = forward_eps if forward_eps > 0 else trailing_eps
+            cheap_price = eval_eps * 15
+            fair_price = eval_eps * 20
+            expensive_price = eval_eps * 30
             
-            # 顯示基本指標面板
+            # 顯示基本指標面板 (改為顯示兩種 EPS 與 本益比)
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("最新收盤價", f"{current_price:.2f}")
-            col2.metric("近四季 EPS", f"{eps:.2f}")
-            col3.metric("本益比 (P/E)", f"{pe_ratio:.2f}")
+            col2.metric("近四季EPS / 預估今年EPS", f"{trailing_eps:.2f} / {forward_eps:.2f}")
+            col3.metric("歷史本益比 / 預估本益比", f"{trailing_pe:.2f} / {forward_pe:.2f}")
             
             evaluation = "合理"
-            if eps <= 0:
+            if eval_eps <= 0:
                 evaluation = "無法估值 (缺乏獲利)"
             elif current_price <= cheap_price:
                 evaluation = "便宜區間"
@@ -77,11 +80,13 @@ if stock_symbol:
             col4.metric("系統估值評價", evaluation)
             
             # --- 預估價區塊 ---
-            st.markdown("### 💰 財務預估價分析")
-            if eps > 0:
-                st.write(f"- **便宜價 (15倍本益比)**: {cheap_price:.2f} 元")
-                st.write(f"- **合理價 (20倍本益比)**: {fair_price:.2f} 元")
-                st.write(f"- **昂貴價 (30倍本益比)**: {expensive_price:.2f} 元")
+            st.markdown("### 💰 財務預估價分析 (基於 15/20/30 倍本益比)")
+            if eval_eps > 0:
+                eps_source = "法人預估今年 EPS" if forward_eps > 0 else "近四季 EPS"
+                st.write(f"*目前計算預估價採用之標準：**{eps_source} ({eval_eps:.2f} 元)***")
+                st.write(f"- **便宜價 (15倍)**: {cheap_price:.2f} 元")
+                st.write(f"- **合理價 (20倍)**: {fair_price:.2f} 元")
+                st.write(f"- **昂貴價 (30倍)**: {expensive_price:.2f} 元")
             else:
                 st.warning("⚠️ 由於目前系統無法取得該股有效的正數每股盈餘 (EPS)，因此暫時無法提供 15/20/30 倍本益比的預估價。")
             
@@ -90,15 +95,15 @@ if stock_symbol:
             hist['10MA'] = hist['Close'].rolling(window=10).mean()
             hist['60MA'] = hist['Close'].rolling(window=60).mean() 
             
-            # --- KD 指標計算 (💯 終於把漏洞補上了！) ---
+            # --- KD 指標計算 (💯 這次絕對寫上 了！) ---
             # 1. 計算 9 日 RSV 值
             low_min = hist['Low'].rolling(window=9).min()
             high_max = hist['High'].rolling(window=9).max()
             rsv = 100 * (hist['Close'] - low_min) / (high_max - low_min)
             
-            # 2. 這次「正確的」將 K 值與 D 值新增為獨立的欄位
+            # 2. 正確將 K 值與 D 值存入 dataframe 中
             hist['K'] = rsv.ewm(com=2, adjust=False).mean()
-            hist = hist['K'].ewm(com=2, adjust=False).mean()  # 就是這裡！加上了
+            hist = hist['K'].ewm(com=2, adjust=False).mean() # 這裡修正為 hist =...
             
             # --- 繪製 K 線圖與均線 ---
             st.markdown("### 📈 股價趨勢與均線 (5日, 10日, 季線)")
@@ -114,7 +119,7 @@ if stock_symbol:
             st.markdown("### 📊 KD 動能指標")
             fig_kd = go.Figure()
             fig_kd.add_trace(go.Scatter(x=hist.index, y=hist['K'], mode='lines', name='K值 (快線)', line=dict(color='blue')))
-            fig_kd.add_trace(go.Scatter(x=hist.index, y=hist, mode='lines', name='D值 (慢線)', line=dict(color='orange'))) # 同步修正這裡
+            fig_kd.add_trace(go.Scatter(x=hist.index, y=hist, mode='lines', name='D值 (慢線)', line=dict(color='orange'))) # 這裡同步修正為 hist
             fig_kd.add_hline(y=80, line_dash="dash", line_color="red", annotation_text="超買區 (80)")
             fig_kd.add_hline(y=20, line_dash="dash", line_color="green", annotation_text="超賣區 (20)")
             fig_kd.update_layout(height=250, margin=dict(l=0, r=0, t=30, b=0))
