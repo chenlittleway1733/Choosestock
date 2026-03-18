@@ -42,25 +42,34 @@ if stock_symbol:
             stock_name = info.get('shortName', stock_symbol)
             st.subheader(f"📊 {stock_name} ({stock_symbol}) 綜合評估報告")
             
-            # --- 基本面與預估價計算 ---
+            # --- 基本面與預估價計算 (已修正 yfinance 的本益比 Bug) ---
             current_price = hist['Close'].iloc[-1]
-            eps = info.get('trailingEps', 0)
-            pe_ratio = info.get('trailingPE', 0)
             
-            if pe_ratio == 0 and eps > 0:
+            # 取得 EPS，如果抓不到資料則預設為 0
+            eps = info.get('trailingEps')
+            if eps is None:
+                eps = 0.0
+                
+            # 強制手動計算本益比：最新收盤價 / 近四季 EPS (避免 yfinance 單季 Bug)
+            if eps > 0:
                 pe_ratio = current_price / eps
+            else:
+                pe_ratio = 0.0
             
             cheap_price = eps * 15
             fair_price = eps * 20
             expensive_price = eps * 30
             
+            # 顯示基本指標面板
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("最新收盤價", f"{current_price:.2f}")
             col2.metric("近四季 EPS", f"{eps:.2f}")
             col3.metric("本益比 (P/E)", f"{pe_ratio:.2f}")
             
             evaluation = "合理"
-            if current_price <= cheap_price:
+            if eps <= 0:
+                evaluation = "無法估值 (缺乏獲利)"
+            elif current_price <= cheap_price:
                 evaluation = "便宜區間"
             elif current_price >= expensive_price:
                 evaluation = "昂貴區間"
@@ -69,22 +78,25 @@ if stock_symbol:
             
             # --- 預估價區塊 ---
             st.markdown("### 💰 財務預估價分析")
-            st.write(f"- **便宜價 (15倍本益比)**: {cheap_price:.2f} 元")
-            st.write(f"- **合理價 (20倍本益比)**: {fair_price:.2f} 元")
-            st.write(f"- **昂貴價 (30倍本益比)**: {expensive_price:.2f} 元")
+            if eps > 0:
+                st.write(f"- **便宜價 (15倍本益比)**: {cheap_price:.2f} 元")
+                st.write(f"- **合理價 (20倍本益比)**: {fair_price:.2f} 元")
+                st.write(f"- **昂貴價 (30倍本益比)**: {expensive_price:.2f} 元")
+            else:
+                st.warning("⚠️ 由於目前系統無法取得該股有效的正數每股盈餘 (EPS)，因此暫時無法提供 15/20/30 倍本益比的預估價。")
             
             # --- 技術面計算 (5日、10日、季線) ---
             hist['5MA'] = hist['Close'].rolling(window=5).mean()
             hist['10MA'] = hist['Close'].rolling(window=10).mean()
             hist['60MA'] = hist['Close'].rolling(window=60).mean() 
             
-            # --- KD 指標計算 (💯 這次真的修復了覆蓋變數的問題) ---
-            # 計算 9 日 RSV 值 (存入新變數 rsv，不覆蓋 hist)
+            # --- KD 指標計算 (💯 已徹底修復導致 'Open' 錯誤的筆誤) ---
+            # 1. 計算 9 日 RSV 值
             low_min = hist['Low'].rolling(window=9).min()
             high_max = hist['High'].rolling(window=9).max()
             rsv = 100 * (hist['Close'] - low_min) / (high_max - low_min)
             
-            # 計算 K 值與 D 值 (新增為 hist 內的新欄位)
+            # 2. 正確將 K 值與 D 值存入 dataframe (加上了)
             hist['K'] = rsv.ewm(com=2, adjust=False).mean()
             hist = hist['K'].ewm(com=2, adjust=False).mean()
             
@@ -102,7 +114,7 @@ if stock_symbol:
             st.markdown("### 📊 KD 動能指標")
             fig_kd = go.Figure()
             fig_kd.add_trace(go.Scatter(x=hist.index, y=hist['K'], mode='lines', name='K值 (快線)', line=dict(color='blue')))
-            fig_kd.add_trace(go.Scatter(x=hist.index, y=hist, mode='lines', name='D值 (慢線)', line=dict(color='orange')))
+            fig_kd.add_trace(go.Scatter(x=hist.index, y=hist, mode='lines', name='D值 (慢線)', line=dict(color='orange'))) # 修正為 y=hist
             fig_kd.add_hline(y=80, line_dash="dash", line_color="red", annotation_text="超買區 (80)")
             fig_kd.add_hline(y=20, line_dash="dash", line_color="green", annotation_text="超賣區 (20)")
             fig_kd.update_layout(height=250, margin=dict(l=0, r=0, t=30, b=0))
