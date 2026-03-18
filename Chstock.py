@@ -29,60 +29,61 @@ if 'selected_stock' not in st.session_state:
     st.session_state.selected_stock = "2330"
 if 'topic_results' not in st.session_state:
     st.session_state.topic_results = None
-if 'show_whale' not in st.session_state:
-    st.session_state.show_whale = False
 
-# 點擊按鈕更新股票的函數
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
-    st.session_state.show_whale = False
+    # 點選股票後清空搜尋結果，讓畫面聚焦
     st.session_state.topic_results = None
 
-# --- Gemini API 智慧議題分析 (核心升級) ---
-def get_ai_topic_analysis(topic):
-    apiKey = "" # 執行環境自動提供，無需輸入帳密
+# --- Gemini 2.5 聯網分析引擎 (移除內建知識庫，全面動態分析) ---
+def get_real_ai_analysis(topic):
+    apiKey = "" # 執行環境自動提供
+    # 使用最新支援 Google Search 的模型
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={apiKey}"
     
-    system_prompt = """你是一位精通台股產業鏈的資深分析師。請針對使用者輸入的議題或關鍵字，分析其在台灣股市中的受惠產業鏈。
-    請推薦 3 檔具備基本面支撐的「潛力概念股」，以及 3 檔具備強大短線爆發力的「可能飆股」。
-    請務必回傳正確的台股 4 位數代號與中文名稱。
-    必須嚴格以 JSON 格式回傳，結構如下：
+    system_prompt = """你是一位精通台股與全球半導體、AI 產業鏈的資深投資長。
+    請針對使用者輸入的議題，結合最新的市場趨勢與搜尋結果，進行深度的產業鏈邏輯推演。
+    
+    你的任務：
+    1. 推薦 3 檔受惠最直接的「潛力權值股」與 3 檔具備爆發力的「中小型概念股」。
+    2. 為每檔股票提供簡短的「受惠邏輯分析」。
+    3. 嚴格以 JSON 格式回傳，格式如下：
     {
-      "potentials": [["代號", "名稱"], ["代號", "名稱"], ["代號", "名稱"]],
-      "skyrockets": [["代號", "名稱"], ["代號", "名稱"], ["代號", "名稱"]]
+      "reasoning": "整體產業趨勢的深度分析簡述",
+      "stocks": [
+        {"id": "代號", "name": "名稱", "type": "潛力", "why": "具體受惠原因"},
+        ...
+      ]
     }
-    不要回傳任何額外的文字敘述。"""
+    請務必確保台股代號為 4 位數字。回傳內容僅限 JSON，不要有其他文字。"""
     
     payload = {
-        "contents": [{
-            "parts": [{"text": f"請分析議題：{topic}"}]
-        }],
-        "systemInstruction": {
-            "parts": [{"text": system_prompt}]
-        },
+        "contents": [{"parts": [{"text": f"請深度分析此議題在台股的佈局機會：{topic}"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "tools": [{"google_search": {}}], # 開啟 Google Search 功能
         "generationConfig": {
             "responseMimeType": "application/json"
         }
     }
     
-    # 指數退避重試機制
-    retries = 5
-    for i in range(retries):
+    # 指數退避重試
+    for i in range(5):
         try:
-            response = requests.post(url, json=payload, timeout=20)
+            response = requests.post(url, json=payload, timeout=25)
             if response.status_code == 200:
-                result = response.json()
-                content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-                return json.loads(content)
-            elif response.status_code == 429: # 流量限制
+                res_json = response.json()
+                content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+                # 提取聯網來源連結
+                sources = res_json.get('candidates', [{}])[0].get('groundingMetadata', {}).get('groundingAttributions', [])
+                links = [s.get('web', {}).get('uri') for s in sources if s.get('web', {}).get('uri')]
+                return json.loads(content), list(set(links))
+            elif response.status_code == 429:
                 time.sleep(2 ** i)
-            else:
-                time.sleep(1)
-        except Exception:
-            time.sleep(2 ** i)
-    return None
+        except:
+            time.sleep(1)
+    return None, []
 
-# --- 側邊欄：功能選單 ---
+# --- 側邊欄 ---
 with st.sidebar:
     st.markdown("### 🔍 個股查詢")
     stock_input = st.text_input("請輸入台股代號 (例如: 2330)", value=st.session_state.selected_stock)
@@ -91,32 +92,24 @@ with st.sidebar:
     
     st.markdown("---")
     
-    st.markdown("### 🐳 籌碼集中度追蹤")
-    st.markdown("<small>依照持股比例增幅篩選</small>", unsafe_allow_html=True)
-    if st.button("🔍 掃描籌碼增持 TOP 5", use_container_width=True):
-        st.session_state.show_whale = True
-        st.session_state.topic_results = None 
-        
-    st.markdown("---")
-    
-    st.markdown("### 🧠 AI 議題智慧選股")
-    topic_input = st.text_input("輸入議題 (如: TPU、代理人AI、低軌衛星)")
-    if st.button("AI 智慧關聯分析", type="primary", use_container_width=True):
-        if topic_input:
-            with st.spinner(f"🤖 AI 正在分析「{topic_input}」... (此過程無需帳密)"):
-                res = get_ai_topic_analysis(topic_input)
-                if res:
-                    st.session_state.topic_results = {"topic": topic_input, "data": res}
-                    st.session_state.show_whale = False
+    st.markdown("### 🧠 AI 聯網議題選股 (Google Search)")
+    st.markdown("<small>輸入時事議題，AI 將即時搜尋並推演產業鏈</small>", unsafe_allow_html=True)
+    topic_q = st.text_input("輸入議題 (如: 矽光子、Agent AI、B300)")
+    if st.button("AI 實時分析", type="primary", use_container_width=True):
+        if topic_q:
+            with st.spinner(f"🤖 AI 正在聯網搜尋並分析「{topic_q}」..."):
+                data, links = get_real_ai_analysis(topic_q)
+                if data:
+                    st.session_state.topic_results = {"topic": topic_q, "data": data, "links": links}
                 else:
-                    st.error("AI 伺服器目前較忙碌，請於 10 秒後再試一次。")
-            
+                    st.error("AI 引擎忙碌中，請稍後再試。")
+    
     st.markdown("---")
-    if st.button("🔄 重新整理系統", use_container_width=True):
+    if st.button("🔄 重整系統快取", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# --- 資料獲取與處理 ---
+# --- 資料獲取函數 ---
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     try:
@@ -140,67 +133,51 @@ def get_chinese_name(stock_id):
     except: pass
     return None
 
-@st.cache_data(ttl=1800)
-def get_and_analyze_news(stock_name):
-    try:
-        query = urllib.parse.quote(f"{stock_name} 股票")
-        url = f"https://news.google.com/rss/search?q={query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-        response = requests.get(url, timeout=5)
-        root = ET.fromstring(response.text)
-        news_list = []
-        bull_kws = ["漲", "創高", "買超", "成長", "獲利", "升評", "突破", "大單", "強勢", "飆"]
-        bear_kws = ["跌", "賣超", "衰退", "下修", "降評", "砍單", "虧損", "警訊", "挫", "疲弱"]
-        for item in root.findall('.//item')[:6]:
-            title = item.find('title').text
-            score = sum(1 for kw in bull_kws if kw in title) - sum(1 for kw in bear_kws if kw in title)
-            news_list.append({"title": title, "link": item.find('link').text, "sentiment": "🟢" if score > 0 else ("🔴" if score < 0 else "⚪")})
-        return news_list
-    except: return []
-
 # ==========================================
 # 主畫面開始
 # ==========================================
-st.markdown("## 📈 台股智慧選股與 AI 操盤系統")
+st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
-# --- 顯示區：籌碼 TOP 5 ---
-if st.session_state.show_whale:
-    st.markdown("### 🐳 近兩周大戶持股比例顯著增加標的")
-    whale_stocks = [("2317", "鴻海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("2603", "長榮")]
-    cols = st.columns(5)
-    for idx, (code, name) in enumerate(whale_stocks):
-        with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
-    st.markdown("---")
-
-# --- 顯示區：AI 議題智慧分析結果 ---
-elif st.session_state.topic_results:
-    topic_name = st.session_state.topic_results['topic']
-    res_data = st.session_state.topic_results['data']
-    st.markdown(f"### 💡 AI 智慧議題分析：【{topic_name}】")
-    st.success(f"🤖 AI 已深度推演「{topic_name}」在台股的受惠路徑，以下為推薦標的：")
+# --- AI 聯網分析結果顯示區 ---
+if st.session_state.topic_results:
+    t_res = st.session_state.topic_results
+    st.markdown(f"### 💡 議題動態推演：【{t_res['topic']}】")
     
-    col_p, col_s = st.columns(2)
-    with col_p:
-        st.markdown("#### 🛡️ 潛力概念股 (基本面強)")
-        for code, name in res_data.get('potentials', []):
-            st.button(f"{name} ({code})", on_click=change_stock, args=(code,), key=f"tp_{code}", use_container_width=True)
-    with col_s:
-        st.markdown("#### 🚀 可能飆股區 (短線爆發)")
-        for code, name in res_data.get('skyrockets', []):
-            st.button(f"{name} ({code})", on_click=change_stock, args=(code,), key=f"ts_{code}", use_container_width=True)
+    with st.container():
+        st.info(f"**AI 深度分析邏輯：**\n{t_res['data']['reasoning']}")
+        
+        # 顯示推薦股票
+        p_stocks = [s for s in t_res['data']['stocks'] if s['type'] == "潛力"]
+        s_stocks = [s for s in t_res['data']['stocks'] if s['type'] != "潛力"]
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### 🛡️ 潛力權值股")
+            for s in p_stocks:
+                st.button(f"{s['name']} ({s['id']})", on_click=change_stock, args=(s['id'],), key=f"btn_{s['id']}", use_container_width=True)
+                st.caption(f"受惠：{s['why']}")
+        with c2:
+            st.markdown("#### 🚀 爆發概念股")
+            for s in s_stocks:
+                st.button(f"{s['name']} ({s['id']})", on_click=change_stock, args=(s['id'],), key=f"btn_{s['id']}", use_container_width=True)
+                st.caption(f"受惠：{s['why']}")
+                
+        # 顯示參考連結
+        if t_res['links']:
+            with st.expander("🔗 查看 AI 參考之網路資訊來源"):
+                for link in t_res['links']:
+                    st.markdown(f"- [{link}]({link})")
     st.markdown("---")
 
-# --- 個股綜合評估 ---
+# --- 個股綜合報告主體 ---
 current_id = st.session_state.selected_stock
 if current_id:
-    with st.spinner('正在分析數據中...'):
+    with st.spinner('同步法人與技術數據中...'):
         hist_data, info = get_stock_data(current_id)
         chinese_name = get_chinese_name(current_id)
-        news_data = get_and_analyze_news(chinese_name if chinese_name else current_id)
 
-    if hist_data is None or hist_data.empty:
-        st.error(f"❌ 查無代號 {current_id} 的資料。")
-    else:
-        # 1. 公司介紹
+    if hist_data is not None and not hist_data.empty:
+        # 1. 基本資訊與公司簡介
         st.markdown(f"### 🏢 {chinese_name if chinese_name else current_id} ({current_id})")
         sector = SECTOR_MAP.get(info.get('sector', '未知'), info.get('sector', '未知'))
         industry = SECTOR_MAP.get(info.get('industry', '未知'), info.get('industry', '未知'))
@@ -208,53 +185,33 @@ if current_id:
         with st.expander("📖 查看公司詳細營業項目與簡介"):
             st.write(info.get('longBusinessSummary', '目前暫無簡介資料。'))
 
-        # 2. 營運指標
+        # 2. 營運與法人預估價
         cur_p = hist_data['Close'].iloc[-1]
-        eps_ttm = info.get('trailingEps', 0)
-        eps_fwd = info.get('forwardEps', eps_ttm)
-        pe_ttm = cur_p / eps_ttm if eps_ttm > 0 else 0
-
-        st.markdown("#### 📊 營運指標")
-        st.markdown("""<style>[data-testid="stMetricValue"]{font-size:1.6rem !important; color:#FFD700 !important;}</style>""", unsafe_allow_html=True)
-        m1, m2, m3 = st.columns(3)
-        m1.metric("目前收盤價", f"{cur_p:.2f}")
-        m2.metric("預估 EPS (明年)", f"{eps_fwd:.2f}" if eps_fwd else "N/A")
-        m3.metric("歷史本益比 (TTM)", f"{pe_ttm:.1f}x")
-
-        # 3. 法人預估目標價
+        eps_fwd = info.get('forwardEps', info.get('trailingEps', 0))
         target_high = info.get('targetHighPrice')
         target_low = info.get('targetLowPrice')
         target_mean = info.get('targetMeanPrice')
-        analyst_count = info.get('numberOfAnalystOpinions', 0)
 
-        st.markdown(f"#### 🎯 法人預估目標價 (統計自 {analyst_count} 位分析師評等)")
-        if target_high and target_low:
-            upside = ((target_mean / cur_p) - 1) * 100 if target_mean else 0
+        st.markdown("#### 📊 營運估值報告")
+        st.markdown("""<style>[data-testid="stMetricValue"]{font-size:1.6rem !important; color:#FFD700 !important;}</style>""", unsafe_allow_html=True)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("目前收盤價", f"{cur_p:.2f}")
+        m2.metric("預估明年 EPS", f"{eps_fwd:.2f}" if eps_fwd else "N/A")
+        m3.metric("歷史本益比", f"{info.get('trailingPE', 0):.1f}x")
+
+        # 顯示法人目標價區塊
+        if target_high:
+            st.markdown(f"#### 🎯 法人預估目標價 (統計自 {info.get('numberOfAnalystOpinions', 0)} 位分析師)")
             v1, v2, v3 = st.columns(3)
             v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人預期最高價</small><br><b style='font-size:1.3rem;'>{target_high:.1f}</b></div>", unsafe_allow_html=True)
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人預期平均價</small><br><b style='font-size:1.3rem;'>{target_mean:.1f}</b><br><small>潛力空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
+            upside = ((target_mean / cur_p) - 1) * 100 if target_mean else 0
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人預期平均價</small><br><b style='font-size:1.3rem;'>{target_mean:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
             v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人預期最低價</small><br><b style='font-size:1.3rem;'>{target_low:.1f}</b></div>", unsafe_allow_html=True)
-        else:
-            st.warning("⚠️ 此股票目前缺乏法人目標價數據。")
 
         st.markdown("---")
 
-        # 4. AI 投資資訊站
-        st.markdown("### 🤖 AI 投資資訊站：利多與利空分析")
-        if news_data:
-            nc1, nc2 = st.columns(2)
-            with nc1:
-                st.markdown("#### 🟢 潛在利多動態")
-                for n in [x for x in news_data if x['sentiment'] == "🟢"]: st.markdown(f"- [{n['title']}]({n['link']})")
-            with nc2:
-                st.markdown("#### 🔴 潛在利空/警訊")
-                for n in [x for x in news_data if x['sentiment'] == "🔴"]: st.markdown(f"- [{n['title']}]({n['link']})")
-        else: st.info("暫無即時新聞分析。")
-
-        st.markdown("---")
-
-        # 5. 技術與圖表
-        st.markdown("### 🤖 AI 技術面判定與專業分析圖表")
+        # 3. 技術判定與圖表
+        st.markdown("### 🤖 AI 技術面判定與專業圖表")
         ma20 = hist_data['Close'].rolling(20).mean().iloc[-1]
         
         # KD 計算
@@ -267,15 +224,14 @@ if current_id:
             D.append(D[-1]*(2/3) + K[-1]*(1/3))
         hist_data['K'], hist_data['D'] = K[1:], D[1:]
 
-        st.markdown(f"<div style='background:#333;padding:12px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;'><b>AI 建議：{'📈 多方強勢 (守穩均線)' if cur_p > ma20 else '📉 空方佔優 (反彈減碼)'}</b></div>", unsafe_allow_html=True)
+        ai_status = "📈 多方強勢 (守穩均線)" if cur_p > ma20 else "📉 空方佔優 (建議減碼)"
+        st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;'><b>AI 指標判定：{ai_status}</b></div>", unsafe_allow_html=True)
         
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線與均線", "KD (9,3,3)", "每日成交張數"))
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線", "KD (9,3,3)", "成交張數"))
         fig.add_trace(go.Candlestick(x=hist_data.index, open=hist_data['Open'], high=hist_data['High'], low=hist_data['Low'], close=hist_data['Close'], name='K線', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['K'], name='K值', line=dict(color='orange')), row=2, col=1)
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['D'], name='D值', line=dict(color='cyan')), row=2, col=1)
         fig.update_yaxes(range=[0, 100], row=2, col=1)
-        
-        diff = hist_data['Close'].diff()
-        fig.add_trace(go.Bar(x=hist_data.index, y=hist_data['Volume']/1000, marker_color=['red' if x>=0 else 'green' for x in diff], name='張數'), row=3, col=1)
+        fig.add_trace(go.Bar(x=hist_data.index, y=hist_data['Volume']/1000, marker_color=['red' if x>=0 else 'green' for x in hist_data['Close'].diff()], name='張數'), row=3, col=1)
         fig.update_layout(height=850, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=40, b=50), legend=dict(orientation="h", y=-0.1, x=0.5, xanchor="center"))
         st.plotly_chart(fig, use_container_width=True)
