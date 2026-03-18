@@ -37,13 +37,16 @@ def change_stock(stock_code):
     st.session_state.show_whale = False
     st.session_state.topic_results = None
 
-# --- [修正版] 真 AI 聯網分析函數 ---
-def get_ai_analysis_robust(topic, api_key):
+# --- [終極修正] 真 AI 聯網分析函數 ---
+def get_ai_analysis_final(topic, api_key):
     if not api_key:
-        return "ERROR: Missing Key", []
-
-    # 使用乾淨且正確的 Google API 網址格式
-    models_to_try = ["gemini-1.5-flash", "gemini-1.5-flash-latest"]
+        return "ERROR: 未輸入金鑰", []
+    
+    # 移除金鑰可能的空白字元
+    api_key = api_key.strip()
+    
+    # 標準 API 端點 (使用 v1beta 以支援搜尋功能)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
     必須嚴格回傳 JSON 格式：
@@ -53,37 +56,50 @@ def get_ai_analysis_robust(topic, api_key):
         {"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}
       ]
     }
-    注意：代號必須是 4 位數字。直接輸出純 JSON。"""
+    確保代號為純數字。不要輸出 Markdown 標記語法。"""
 
-    payload = {
+    # 定義兩種 Payload：一種帶搜尋，一種不帶(作為備援)
+    payload_with_search = {
         "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"google_search": {}}],
+        "tools": [{"google_search_retrieval": {}}], # 修正工具名稱
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
+    
+    payload_basic = {
+        "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
         "generationConfig": {"responseMimeType": "application/json"}
     }
 
-    last_error = ""
-    for model in models_to_try:
-        # 修正網址拼接問題
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        try:
-            response = requests.post(url, json=payload, timeout=25)
-            if response.status_code == 200:
-                res_json = response.json()
-                content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-                clean_json = re.sub(r'```json\n?|```', '', content).strip()
-                grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
-                links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
-                return json.loads(clean_json), list(set(links))
-            else:
-                last_error = f"API {response.status_code}: {response.text[:50]}"
-        except Exception as e:
-            last_error = str(e)
-            continue
-            
-    return f"ERROR: {last_error}", []
+    # 嘗試第一波：帶聯網搜尋
+    try:
+        response = requests.post(url, json=payload_with_search, timeout=25)
+        if response.status_code == 200:
+            return parse_ai_response(response.json())
+        
+        # 如果 404 或其他錯誤，嘗試第二波：純 AI 分析
+        response = requests.post(url, json=payload_basic, timeout=20)
+        if response.status_code == 200:
+            return parse_ai_response(response.json())
+        
+        return f"API 錯誤代碼: {response.status_code}", []
+    except Exception as e:
+        return f"連線異常: {str(e)}", []
 
-# --- 資料獲取函數 ---
+def parse_ai_response(res_json):
+    try:
+        content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+        # 清理 JSON 字串
+        clean_json = re.sub(r'```json\n?|```', '', content).strip()
+        # 嘗試提取連結
+        grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
+        links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
+        return json.loads(clean_json), list(set(links))
+    except:
+        return "解析回傳資料失敗", []
+
+# --- 基礎數據函數 ---
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     try:
@@ -104,8 +120,7 @@ def get_stock_news(query):
         news = []
         for item in root.findall('.//item')[:6]:
             t = item.find('title').text
-            sentiment = "🟢" if any(x in t for x in ["漲","成長","買超","利多"]) else ("🔴" if any(x in t for x in ["跌","賣超","警訊"]) else "⚪")
-            news.append({"title": t, "link": item.find('link').text, "sentiment": sentiment})
+            news.append({"title": t, "link": item.find('link').text, "sentiment": "🟢" if any(x in t for x in ["漲","成長","買超"]) else ("🔴" if any(x in t for x in ["跌","賣超","警訊"]) else "⚪")})
         return news
     except: return []
 
@@ -127,7 +142,7 @@ with st.sidebar:
     
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
-    user_api_key = st.text_input("🔑 Gemini API Key", type="password", help="請貼入您在 Google AI Studio 申請的金鑰。")
+    user_api_key = st.text_input("🔑 Gemini API Key", type="password", help="貼入您從 Google AI Studio 複製的金鑰。")
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
         if topic_q:
@@ -137,7 +152,7 @@ with st.sidebar:
                 st.session_state.topic_results = "LOADING"
             
     st.markdown("---")
-    if st.button("🔄 重新整理系統", use_container_width=True):
+    if st.button("🔄 重新整理系統快取", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -148,8 +163,8 @@ st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
 # --- 處理 AI 議題結果 ---
 if st.session_state.topic_results == "LOADING":
-    with st.spinner(f"🤖 AI 正在聯網搜尋並分析「{topic_q}」..."):
-        data, links = get_ai_analysis_robust(topic_q, user_api_key)
+    with st.spinner(f"🤖 AI 正在連線搜尋並推演「{topic_q}」..."):
+        data, links = get_ai_analysis_final(topic_q, user_api_key)
         if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
             st.session_state.show_whale = False
@@ -217,7 +232,7 @@ if curr_id:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
             v1, v2, v3 = st.columns(3)
             v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi:.1f}</b></div>", unsafe_allow_html=True)
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {((me/cur_p)-1)*100:+.1f}%</small></div>", unsafe_allow_html=True)
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預期</small><br><b>{me:.1f}</b><br><small>空間: {((me/cur_p)-1)*100:+.1f}%</small></div>", unsafe_allow_html=True)
             v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo:.1f}</b></div>", unsafe_allow_html=True)
 
         st.markdown("---")
@@ -248,7 +263,7 @@ if curr_id:
         
         st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;'><b>AI 判定：{'📈 趨勢強勁' if cur_p > ma20 else '📉 處於弱勢'}</b></div>", unsafe_allow_html=True)
         
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線與均線", "KD (9,3,3)", "成交張數"))
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線", "KD (9,3,3)", "成交張數"))
         fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist.index, y=hist['K'], name='K值', line=dict(color='orange')), row=2, col=1)
         fig.add_trace(go.Scatter(x=hist.index, y=hist['D'], name='D值', line=dict(color='cyan')), row=2, col=1)
