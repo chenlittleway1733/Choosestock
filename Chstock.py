@@ -41,7 +41,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 籌碼集中度追蹤 (權重化)
+    # 籌碼集中度追蹤
     st.markdown("### 🐳 籌碼集中度追蹤")
     st.markdown("<small>依照持股比例增幅篩選，排除股價高低影響</small>", unsafe_allow_html=True)
     if st.button("🔍 掃描籌碼增持 TOP 5", use_container_width=True):
@@ -121,23 +121,27 @@ if stock_input:
 
         # 估值與指標
         cur_p = hist_data['Close'].iloc[-1]
-        eps = stock_info.get('trailingEps', 0)
-        f_eps = stock_info.get('forwardEps', eps)
-        pe = cur_p / eps if eps > 0 else 0
+        eps_ttm = stock_info.get('trailingEps', 0)
+        eps_forward = stock_info.get('forwardEps', eps_ttm)
+        
+        # 本益比計算
+        pe_ttm = cur_p / eps_ttm if eps_ttm > 0 else 0
+        pe_forward = cur_p / eps_forward if eps_forward > 0 else 0
 
         st.markdown("#### 📊 營運估值報告")
         st.markdown("""<style>[data-testid="stMetricValue"]{font-size:1.6rem !important; color:#FFD700 !important;}</style>""", unsafe_allow_html=True)
-        m1, m2, m3 = st.columns(3)
-        m1.metric("收盤價", f"{cur_p:.2f}")
-        m2.metric("EPS", f"{eps:.2f}" if eps else "N/A")
-        m3.metric("本益比", f"{pe:.1f}" if pe > 0 else "N/A")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("最新收盤價", f"{cur_p:.2f}")
+        m2.metric("近四季/預估 EPS", f"{eps_ttm:.2f} / {eps_forward:.2f}")
+        m3.metric("歷史本益比 (TTM)", f"{pe_ttm:.1f}x")
+        m4.metric("預估本益比 (Forward)", f"{pe_forward:.1f}x")
 
-        b_eps = f_eps if f_eps > 0 else eps
-        if b_eps > 0:
-            v1, v2, v3 = st.columns(3)
-            v1.markdown(f"<div style='background:#e8f5e9;padding:10px;border-radius:5px;text-align:center;color:#000;'><small>便宜(15x)</small><br><b>{b_eps*15:.1f}</b></div>", unsafe_allow_html=True)
-            v2.markdown(f"<div style='background:#fff3e0;padding:10px;border-radius:5px;text-align:center;color:#000;'><small>合理(20x)</small><br><b>{b_eps*20:.1f}</b></div>", unsafe_allow_html=True)
-            v3.markdown(f"<div style='background:#ffebee;padding:10px;border-radius:5px;text-align:center;color:#000;'><small>昂貴(30x)</small><br><b>{b_eps*30:.1f}</b></div>", unsafe_allow_html=True)
+        # 法人估值區 (明確標註計算基準)
+        st.markdown(f"#### 💰 法人預估價分析 (基於預估 EPS: {eps_forward:.2f})")
+        v1, v2, v3 = st.columns(3)
+        v1.markdown(f"<div style='background:#e8f5e9;padding:10px;border-radius:5px;text-align:center;color:#000;'><small>便宜價 (預估 PE 15x)</small><br><b>{eps_forward*15:.1f}</b></div>", unsafe_allow_html=True)
+        v2.markdown(f"<div style='background:#fff3e0;padding:10px;border-radius:5px;text-align:center;color:#000;'><small>合理價 (預估 PE 20x)</small><br><b>{eps_forward*20:.1f}</b></div>", unsafe_allow_html=True)
+        v3.markdown(f"<div style='background:#ffebee;padding:10px;border-radius:5px;text-align:center;color:#000;'><small>昂貴價 (預估 PE 30x)</small><br><b>{eps_forward*30:.1f}</b></div>", unsafe_allow_html=True)
 
         st.markdown("---")
 
@@ -156,33 +160,33 @@ if stock_input:
             D.append(D[-1] * (2/3) + K[-1] * (1/3))
         hist_data['K'], hist_data['D'] = K[1:], D[1:]
 
-        ai_status = "📈 偏多 (支撐進場)" if cur_p > ma20 else "📉 偏空 (反彈調節)"
+        ai_status = "📈 偏多操作 (支撐進場)" if cur_p > ma20 else "📉 偏空/觀望 (反彈調節)"
         st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;'><b>AI 建議：{ai_status}</b></div>", unsafe_allow_html=True)
         
         p1, p2, p3 = st.columns(3)
-        p1.success(f"**🛡️ 預估支撐**\n### {ma60:.1f}")
-        p2.error(f"**🎯 預估壓力**\n### {hist_data['High'].tail(20).max():.1f}")
-        p3.warning(f"**🛑 停損參考**\n### {ma60*0.95:.1f}")
+        p1.success(f"**🛡️ 預估支撐 (買入)**\n### {ma60:.1f} 元")
+        p2.error(f"**🎯 預估壓力 (賣出)**\n### {hist_data['High'].tail(20).max():.1f} 元")
+        p3.warning(f"**🛑 停損參考**\n### {ma60*0.95:.1f} 元")
 
         st.markdown("---")
 
         # --- 三層專業圖表 ---
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25],
-                            subplot_titles=("K線與均線", "KD 指標 (9,3,3)", "每日預估買賣超 (張)"))
+                            subplot_titles=("K線與均線", "KD 指標 (9,3,3)", "每日預估買賣成交量 (張)"))
 
         fig.add_trace(go.Candlestick(x=hist_data.index, open=hist_data['Open'], high=hist_data['High'], low=hist_data['Low'], close=hist_data['Close'], name='K線', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['Close'].rolling(5).mean(), name='5MA', line=dict(color='cyan', width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['Close'].rolling(20).mean(), name='20MA', line=dict(color='orange', width=1.5)), row=1, col=1)
 
-        # KD 線 (強制顯示)
+        # KD 線
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['K'], name='K值', line=dict(color='#FFD700', width=2)), row=2, col=1)
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['D'], name='D值', line=dict(color='#00BFFF', width=2)), row=2, col=1)
-        fig.update_yaxes(range=[0, 100], row=2, col=1) # 強制 Y 軸 0~100
+        fig.update_yaxes(range=[0, 100], row=2, col=1)
 
-        # 買賣超
+        # 買賣量
         diff = hist_data['Close'].diff()
         colors = ['red' if x >= 0 else 'green' for x in diff]
-        fig.add_trace(go.Bar(x=hist_data.index, y=hist_data['Volume']/1000, marker_color=colors, name='買賣張數'), row=3, col=1)
+        fig.add_trace(go.Bar(x=hist_data.index, y=hist_data['Volume']/1000, marker_color=colors, name='成交張數'), row=3, col=1)
 
         fig.update_layout(height=850, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=40, b=50),
                           legend=dict(orientation="h", y=-0.1, x=0.5, xanchor="center"))
