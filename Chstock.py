@@ -22,7 +22,7 @@ yf_symbol = f"{stock_symbol}.TW"
 # ==========================================
 # 資料獲取模組 (結合 yfinance 與暫存機制)
 # ==========================================
-@st.cache_data(ttl=3600) # 設定暫存時效，點擊重新整理會清除此快取
+@st.cache_data(ttl=3600)
 def fetch_stock_data(symbol):
     ticker = yf.Ticker(symbol)
     hist = ticker.history(period="1y") # 取得近一年資料以計算季線與KD
@@ -81,7 +81,7 @@ if stock_symbol:
             hist['10MA'] = hist['Close'].rolling(window=10).mean()
             hist['60MA'] = hist['Close'].rolling(window=60).mean() # 季線為60日均線
             
-            # --- KD 指標計算 ---
+            # --- KD 指標計算 (已修正覆蓋變數的錯誤) ---
             # 計算 9 日 RSV 值
             low_min = hist['Low'].rolling(window=9).min()
             high_max = hist['High'].rolling(window=9).max()
