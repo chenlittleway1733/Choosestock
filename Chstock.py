@@ -37,16 +37,21 @@ def change_stock(stock_code):
     st.session_state.show_whale = False
     st.session_state.topic_results = None
 
-# --- [終極修正] 真 AI 聯網分析函數 ---
+# --- [防彈修正] 真 AI 聯網分析函數 (多重備援機制) ---
 def get_ai_analysis_final(topic, api_key):
     if not api_key:
         return "ERROR: 未輸入金鑰", []
     
-    # 移除金鑰可能的空白字元
+    # 確保金鑰乾淨無空白
     api_key = api_key.strip()
     
-    # 標準 API 端點 (使用 v1beta 以支援搜尋功能)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # 定義多重備援模型清單，解決 404 找不到模型的問題
+    models = [
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro-latest",
+        "gemini-pro"
+    ]
     
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
     必須嚴格回傳 JSON 格式：
@@ -58,46 +63,58 @@ def get_ai_analysis_final(topic, api_key):
     }
     確保代號為純數字。不要輸出 Markdown 標記語法。"""
 
-    # 定義兩種 Payload：一種帶搜尋，一種不帶(作為備援)
-    payload_with_search = {
-        "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"google_search_retrieval": {}}], # 修正工具名稱
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
-    
-    payload_basic = {
-        "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
+    last_error = ""
 
-    # 嘗試第一波：帶聯網搜尋
-    try:
-        response = requests.post(url, json=payload_with_search, timeout=25)
-        if response.status_code == 200:
-            return parse_ai_response(response.json())
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         
-        # 如果 404 或其他錯誤，嘗試第二波：純 AI 分析
-        response = requests.post(url, json=payload_basic, timeout=20)
-        if response.status_code == 200:
-            return parse_ai_response(response.json())
+        # 組合 1：帶有 Google Search 工具
+        payload_search = {
+            "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "tools": [{"googleSearch": {}}] # 使用官方最新的工具命名
+        }
         
-        return f"API 錯誤代碼: {response.status_code}", []
-    except Exception as e:
-        return f"連線異常: {str(e)}", []
+        # 組合 2：最保守的純 AI 預測 (不帶 Search，防止 API 權限報錯)
+        payload_basic = {
+            "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
+            "systemInstruction": {"parts": [{"text": system_prompt}]}
+        }
+
+        # 針對支援 JSON 強制的模型加上參數
+        if "1.5" in model:
+            payload_search["generationConfig"] = {"responseMimeType": "application/json"}
+            payload_basic["generationConfig"] = {"responseMimeType": "application/json"}
+
+        try:
+            # 第一波嘗試：帶聯網搜尋
+            response = requests.post(url, json=payload_search, timeout=20)
+            if response.status_code == 200:
+                return parse_ai_response(response.json())
+            
+            # 如果失敗 (例如 404 或不支援搜尋)，第二波嘗試：純 AI 解析
+            response_basic = requests.post(url, json=payload_basic, timeout=20)
+            if response_basic.status_code == 200:
+                return parse_ai_response(response_basic.json())
+            
+            last_error = str(response_basic.status_code)
+        except Exception as e:
+            last_error = str(e)
+            continue # 無論發生什麼錯，繼續嘗試下一個模型
+            
+    return f"所有 AI 模型皆無法連線 (代碼: {last_error})", []
 
 def parse_ai_response(res_json):
     try:
         content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
         # 清理 JSON 字串
         clean_json = re.sub(r'```json\n?|```', '', content).strip()
-        # 嘗試提取連結
+        # 嘗試提取連結 (若為純 AI 模式則為空)
         grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
         links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
         return json.loads(clean_json), list(set(links))
     except:
-        return "解析回傳資料失敗", []
+        return "回傳資料格式解析失敗，請再試一次。", []
 
 # --- 基礎數據函數 ---
 @st.cache_data(ttl=3600)
@@ -232,7 +249,7 @@ if curr_id:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
             v1, v2, v3 = st.columns(3)
             v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi:.1f}</b></div>", unsafe_allow_html=True)
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預期</small><br><b>{me:.1f}</b><br><small>空間: {((me/cur_p)-1)*100:+.1f}%</small></div>", unsafe_allow_html=True)
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {((me/cur_p)-1)*100:+.1f}%</small></div>", unsafe_allow_html=True)
             v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo:.1f}</b></div>", unsafe_allow_html=True)
 
         st.markdown("---")
@@ -263,7 +280,7 @@ if curr_id:
         
         st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;'><b>AI 判定：{'📈 趨勢強勁' if cur_p > ma20 else '📉 處於弱勢'}</b></div>", unsafe_allow_html=True)
         
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線", "KD (9,3,3)", "成交張數"))
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線與均線", "KD (9,3,3)", "成交張數"))
         fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist.index, y=hist['K'], name='K值', line=dict(color='orange')), row=2, col=1)
         fig.add_trace(go.Scatter(x=hist.index, y=hist['D'], name='D值', line=dict(color='cyan')), row=2, col=1)
