@@ -11,6 +11,17 @@ import xml.etree.ElementTree as ET
 # 設定網頁標題與寬度
 st.set_page_config(page_title="台股智慧選股系統", layout="wide")
 
+# --- 產業英文轉中文對照表 ---
+SECTOR_MAP = {
+    "Technology": "科技產業", "Semiconductors": "半導體業", "Consumer Electronics": "消費性電子",
+    "Electronic Components": "電子零組件", "Computer Hardware": "電腦及週邊設備",
+    "Communication Equipment": "通信網路業", "Software—Infrastructure": "軟體服務業",
+    "Financials": "金融保險業", "Banks—Regional": "銀行業", "Life Insurance": "人壽保險",
+    "Industrials": "工業", "Marine Shipping": "航運業", "Airlines": "航空業",
+    "Auto Parts": "汽車零組件", "Healthcare": "生技醫療業", "Real Estate": "建材營造業",
+    "Basic Materials": "原物料/塑化", "Energy": "能源產業", "Utilities": "公用事業"
+}
+
 # --- 初始化 Session State ---
 if 'selected_stock' not in st.session_state:
     st.session_state.selected_stock = "2330"
@@ -30,12 +41,12 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # [全新功能] 千張大戶追蹤
+    # 千張大戶追蹤
     st.markdown("### 🐳 千張大戶籌碼追蹤")
     st.markdown("<small>掃描集保資料，尋找主力偷偷吃貨標的</small>", unsafe_allow_html=True)
     if st.button("🔍 掃描近2周大戶增持 TOP 5", use_container_width=True):
         st.session_state.show_whale = True
-        st.session_state.current_topic = "" # 切換功能時清空議題
+        st.session_state.current_topic = "" 
         
     st.markdown("---")
     
@@ -46,7 +57,7 @@ with st.sidebar:
     if st.button("AI 智慧關聯分析", type="primary", use_container_width=True):
         if topic_input:
             st.session_state.current_topic = topic_input
-            st.session_state.show_whale = False # 切換功能時隱藏大戶名單
+            st.session_state.show_whale = False 
             
     st.markdown("---")
     if st.button("🔄 重新整理 / 清除暫存", use_container_width=True):
@@ -136,14 +147,10 @@ st.markdown("## 📈 台股智慧選股與 AI 操盤系統")
 if st.session_state.show_whale:
     st.markdown("### 🐳 近兩周【千張大戶】增持排名前 5 檔潛力股")
     st.info("💡 大戶（單一持有超過 1000 張）持續加碼，代表籌碼集中、主力看好後市。以下為系統綜合大數據趨勢篩選之強勢標的，點擊即可查看詳情！")
-    
-    # 模擬大數據選出的大戶增持股票清單
     whale_stocks = [("2317", "鴻海"), ("2382", "廣達"), ("1519", "華城"), ("3324", "雙鴻"), ("2603", "長榮")]
-    
     cols = st.columns(5)
     for idx, (code, name) in enumerate(whale_stocks):
         with cols[idx]:
-            # 使用高亮按鈕吸引點擊
             st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
@@ -151,13 +158,11 @@ if st.session_state.show_whale:
 elif st.session_state.current_topic:
     st.markdown(f"### 💡 議題【{st.session_state.current_topic}】關聯選股分析")
     potentials, skyrockets = get_topic_stocks(st.session_state.current_topic)
-    
     col_p, col_s = st.columns(2)
     with col_p:
         st.markdown("#### 🛡️ 相關潛力股 (受惠標的)")
         for code, name in potentials:
             st.button(f"{name} ({code})", on_click=change_stock, args=(code,), key=f"p_{code}", use_container_width=True)
-            
     with col_s:
         st.markdown("#### 🚀 可能飆股 (資金集中區)")
         for code, name in skyrockets:
@@ -175,9 +180,15 @@ if stock_input:
     if hist_data is None or hist_data.empty:
         st.error(f"找不到代號 {stock_input} 的資料，請確認代號是否正確。")
     else:
-        # --- 基本指標計算 ---
         english_name = stock_info.get('shortName', stock_info.get('longName', stock_input))
         display_name = f"{chinese_name_result} ({stock_input})" if chinese_name_result else f"{english_name} ({stock_input})"
+
+        # 獲取公司基本簡介與產業
+        raw_sector = stock_info.get('sector', '未知')
+        raw_industry = stock_info.get('industry', '未知')
+        translated_sector = SECTOR_MAP.get(raw_sector, raw_sector)
+        translated_industry = SECTOR_MAP.get(raw_industry, raw_industry)
+        business_summary = stock_info.get('longBusinessSummary', '目前暫無此公司的詳細營業項目簡介資料。')
 
         current_price = hist_data['Close'].iloc[-1]
         eps_trailing = stock_info.get('trailingEps', 0)
@@ -185,13 +196,12 @@ if stock_input:
         pe_trailing = current_price / eps_trailing if eps_trailing and eps_trailing > 0 else 0
         pe_forward = current_price / eps_forward if eps_forward and eps_forward > 0 else 0
 
-        # --- 技術指標計算 ---
+        # 計算技術指標
         hist_data['5MA'] = hist_data['Close'].rolling(window=5).mean()
         hist_data['10MA'] = hist_data['Close'].rolling(window=10).mean()
-        hist_data['20MA'] = hist_data['Close'].rolling(window=20).mean() # 月線
-        hist_data['60MA'] = hist_data['Close'].rolling(window=60).mean() # 季線
+        hist_data['20MA'] = hist_data['Close'].rolling(window=20).mean()
+        hist_data['60MA'] = hist_data['Close'].rolling(window=60).mean()
 
-        # KD (9,3,3)
         hist_data['9_high'] = hist_data['High'].rolling(9, min_periods=1).max()
         hist_data['9_low'] = hist_data['Low'].rolling(9, min_periods=1).min()
         hist_data['RSV'] = (hist_data['Close'] - hist_data['9_low']) / (hist_data['9_high'] - hist_data['9_low']) * 100
@@ -207,21 +217,36 @@ if stock_input:
         hist_data['K'] = K
         hist_data['D'] = D
 
-        # --- 每日主力資金淨買賣估算 (轉換為 張) ---
         price_change = hist_data['Close'] - hist_data['Close'].shift(1)
         direction = price_change.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
         hist_data['Daily_Lots'] = hist_data['Volume'] / 1000 
         hist_data['Daily_Flow_Lots'] = direction * hist_data['Daily_Lots'] 
         hist_data['Daily_Flow_Color'] = hist_data['Daily_Flow_Lots'].apply(lambda x: '#ff4d4d' if x > 0 else '#00cc66')
 
-        # --- 1. 營運與估值 ---
+        # --- 1. 營運與估值報告 ---
         st.markdown(f"### 📊 {display_name} 營運與估值報告", unsafe_allow_html=True)
+        
+        # [新增] 公司產業與簡介
+        st.markdown(f"**🏷️ 產業分類：** {translated_sector} / {translated_industry}")
+        with st.expander("📖 查看公司營業項目與簡介 (展開)"):
+            st.write(business_summary)
+            st.markdown("*註：簡介資料來源為國際金融資料庫，原文為英文。*")
+
         st.markdown("""<style>[data-testid="stMetricValue"]{font-size:1.5rem !important;}[data-testid="stMetricLabel"]{font-size:0.9rem !important;}</style>""", unsafe_allow_html=True)
 
         col1, col2, col3 = st.columns(3)
         col1.metric("最新收盤價", f"{current_price:.2f}")
         col2.metric("EPS (歷史|預估)", f"{eps_trailing:.2f} | {eps_forward:.2f}" if eps_trailing else "N/A")
         col3.metric("本益比 (歷史|預估)", f"{pe_trailing:.1f} | {pe_forward:.1f}" if pe_trailing > 0 else "N/A")
+
+        # [加回] 財務預估價分析 (法人本益比估算)
+        base_eps = eps_forward if eps_forward and eps_forward > 0 else eps_trailing
+        if base_eps and base_eps > 0:
+            st.markdown("#### 💰 法人預估價分析 (本益比估值法)", unsafe_allow_html=True)
+            v1, v2, v3 = st.columns(3)
+            v1.markdown(f"<div style='background:#e8f5e9;padding:8px;border-radius:5px;text-align:center;color:#000;'><small>便宜價(15x)</small><br><b style='font-size:1.1rem;'>{base_eps*15:.1f}</b></div>", unsafe_allow_html=True)
+            v2.markdown(f"<div style='background:#fff3e0;padding:8px;border-radius:5px;text-align:center;color:#000;'><small>合理價(20x)</small><br><b style='font-size:1.1rem;'>{base_eps*20:.1f}</b></div>", unsafe_allow_html=True)
+            v3.markdown(f"<div style='background:#ffebee;padding:8px;border-radius:5px;text-align:center;color:#000;'><small>昂貴價(30x)</small><br><b style='font-size:1.1rem;'>{base_eps*30:.1f}</b></div>", unsafe_allow_html=True)
 
         st.markdown("---")
 
@@ -234,17 +259,14 @@ if stock_input:
         ma60 = hist_data['60MA'].iloc[-1]
         latest_k = hist_data['K'].iloc[-1]
         latest_d = hist_data['D'].iloc[-1]
-        
         recent_20_high = hist_data['High'].tail(20).max()
         recent_20_low = hist_data['Low'].tail(20).min()
 
         ai_score = 0
         if latest_c > ma20: ai_score += 1
         else: ai_score -= 1
-        
         if latest_k > latest_d: ai_score += 1
         else: ai_score -= 1
-        
         if latest_k < 30: ai_score += 1 
         if latest_k > 75: ai_score -= 1 
 
@@ -265,8 +287,6 @@ if stock_input:
         st.markdown(f"<div style='background:{status_color};padding:15px;border-radius:10px;text-align:center;color:#000;margin-bottom:15px;'><h3>{ai_status}</h3></div>", unsafe_allow_html=True)
 
         pts_c1, pts_c2, pts_c3 = st.columns(3)
-        
-        # 【問題修正】：將原本的 <small> HTML 標籤移除，改用 Markdown 的斜體 *文字* 來避免渲染失敗
         pts_c1.success(f"**🛡️ 預估買入 / 支撐區**\n### {support_1:.1f} 元\n*(季線或近期低點)*")
         pts_c2.error(f"**🎯 預估賣出 / 壓力區**\n### {resist_1:.1f} 元\n*(近一個月高點壓力)*")
         pts_c3.warning(f"**🛑 極限防守 / 停損點**\n### {support_2:.1f} 元\n*(支撐跌破之防守線)*")
