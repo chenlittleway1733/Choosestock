@@ -72,8 +72,8 @@ def get_ai_analysis_final(topic, api_key):
     last_error = ""
 
     for model in models_to_try:
-        # 移除 URL 中的 ?key=，改由 Header 傳遞
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model}:generateContent"
+        # 移除 URL 中的 Markdown 錯誤標籤，確保網址純淨
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         
         # 組合 1：帶有 Google Search 工具
         payload_search = {
@@ -143,7 +143,8 @@ def get_stock_data(stock_id):
 def get_stock_news(query):
     try:
         encoded_q = urllib.parse.quote(f"{query} 股票")
-        url = f"[https://news.google.com/rss/search?q=](https://news.google.com/rss/search?q=){encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        # 移除 URL 中的 Markdown 錯誤標籤，確保網址純淨
+        url = f"https://news.google.com/rss/search?q={encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
         res = requests.get(url, timeout=5)
         root = ET.fromstring(res.text)
         news = []
