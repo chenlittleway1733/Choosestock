@@ -13,7 +13,7 @@ import time
 # 設定網頁標題與寬度
 st.set_page_config(page_title="台股智慧選股系統", layout="wide")
 
-# --- 產業中文對照表 ---
+# --- 產業對照表 ---
 SECTOR_MAP = {
     "Technology": "科技產業", "Semiconductors": "半導體業", "Consumer Electronics": "消費性電子",
     "Electronic Components": "電子零組件", "Computer Hardware": "電腦及週邊設備",
@@ -32,37 +32,31 @@ if 'topic_results' not in st.session_state:
 if 'show_whale' not in st.session_state:
     st.session_state.show_whale = False
 
-# 按鈕更新股票函數
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
     st.session_state.show_whale = False
     st.session_state.topic_results = None
 
-# --- 真 AI 聯網分析函數 (Google Search Grounding) ---
+# --- 真 AI 聯網分析函數 (修正格式解析問題) ---
 def get_ai_analysis(topic, api_key):
     if not api_key:
-        return None
+        return None, []
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={api_key}"
+    # 改用更穩定的 1.5-flash 模型以確保搜尋工具權限
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
-    system_prompt = """你是一位精通台股產業鏈的投資長。
-    請針對使用者輸入的議題，結合最新的搜尋結果，推薦 3 檔受惠最直接的「潛力權值股」與 3 檔具備爆發力的「中小型概念股」。
-    
-    你的任務：
-    1. 提供簡短的「產業受惠邏輯」。
-    2. 針對每檔股票提供一句受惠原因。
-    3. 嚴格以 JSON 格式回傳，格式如下：
+    system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題，結合搜尋結果推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
+    必須嚴格回傳 JSON 格式，如下所示：
     {
-      "reasoning": "整體趨勢分析...",
+      "reasoning": "產業趨勢簡析...",
       "stocks": [
-        {"id": "代號", "name": "名稱", "type": "潛力", "why": "原因"},
-        ...
+        {"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "受惠原因"}
       ]
     }
-    請務必確保台股代號為 4 位數字。不要回傳任何 Markdown 標記或額外文字。"""
+    注意：不要輸出 ```json 標籤，直接輸出內容。確保代號為純數字。"""
     
     payload = {
-        "contents": [{"parts": [{"text": f"請深度分析此議題在台股的機會：{topic}"}]}],
+        "contents": [{"parts": [{"text": f"深度分析台股議題：{topic}"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}],
         "generationConfig": {"responseMimeType": "application/json"}
@@ -73,17 +67,20 @@ def get_ai_analysis(topic, api_key):
         if response.status_code == 200:
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-            # 清理可能的 Markdown 格式
-            clean_json = re.sub(r'```json\n?|\n?```', '', content).strip()
-            # 提取聯網來源
-            sources = res_json.get('candidates', [{}])[0].get('groundingMetadata', {}).get('groundingAttributions', [])
-            links = [s.get('web', {}).get('uri') for s in sources if s.get('web', {}).get('uri')]
+            
+            # 強力清理 Markdown 標記
+            clean_json = re.sub(r'```json\n?|```', '', content).strip()
+            # 提取聯網參考來源
+            grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
+            links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
+            
             return json.loads(clean_json), list(set(links))
-    except Exception:
-        pass
-    return None, []
+        else:
+            return f"ERROR: {response.status_code}", []
+    except Exception as e:
+        return f"ERROR: {str(e)}", []
 
-# --- 核心資料函數 ---
+# --- 資料獲取與處理 ---
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     try:
@@ -98,18 +95,14 @@ def get_stock_data(stock_id):
 def get_stock_news(query):
     try:
         encoded_q = urllib.parse.quote(f"{query} 股票")
-        url = f"https://news.google.com/rss/search?q={encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        url = f"[https://news.google.com/rss/search?q=](https://news.google.com/rss/search?q=){encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
         res = requests.get(url, timeout=5)
         root = ET.fromstring(res.text)
-        news_list = []
+        news = []
         for item in root.findall('.//item')[:6]:
             t = item.find('title').text
-            news_list.append({
-                "title": t, 
-                "link": item.find('link').text, 
-                "sentiment": "🟢" if any(x in t for x in ["漲", "成長", "買超", "利多"]) else ("🔴" if any(x in t for x in ["跌", "賣超", "利空", "縮水"]) else "⚪")
-            })
-        return news_list
+            news.append({"title": t, "link": item.find('link').text, "sentiment": "🟢" if any(x in t for x in ["漲","成長","買超","利多"]) else ("🔴" if any(x in t for x in ["跌","賣超","利空","縮水"]) else "⚪")})
+        return news
     except: return []
 
 # --- 側邊欄配置 ---
@@ -122,7 +115,6 @@ with st.sidebar:
     st.markdown("---")
     
     st.markdown("### 🐳 籌碼集中度追蹤")
-    st.markdown("<small>依照持股比例增幅篩選 TOP 5</small>", unsafe_allow_html=True)
     if st.button("🔍 掃描籌碼增持名單", use_container_width=True):
         st.session_state.show_whale = True
         st.session_state.topic_results = None
@@ -131,18 +123,17 @@ with st.sidebar:
     
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
-    # 這裡讓使用者貼入從 Google AI Studio 複製的金鑰
     user_api_key = st.text_input("🔑 Gemini API Key", type="password", help="請貼入您在 Google AI Studio 申請的金鑰。")
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
         if topic_q:
             if not user_api_key:
-                st.warning("請先貼入您的 Gemini API 金鑰才可使用聯網分析功能。")
+                st.warning("請先輸入您的 API Key。")
             else:
                 st.session_state.topic_results = "LOADING"
             
     st.markdown("---")
-    if st.button("🔄 重新整理系統", use_container_width=True):
+    if st.button("🔄 重新整理快取", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -153,13 +144,13 @@ st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
 # --- 處理 AI 議題結果 ---
 if st.session_state.topic_results == "LOADING":
-    with st.spinner(f"🤖 AI 正在聯網搜尋並推演『{topic_q}』產業鏈..."):
+    with st.spinner(f"🤖 AI 正在聯網搜尋並分析「{topic_q}」..."):
         data, links = get_ai_analysis(topic_q, user_api_key)
-        if data:
+        if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
             st.session_state.show_whale = False
         else:
-            st.error("AI 引擎解析失敗。請確認金鑰是否正確，或稍後再試。")
+            st.error(f"AI 解析失敗：{data}。請確認您的 Key 是否具備權限或稍後再試。")
             st.session_state.topic_results = None
 
 if isinstance(st.session_state.topic_results, dict):
@@ -194,7 +185,7 @@ if st.session_state.show_whale:
 # --- 個股報表主體 ---
 curr_id = st.session_state.selected_stock
 if curr_id:
-    with st.spinner('數據同步中...'):
+    with st.spinner('同步數據中...'):
         hist, info = get_stock_data(curr_id)
         c_name = info.get('shortName', curr_id)
         news_list = get_stock_news(c_name)
@@ -222,7 +213,8 @@ if curr_id:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
             v1, v2, v3 = st.columns(3)
             v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi:.1f}</b></div>", unsafe_allow_html=True)
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預期</small><br><b>{me:.1f}</b><br><small>空間: {((me/cur_p)-1)*100:+.1f}%</small></div>", unsafe_allow_html=True)
+            upside = ((me / cur_p) - 1) * 100 if me else 0
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
             v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo:.1f}</b></div>", unsafe_allow_html=True)
 
         st.markdown("---")
@@ -237,7 +229,6 @@ if curr_id:
             with nc2:
                 st.markdown("#### 🔴 潛在利空")
                 for n in [x for x in news_list if x['sentiment'] == "🔴"]: st.markdown(f"- [{n['title']}]({n['link']})")
-        else: st.info("暫無即時新聞動態。")
 
         st.markdown("---")
 
