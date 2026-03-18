@@ -37,21 +37,20 @@ def change_stock(stock_code):
     st.session_state.show_whale = False
     st.session_state.topic_results = None
 
-# --- [終極防彈版] 真 AI 聯網分析函數 ---
+# --- [官方文件規範版] 真 AI 聯網分析函數 ---
 def get_ai_analysis_final(topic, api_key):
     if not api_key:
         return "ERROR: 未輸入金鑰", []
     
-    # 確保金鑰乾淨無空白
     api_key = api_key.strip()
     
-    # 準備地毯式搜索的模型清單 (由新到舊，確保高機率連線成功)
+    # 根據官方文件，優先使用最新版 gemini-2.5-flash
     models_to_try = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
         "gemini-1.5-flash-latest",
         "gemini-1.5-flash",
-        "gemini-1.5-pro-latest",
-        "gemini-pro",         # 最穩定、相容性最高的舊版
-        "gemini-1.0-pro"
+        "gemini-pro"
     ]
     
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
@@ -64,41 +63,45 @@ def get_ai_analysis_final(topic, api_key):
     }
     確保代號為純數字。直接輸出 JSON 字串，不要有 ```json 標籤。"""
 
+    # 遵循官方文件的 Header 規範
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key
+    }
+
     last_error = ""
 
     for model in models_to_try:
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model}:generateContent?key={api_key}"
+        # 移除 URL 中的 ?key=，改由 Header 傳遞
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model}:generateContent"
         
-        # 組合 1：帶有 Google Search 工具 (需要較高權限)
+        # 組合 1：帶有 Google Search 工具
         payload_search = {
             "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "tools": [{"googleSearch": {}}]
         }
         
-        # 組合 2：降級版純 AI 預測 (不需要搜尋權限，最安全)
+        # 組合 2：降級版純 AI 預測 (最安全)
         payload_basic = {
             "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
             "systemInstruction": {"parts": [{"text": system_prompt}]}
         }
 
-        # 針對 Gemini 1.5 以上版本開啟強制 JSON 模式
-        if "1.5" in model:
+        if "1.5" in model or "2." in model:
             payload_search["generationConfig"] = {"responseMimeType": "application/json"}
             payload_basic["generationConfig"] = {"responseMimeType": "application/json"}
 
         try:
-            # 第一波嘗試：聯網搜尋
-            response = requests.post(url, json=payload_search, timeout=20)
+            # 加入 headers 發送請求
+            response = requests.post(url, headers=headers, json=payload_search, timeout=20)
             if response.status_code == 200:
                 return parse_ai_response(response.json())
             
-            # 第二波嘗試：若 404/400/403，改用純 AI 解析
-            res_basic = requests.post(url, json=payload_basic, timeout=20)
+            res_basic = requests.post(url, headers=headers, json=payload_basic, timeout=20)
             if res_basic.status_code == 200:
                 return parse_ai_response(res_basic.json())
             
-            # 紀錄錯誤訊息並前往下一個模型
             err_msg = res_basic.json().get('error', {}).get('message', res_basic.text)
             last_error = f"模型 {model} 錯誤 ({res_basic.status_code}): {err_msg}"
             
@@ -112,13 +115,10 @@ def parse_ai_response(res_json):
     content = ""
     try:
         content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-        # 清理 JSON 字串
         clean_json = re.sub(r'```json\n?|```', '', content).strip()
-        # 嘗試提取連結 (若為純 AI 模式則為空)
         grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
         links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
         
-        # 尋找並提取大括號內的 JSON 以防模型輸出廢話
         start_idx = clean_json.find('{')
         end_idx = clean_json.rfind('}')
         if start_idx != -1 and end_idx != -1:
@@ -198,7 +198,6 @@ if st.session_state.topic_results == "LOADING":
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
             st.session_state.show_whale = False
         else:
-            # 顯示最真實的錯誤訊息
             st.error(f"AI 解析失敗。\n\n詳細原因：{data}")
             st.session_state.topic_results = None
 
