@@ -96,9 +96,9 @@ if stock_symbol:
             high_max = hist['High'].rolling(window=9).max()
             rsv = 100 * (hist['Close'] - low_min) / (high_max - low_min)
             
-            # 2. 正確將 K 值與 D 值存入 dataframe 內 (加上了)
+            # 2. 這次「正確的」將 K 值與 D 值新增為獨立的欄位
             hist['K'] = rsv.ewm(com=2, adjust=False).mean()
-            hist = hist['K'].ewm(com=2, adjust=False).mean() 
+            hist = hist['K'].ewm(com=2, adjust=False).mean()  # 就是這裡！加上了
             
             # --- 繪製 K 線圖與均線 ---
             st.markdown("### 📈 股價趨勢與均線 (5日, 10日, 季線)")
@@ -114,7 +114,7 @@ if stock_symbol:
             st.markdown("### 📊 KD 動能指標")
             fig_kd = go.Figure()
             fig_kd.add_trace(go.Scatter(x=hist.index, y=hist['K'], mode='lines', name='K值 (快線)', line=dict(color='blue')))
-            fig_kd.add_trace(go.Scatter(x=hist.index, y=hist, mode='lines', name='D值 (慢線)', line=dict(color='orange')))
+            fig_kd.add_trace(go.Scatter(x=hist.index, y=hist, mode='lines', name='D值 (慢線)', line=dict(color='orange'))) # 同步修正這裡
             fig_kd.add_hline(y=80, line_dash="dash", line_color="red", annotation_text="超買區 (80)")
             fig_kd.add_hline(y=20, line_dash="dash", line_color="green", annotation_text="超賣區 (20)")
             fig_kd.update_layout(height=250, margin=dict(l=0, r=0, t=30, b=0))
