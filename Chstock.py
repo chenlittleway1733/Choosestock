@@ -118,7 +118,7 @@ def get_topic_stocks(topic):
 # ==========================================
 # 主畫面開始
 # ==========================================
-st.markdown("## 📈 台股智慧選股與主力追蹤系統")
+st.markdown("## 📈 台股智慧選股與 AI 操盤系統")
 
 # --- 區塊 A：議題智慧選股結果 ---
 if st.session_state.current_topic:
@@ -139,7 +139,7 @@ if st.session_state.current_topic:
 
 # --- 區塊 B：個股綜合評估 ---
 if stock_input:
-    with st.spinner('正在獲取最新報價、籌碼與新聞資料...'):
+    with st.spinner('正在獲取最新報價、籌碼與分析資料...'):
         hist_data, stock_info = get_stock_data(ticker_symbol)
         chinese_name_result = get_chinese_name(stock_input)
         search_name = chinese_name_result if chinese_name_result else stock_input
@@ -158,7 +158,13 @@ if stock_input:
         pe_trailing = current_price / eps_trailing if eps_trailing and eps_trailing > 0 else 0
         pe_forward = current_price / eps_forward if eps_forward and eps_forward > 0 else 0
 
-        # --- KD 指標計算 (9,3,3) ---
+        # --- 技術指標計算 ---
+        hist_data['5MA'] = hist_data['Close'].rolling(window=5).mean()
+        hist_data['10MA'] = hist_data['Close'].rolling(window=10).mean()
+        hist_data['20MA'] = hist_data['Close'].rolling(window=20).mean() # 月線
+        hist_data['60MA'] = hist_data['Close'].rolling(window=60).mean() # 季線
+
+        # KD (9,3,3)
         hist_data['9_high'] = hist_data['High'].rolling(9, min_periods=1).max()
         hist_data['9_low'] = hist_data['Low'].rolling(9, min_periods=1).min()
         hist_data['RSV'] = (hist_data['Close'] - hist_data['9_low']) / (hist_data['9_high'] - hist_data['9_low']) * 100
@@ -174,12 +180,13 @@ if stock_input:
         hist_data['K'] = K
         hist_data['D'] = D
 
-        # --- 5日主力資金淨流向計算 ---
+        # --- 每日主力資金淨買賣估算 (轉換為 張) ---
         price_change = hist_data['Close'] - hist_data['Close'].shift(1)
         direction = price_change.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
-        hist_data['Daily_Flow'] = direction * hist_data['Volume'] # 每日淨流向
-        hist_data['5D_Flow'] = hist_data['Daily_Flow'].rolling(5).sum() # 近5日累積流向
-        hist_data['5D_Flow_Color'] = hist_data['5D_Flow'].apply(lambda x: '#ff4d4d' if x > 0 else '#00cc66')
+        # 台股 1 張 = 1000 股
+        hist_data['Daily_Lots'] = hist_data['Volume'] / 1000 
+        hist_data['Daily_Flow_Lots'] = direction * hist_data['Daily_Lots'] 
+        hist_data['Daily_Flow_Color'] = hist_data['Daily_Flow_Lots'].apply(lambda x: '#ff4d4d' if x > 0 else '#00cc66')
 
         # --- 1. 營運與估值 ---
         st.markdown(f"### 📊 {display_name} 營運與估值報告", unsafe_allow_html=True)
@@ -189,73 +196,67 @@ if stock_input:
         col1.metric("最新收盤價", f"{current_price:.2f}")
         col2.metric("EPS (歷史|預估)", f"{eps_trailing:.2f} | {eps_forward:.2f}" if eps_trailing else "N/A")
         col3.metric("本益比 (歷史|預估)", f"{pe_trailing:.1f} | {pe_forward:.1f}" if pe_trailing > 0 else "N/A")
-        
-        base_eps = eps_forward if eps_forward and eps_forward > 0 else eps_trailing
-        if base_eps and base_eps > 0:
-            v1, v2, v3 = st.columns(3)
-            v1.markdown(f"<div style='background:#e8f5e9;padding:8px;border-radius:5px;text-align:center;color:#000;'><small>便宜價(15x)</small><br><b style='font-size:1.1rem;'>{base_eps*15:.1f}</b></div>", unsafe_allow_html=True)
-            v2.markdown(f"<div style='background:#fff3e0;padding:8px;border-radius:5px;text-align:center;color:#000;'><small>合理價(20x)</small><br><b style='font-size:1.1rem;'>{base_eps*20:.1f}</b></div>", unsafe_allow_html=True)
-            v3.markdown(f"<div style='background:#ffebee;padding:8px;border-radius:5px;text-align:center;color:#000;'><small>昂貴價(30x)</small><br><b style='font-size:1.1rem;'>{base_eps*30:.1f}</b></div>", unsafe_allow_html=True)
-
-        st.markdown("---")
-        
-        # --- 2. AI 新聞情緒 ---
-        st.markdown("### 🤖 AI 投資資訊站：近期利多與利空追蹤", unsafe_allow_html=True)
-        if news_data:
-            bullish_news = [n for n in news_data if n['sentiment'] == "🟢 利多"]
-            bearish_news = [n for n in news_data if n['sentiment'] == "🔴 利空"]
-            
-            n_col1, n_col2 = st.columns(2)
-            with n_col1:
-                st.markdown("#### 🟢 潛在利多消息")
-                if bullish_news:
-                    for news in bullish_news: st.markdown(f"- [{news['title']}]({news['link']})")
-                else: st.write("近期暫無明顯利多新聞字眼。")
-            with n_col2:
-                st.markdown("#### 🔴 潛在利空/警戒消息")
-                if bearish_news:
-                    for news in bearish_news: st.markdown(f"- [{news['title']}]({news['link']})")
-                else: st.write("近期暫無明顯利空新聞字眼。")
-        else:
-            st.info("目前無法取得最新新聞。")
 
         st.markdown("---")
 
-        # --- 3. 籌碼與主力動向面板 ---
-        st.markdown("### 🕵️ 籌碼與技術面深度追蹤", unsafe_allow_html=True)
+        # --- 2. AI 智慧操作與點位估算 (全新功能) ---
+        st.markdown("### 🤖 AI 技術面綜合判定與點位估算", unsafe_allow_html=True)
         
-        latest_5d_flow = hist_data['5D_Flow'].iloc[-1]
-        money_flow_status = "🔴 資金淨流出 (出貨疑慮)" if latest_5d_flow < 0 else "🟢 資金淨流入 (大戶吸籌)"
-        
-        # 判斷 KD 狀態
+        # 獲取近期參數
+        latest_c = current_price
+        ma5 = hist_data['5MA'].iloc[-1]
+        ma20 = hist_data['20MA'].iloc[-1]
+        ma60 = hist_data['60MA'].iloc[-1]
         latest_k = hist_data['K'].iloc[-1]
         latest_d = hist_data['D'].iloc[-1]
-        if latest_k > 80: kd_status = "🔥 KD高檔超買 (警戒)"
-        elif latest_k < 20: kd_status = "❄️ KD低檔超賣 (找買點)"
-        elif latest_k > latest_d: kd_status = "📈 K>D 多頭排列"
-        else: kd_status = "📉 K<D 空頭排列"
+        
+        recent_20_high = hist_data['High'].tail(20).max()
+        recent_20_low = hist_data['Low'].tail(20).min()
 
-        c1, c2, c3 = st.columns(3)
-        c1.info(f"**主力資金動向 (近5日)**\n### {money_flow_status}")
-        c2.warning(f"**KD 技術指標狀態**\n### {kd_status}")
-        c3.success("**分析圖表說明**\n*請參照下方 KD 與資金流向柱狀圖*")
+        # AI 演算法評分邏輯
+        ai_score = 0
+        if latest_c > ma20: ai_score += 1
+        else: ai_score -= 1
+        
+        if latest_k > latest_d: ai_score += 1
+        else: ai_score -= 1
+        
+        if latest_k < 30: ai_score += 1 # 超賣，醞釀反彈
+        if latest_k > 75: ai_score -= 1 # 超買，風險高
+
+        if ai_score >= 2:
+            ai_status = "📈 偏多操作 (尋找買點)"
+            status_color = "#e8f5e9" # 淺綠背景
+        elif ai_score <= -2:
+            ai_status = "📉 偏空/觀望 (逢高獲利或避開)"
+            status_color = "#ffebee" # 淺紅背景
+        else:
+            ai_status = "⚖️ 中立震盪 (區間操作)"
+            status_color = "#fff3e0" # 淺橘背景
+
+        # 估算點位
+        support_1 = max(recent_20_low, ma60) if pd.notna(ma60) else recent_20_low
+        resist_1 = recent_20_high
+        support_2 = support_1 * 0.95 # 跌破第一支撐再下看5%為防守線
+
+        st.markdown(f"<div style='background:{status_color};padding:15px;border-radius:10px;text-align:center;color:#000;margin-bottom:15px;'><h3>{ai_status}</h3></div>", unsafe_allow_html=True)
+
+        pts_c1, pts_c2, pts_c3 = st.columns(3)
+        pts_c1.success(f"**🛡️ 預估買入 / 支撐區**\n### {support_1:.1f} 元\n<small>(季線或近期低點)</small>")
+        pts_c2.error(f"**🎯 預估賣出 / 壓力區**\n### {resist_1:.1f} 元\n<small>(近一個月高點壓力)</small>")
+        pts_c3.warning(f"**🛑 極限防守 / 停損點**\n### {support_2:.1f} 元\n<small>(支撐跌破之防守線)</small>")
 
         st.markdown("---")
 
-        # --- 4. 繪製專業三層圖表 (K線 + KD + 5日資金) ---
+        # --- 3. 繪製專業三層圖表 ---
         st.markdown("#### 📈 股價趨勢與技術分析圖表", unsafe_allow_html=True)
-        
-        hist_data['5MA'] = hist_data['Close'].rolling(window=5).mean()
-        hist_data['10MA'] = hist_data['Close'].rolling(window=10).mean()
-        hist_data['60MA'] = hist_data['Close'].rolling(window=60).mean()
 
-        # 建立 3 層圖表
         fig = make_subplots(
             rows=3, cols=1, 
             shared_xaxes=True, 
             vertical_spacing=0.05, 
-            row_heights=[0.5, 0.25, 0.25], # 分配比例：K線佔一半，其他各佔 1/4
-            subplot_titles=("K線與均線", "KD 指標 (9,3,3)", "近5日主力資金淨流向估算 (零軸上下)")
+            row_heights=[0.5, 0.25, 0.25], 
+            subplot_titles=("K線與均線", "KD 指標 (9,3,3)", "每日預估買賣超 (單位: 張)")
         )
 
         # [第 1 層] K 線與均線
@@ -267,28 +268,25 @@ if stock_input:
         # [第 2 層] KD 指標
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['K'], mode='lines', name='K值 (快線)', line=dict(color='#ff9900', width=1.5)), row=2, col=1)
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['D'], mode='lines', name='D值 (慢線)', line=dict(color='#33ccff', width=1.5)), row=2, col=1)
-        # KD 超買超賣參考線
         fig.add_hline(y=80, line_dash="dash", line_color="red", row=2, col=1, opacity=0.5, annotation_text="超買區(80)")
         fig.add_hline(y=20, line_dash="dash", line_color="green", row=2, col=1, opacity=0.5, annotation_text="超賣區(20)")
 
-        # [第 3 層] 近 5 日主力資金流向 (零軸柱狀圖)
+        # [第 3 層] 每日預估買賣超 (改為單日張數)
         fig.add_trace(go.Bar(
             x=hist_data.index, 
-            y=hist_data['5D_Flow'], 
-            marker_color=hist_data['5D_Flow_Color'], 
-            name='5日資金淨流向'
+            y=hist_data['Daily_Flow_Lots'], 
+            marker_color=hist_data['Daily_Flow_Color'], 
+            name='單日買賣超(張)'
         ), row=3, col=1)
 
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", tickangle=0)
         
-        # 圖表整體排版優化
         fig.update_layout(
-            height=800, # 配合 3 層圖表拉高總高度
-            margin=dict(l=10, r=10, t=30, b=50), # 底部留空間給圖例
+            height=800,
+            margin=dict(l=10, r=10, t=30, b=50), 
             xaxis_rangeslider_visible=False, 
             xaxis2_rangeslider_visible=False,
             xaxis3_rangeslider_visible=False,
-            # 將圖例統一放在圖表最底部置中，絕對不會跟標題或工具列打架！
             legend=dict(orientation="h", yanchor="top", y=-0.08, xanchor="center", x=0.5), 
             template="plotly_dark", 
             paper_bgcolor='rgba(0,0,0,0)', 
@@ -296,3 +294,21 @@ if stock_input:
         )
 
         st.plotly_chart(fig, use_container_width=True)
+
+        # 把新聞放在最下方當作補充資訊
+        if news_data:
+            with st.expander("📰 點此展開查看近期 AI 新聞情緒追蹤"):
+                bullish_news = [n for n in news_data if n['sentiment'] == "🟢 利多"]
+                bearish_news = [n for n in news_data if n['sentiment'] == "🔴 利空"]
+                
+                n_col1, n_col2 = st.columns(2)
+                with n_col1:
+                    st.markdown("#### 🟢 潛在利多消息")
+                    if bullish_news:
+                        for news in bullish_news: st.markdown(f"- [{news['title']}]({news['link']})")
+                    else: st.write("近期暫無明顯利多。")
+                with n_col2:
+                    st.markdown("#### 🔴 潛在利空消息")
+                    if bearish_news:
+                        for news in bearish_news: st.markdown(f"- [{news['title']}]({news['link']})")
+                    else: st.write("近期暫無明顯利空。")
