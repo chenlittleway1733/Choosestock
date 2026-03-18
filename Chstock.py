@@ -139,6 +139,17 @@ def get_stock_data(stock_id):
         return None, None
     except: return None, None
 
+@st.cache_data(ttl=86400) 
+def get_chinese_name(stock_id):
+    try:
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        match = re.search(r'<title>(.*?)\(', response.text)
+        if match: return match.group(1).strip()
+    except: pass
+    return None
+
 @st.cache_data(ttl=1800)
 def get_stock_news(query):
     try:
@@ -236,7 +247,11 @@ curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
         hist, info = get_stock_data(curr_id)
-        c_name = info.get('shortName', curr_id)
+        # 恢復呼叫中文名稱函數
+        c_name = get_chinese_name(curr_id)
+        if not c_name:
+            c_name = info.get('shortName', curr_id)
+            
         news_list = get_stock_news(c_name)
 
     if hist is not None and not hist.empty:
