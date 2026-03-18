@@ -7,6 +7,8 @@ import requests
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
+import json
+import time
 
 # 設定網頁標題與寬度
 st.set_page_config(page_title="台股智慧選股系統", layout="wide")
@@ -25,51 +27,96 @@ SECTOR_MAP = {
 # --- 初始化 Session State ---
 if 'selected_stock' not in st.session_state:
     st.session_state.selected_stock = "2330"
-if 'current_topic' not in st.session_state:
-    st.session_state.current_topic = ""
+if 'topic_results' not in st.session_state:
+    st.session_state.topic_results = None
 if 'show_whale' not in st.session_state:
     st.session_state.show_whale = False
 
 # 點擊按鈕更新股票的函數
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
-    # 點選後自動收起推薦選單，讓畫面專注在個股
     st.session_state.show_whale = False
-    st.session_state.current_topic = ""
+    st.session_state.topic_results = None
+
+# --- Gemini API 智慧議題分析 (核心升級) ---
+def get_ai_topic_analysis(topic):
+    apiKey = "" # 執行環境自動提供
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={apiKey}"
+    
+    system_prompt = """你是一位精通台股產業鏈的資深分析師。請針對使用者輸入的議題或關鍵字，分析其在台灣股市中的受惠產業鏈。
+    請推薦 3 檔具備基本面支撐的「潛力概念股」，以及 3 檔具備強大短線爆發力的「可能飆股」。
+    請務必回傳正確的台股 4 位數代號與中文名稱。
+    必須嚴格以 JSON 格式回傳，結構如下：
+    {
+      "potentials": [["代號", "名稱"], ["代號", "名稱"], ["代號", "名稱"]],
+      "skyrockets": [["代號", "名稱"], ["代號", "名稱"], ["代號", "名稱"]]
+    }
+    不要回傳任何額外的文字敘述。"""
+    
+    payload = {
+        "contents": [{
+            "parts": [{"text": f"請分析議題：{topic}"}]
+        }],
+        "systemInstruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "generationConfig": {
+            "responseMimeType": "application/json"
+        }
+    }
+    
+    # 指數退避重試機制
+    retries = 5
+    for i in range(retries):
+        try:
+            response = requests.post(url, json=payload, timeout=15)
+            if response.status_code == 200:
+                result = response.json()
+                content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+                return json.loads(content)
+            elif response.status_code == 429: # Too Many Requests
+                time.sleep(2 ** i)
+            else:
+                time.sleep(1)
+        except:
+            time.sleep(2 ** i)
+    return None
 
 # --- 側邊欄：功能選單 ---
 with st.sidebar:
     st.markdown("### 🔍 個股查詢")
-    # 這裡使用單純的 text_input，並透過 session_state 控制其預設值
     stock_input = st.text_input("請輸入台股代號 (例如: 2330)", value=st.session_state.selected_stock)
     if stock_input != st.session_state.selected_stock:
         st.session_state.selected_stock = stock_input
     
     st.markdown("---")
     
-    # 籌碼集中度追蹤
     st.markdown("### 🐳 籌碼集中度追蹤")
-    st.markdown("<small>依照持股比例增幅篩選，排除股價高低影響</small>", unsafe_allow_html=True)
+    st.markdown("<small>依照持股比例增幅篩選</small>", unsafe_allow_html=True)
     if st.button("🔍 掃描籌碼增持 TOP 5", use_container_width=True):
         st.session_state.show_whale = True
-        st.session_state.current_topic = "" 
+        st.session_state.topic_results = None 
         
     st.markdown("---")
     
-    # 議題智慧選股
-    st.markdown("### 🧠 議題智慧選股")
-    topic_input = st.text_input("輸入議題 (如: 輝達GTC、AI、綠能)")
+    st.markdown("### 🧠 AI 議題智慧選股")
+    topic_input = st.text_input("輸入議題 (如: TPU、B300、低軌衛星)")
     if st.button("AI 智慧關聯分析", type="primary", use_container_width=True):
         if topic_input:
-            st.session_state.current_topic = topic_input
-            st.session_state.show_whale = False 
+            with st.spinner(f"AI 正在深度解析「{topic_input}」產業鏈..."):
+                res = get_ai_topic_analysis(topic_input)
+                if res:
+                    st.session_state.topic_results = {"topic": topic_input, "data": res}
+                    st.session_state.show_whale = False
+                else:
+                    st.error("AI 服務暫時無回應，請稍後再試。")
             
     st.markdown("---")
-    if st.button("🔄 重新整理 / 清除暫存", use_container_width=True):
+    if st.button("🔄 重新整理系統", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# --- 資料函數 (自動判定上市/上櫃) ---
+# --- 資料獲取與處理 ---
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     try:
@@ -110,17 +157,6 @@ def get_and_analyze_news(stock_name):
         return news_list
     except: return []
 
-# --- AI 議題選股聯想邏輯 ---
-def get_topic_stocks(topic):
-    topic = topic.lower()
-    if any(kw in topic for kw in ["戰爭", "美伊", "中東", "軍工", "武力"]):
-        return [("2634", "漢翔"), ("2618", "長榮航太"), ("8046", "南電")], [("8033", "雷虎"), ("2208", "台船"), ("8222", "寶一")]
-    elif any(kw in topic for kw in ["ai", "人工智慧", "輝達", "gtc", "伺服器", "晶片"]):
-        return [("2330", "台積電"), ("2382", "廣達"), ("3231", "緯創")], [("6669", "緯穎"), ("3017", "奇鋐"), ("3324", "雙鴻")]
-    elif any(kw in topic for kw in ["綠能", "重電", "缺電", "電網"]):
-        return [("1513", "中興電"), ("1519", "華城"), ("1503", "士電")], [("1514", "亞力"), ("8996", "高力"), ("6806", "森崴能源")]
-    return [("2330", "台積電"), ("2317", "鴻海"), ("2454", "聯發科")], [("1519", "華城"), ("3231", "緯創"), ("2603", "長榮")]
-
 # ==========================================
 # 主畫面開始
 # ==========================================
@@ -135,20 +171,21 @@ if st.session_state.show_whale:
         with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
-# --- 顯示區：AI 議題分析結果 (找回消失的功能) ---
-elif st.session_state.current_topic:
-    st.markdown(f"### 💡 議題【{st.session_state.current_topic}】關聯選股分析")
-    st.info("💡 系統已根據您的議題篩選出以下標的。點擊按鈕即可查看詳情！")
-    potentials, skyrockets = get_topic_stocks(st.session_state.current_topic)
+# --- 顯示區：AI 議題智慧分析結果 (修復並接入真 AI) ---
+elif st.session_state.topic_results:
+    topic_name = st.session_state.topic_results['topic']
+    res_data = st.session_state.topic_results['data']
+    st.markdown(f"### 💡 AI 智慧議題分析：【{topic_name}】")
+    st.success(f"🤖 AI 已深度推演「{topic_name}」在台股的受惠路徑，以下為推薦標的：")
     
     col_p, col_s = st.columns(2)
     with col_p:
-        st.markdown("#### 🛡️ 潛力概念股")
-        for code, name in potentials:
+        st.markdown("#### 🛡️ 潛力概念股 (基本面強)")
+        for code, name in res_data.get('potentials', []):
             st.button(f"{name} ({code})", on_click=change_stock, args=(code,), key=f"tp_{code}", use_container_width=True)
     with col_s:
-        st.markdown("#### 🚀 可能飆股區")
-        for code, name in skyrockets:
+        st.markdown("#### 🚀 可能飆股區 (短線爆發)")
+        for code, name in res_data.get('skyrockets', []):
             st.button(f"{name} ({code})", on_click=change_stock, args=(code,), key=f"ts_{code}", use_container_width=True)
     st.markdown("---")
 
@@ -203,14 +240,14 @@ if current_id:
         st.markdown("---")
 
         # 4. AI 投資資訊站
-        st.markdown("### 🤖 AI 投資資訊站：利多與利空追蹤")
+        st.markdown("### 🤖 AI 投資資訊站：利多與利空分析")
         if news_data:
             nc1, nc2 = st.columns(2)
             with nc1:
-                st.markdown("#### 🟢 潛在利多")
+                st.markdown("#### 🟢 潛在利多動態")
                 for n in [x for x in news_data if x['sentiment'] == "🟢"]: st.markdown(f"- [{n['title']}]({n['link']})")
             with nc2:
-                st.markdown("#### 🔴 潛在利空")
+                st.markdown("#### 🔴 潛在利空/警訊")
                 for n in [x for x in news_data if x['sentiment'] == "🔴"]: st.markdown(f"- [{n['title']}]({n['link']})")
         else: st.info("暫無即時新聞分析。")
 
