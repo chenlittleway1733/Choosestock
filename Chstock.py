@@ -40,7 +40,7 @@ def change_stock(stock_code):
 
 # --- Gemini API 智慧議題分析 (核心升級) ---
 def get_ai_topic_analysis(topic):
-    apiKey = "" # 執行環境自動提供
+    apiKey = "" # 執行環境自動提供，無需輸入帳密
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={apiKey}"
     
     system_prompt = """你是一位精通台股產業鏈的資深分析師。請針對使用者輸入的議題或關鍵字，分析其在台灣股市中的受惠產業鏈。
@@ -69,16 +69,16 @@ def get_ai_topic_analysis(topic):
     retries = 5
     for i in range(retries):
         try:
-            response = requests.post(url, json=payload, timeout=15)
+            response = requests.post(url, json=payload, timeout=20)
             if response.status_code == 200:
                 result = response.json()
                 content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
                 return json.loads(content)
-            elif response.status_code == 429: # Too Many Requests
+            elif response.status_code == 429: # 流量限制
                 time.sleep(2 ** i)
             else:
                 time.sleep(1)
-        except:
+        except Exception:
             time.sleep(2 ** i)
     return None
 
@@ -100,16 +100,16 @@ with st.sidebar:
     st.markdown("---")
     
     st.markdown("### 🧠 AI 議題智慧選股")
-    topic_input = st.text_input("輸入議題 (如: TPU、B300、低軌衛星)")
+    topic_input = st.text_input("輸入議題 (如: TPU、代理人AI、低軌衛星)")
     if st.button("AI 智慧關聯分析", type="primary", use_container_width=True):
         if topic_input:
-            with st.spinner(f"AI 正在深度解析「{topic_input}」產業鏈..."):
+            with st.spinner(f"🤖 AI 正在分析「{topic_input}」... (此過程無需帳密)"):
                 res = get_ai_topic_analysis(topic_input)
                 if res:
                     st.session_state.topic_results = {"topic": topic_input, "data": res}
                     st.session_state.show_whale = False
                 else:
-                    st.error("AI 服務暫時無回應，請稍後再試。")
+                    st.error("AI 伺服器目前較忙碌，請於 10 秒後再試一次。")
             
     st.markdown("---")
     if st.button("🔄 重新整理系統", use_container_width=True):
@@ -171,7 +171,7 @@ if st.session_state.show_whale:
         with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
-# --- 顯示區：AI 議題智慧分析結果 (修復並接入真 AI) ---
+# --- 顯示區：AI 議題智慧分析結果 ---
 elif st.session_state.topic_results:
     topic_name = st.session_state.topic_results['topic']
     res_data = st.session_state.topic_results['data']
