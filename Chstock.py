@@ -2,8 +2,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-# 重新引入 twstock 來獲取中文名稱，因為 requirements.txt 已經有 lxml，現在應該可以正常運作了
-import twstock 
+import requests
+import re
 
 # 設定網頁標題與寬度
 st.set_page_config(page_title="台股智慧選股系統", layout="wide")
@@ -35,14 +35,21 @@ def get_stock_data(symbol):
     except Exception:
         return None, None
 
-# --- 獲取中文名稱函數 ---
-@st.cache_data(ttl=86400) # 中文名稱很久才變一次，快取久一點
+# --- ★ 全新：免套件獲取中文名稱函數 ★ ---
+@st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
     try:
-        # twstock.codes 是一個包含所有台股代號資訊的字典
-        if stock_id in twstock.codes:
-            return twstock.codes[stock_id].name
-    except:
+        # 直接去 Yahoo 奇摩股市抓網頁標題
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(url, headers=headers, timeout=5)
+        # 利用正則表達式尋找 <title>台積電(2330) - ...</title> 裡面的名稱
+        match = re.search(r'<title>(.*?)\(', response.text)
+        if match:
+            name = match.group(1).strip()
+            if "Yahoo" not in name: # 確保沒有抓錯
+                return name
+    except Exception:
         pass
     return None
 
@@ -80,7 +87,6 @@ if stock_input:
              pe_forward = 0
 
         # --- 2. 顯示評估報告 (使用自訂 HTML 縮小字體) ---
-        # 使用 markdown 搭配 HTML 來控制標題大小
         st.markdown(f"#### 📊 {display_name} 綜合評估", unsafe_allow_html=True)
         
         # 自定義 CSS 樣式來縮小 metric 的字體
@@ -108,22 +114,21 @@ if stock_input:
 
         # --- 3. 財務預估價 (縮小版面) ---
         st.markdown("#### 💰 財務預估價分析", unsafe_allow_html=True)
-        # 使用較小的字體顯示基準
         base_eps = eps_forward if eps_forward and eps_forward > 0 else eps_trailing
         st.markdown(f"<small style='color:gray;'>*計算基準：法人預估今年 EPS ({base_eps:.2f} 元)*</small>", unsafe_allow_html=True)
 
         if base_eps and base_eps > 0:
             val_col1, val_col2, val_col3 = st.columns(3)
             # 使用 HTML 創建較小的價格顯示區塊
-            val_col1.markdown(f"<div style='background:#e8f5e9;padding:10px;border-radius:5px;text-align:center;'><small>便宜價(15x)</small><br><b>{base_eps*15:.1f}</b></div>", unsafe_allow_html=True)
-            val_col2.markdown(f"<div style='background:#fff3e0;padding:10px;border-radius:5px;text-align:center;'><small>合理價(20x)</small><br><b>{base_eps*20:.1f}</b></div>", unsafe_allow_html=True)
-            val_col3.markdown(f"<div style='background:#ffebee;padding:10px;border-radius:5px;text-align:center;'><small>昂貴價(30x)</small><br><b>{base_eps*30:.1f}</b></div>", unsafe_allow_html=True)
+            val_col1.markdown(f"<div style='background:#e8f5e9;padding:10px;border-radius:5px;text-align:center;color:#000;'><small>便宜價(15x)</small><br><b style='font-size:1.2rem;'>{base_eps*15:.1f}</b></div>", unsafe_allow_html=True)
+            val_col2.markdown(f"<div style='background:#fff3e0;padding:10px;border-radius:5px;text-align:center;color:#000;'><small>合理價(20x)</small><br><b style='font-size:1.2rem;'>{base_eps*20:.1f}</b></div>", unsafe_allow_html=True)
+            val_col3.markdown(f"<div style='background:#ffebee;padding:10px;border-radius:5px;text-align:center;color:#000;'><small>昂貴價(30x)</small><br><b style='font-size:1.2rem;'>{base_eps*30:.1f}</b></div>", unsafe_allow_html=True)
         else:
              st.warning("EPS 數據不足，無法計算預估價。")
 
         st.markdown("---")
 
-        # --- 4. 繪製 K 線圖 (加入日期格式化) ---
+        # --- 4. 繪製 K 線圖 (日期格式化為 月/日) ---
         st.markdown("#### 📈 股價趨勢與均線 (日K)", unsafe_allow_html=True)
         
         # 計算均線
@@ -142,28 +147,25 @@ if stock_input:
             name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'
         ))
 
-        # 均線 (線條調細一點)
+        # 均線
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['5MA'], mode='lines', name='5日線', line=dict(color='blue', width=1)))
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['10MA'], mode='lines', name='10日線', line=dict(color='orange', width=1)))
         fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['60MA'], mode='lines', name='季線', line=dict(color='purple', width=1.5)))
 
-        # *** 關鍵修改：設定 X 軸日期格式 ***
+        # 隱藏假日，設定日期為 月/日 格式
         fig.update_xaxes(
-            rangebreaks=[dict(bounds=["sat", "mon"])], # 隱藏假日
-            tickformat="%m/%d",  # <--- 這裡設定為 "月/日" 格式，例如 03/18
-            dtick="M1", # 這裡設定刻度間距，M1 代表一個月一跳，避免日期太擠
-            tickangle=-45, # 日期轉個角度比較不會重疊
+            rangebreaks=[dict(bounds=["sat", "mon"])], 
+            tickformat="%m/%d",  # 設定顯示為 03/18 這種格式
+            tickangle=0 # 讓日期平放即可
         )
 
-        # 調整圖表版面
         fig.update_layout(
-            height=500, # 高度稍微調小適應平板
+            height=500,
             margin=dict(l=10, r=10, t=10, b=10),
             xaxis_rangeslider_visible=False,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            # 設定深色模式背景，讓圖表在深色主題下更好看
             template="plotly_dark", 
-            paper_bgcolor='rgba(0,0,0,0)', # 透明背景融入 Streamlit 主題
+            paper_bgcolor='rgba(0,0,0,0)', 
             plot_bgcolor='rgba(0,0,0,0)'
         )
 
