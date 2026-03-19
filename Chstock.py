@@ -435,13 +435,33 @@ if curr_id:
         f_eps = info.get('forwardEps')
         earn_growth = info.get('earningsGrowth')
         
-        # --- 核心升級：進階估值微調 (法人共識 EPS 動態切換) ---
+        # --- 核心升級：進階估值微調 (法人共識 EPS 動態切換 + AI 聯網抓取) ---
         st.markdown("##### ⚙️ 進階估值微調 (EPS 敏感度分析)")
-        col_eps1, col_eps2 = st.columns([1, 2])
+        
+        # 初始化儲存 AI 抓到的 EPS
+        if 'ai_fetched_eps' not in st.session_state: st.session_state.ai_fetched_eps = {}
+        
+        col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
         with col_eps1:
             use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
+        
+        with col_eps3:
+            # 點擊按鈕後，呼叫 AI 抓取並存入 Session
+            if st.button("🤖 AI 自動上網尋找法人 EPS", disabled=not st.session_state.api_key, help="需在左側選單輸入 API Key"):
+                with st.spinner("AI 爬文中..."):
+                    fetched_val = get_eps_from_ai(c_name, curr_id, st.session_state.api_key)
+                    if fetched_val and fetched_val > 0:
+                        st.session_state.ai_fetched_eps[curr_id] = fetched_val
+                        st.success(f"抓取成功！AI 推估值約為 {fetched_val} 元")
+                    else:
+                        st.error("AI 暫時找不到具體數據，請手動輸入。")
+                        
         with col_eps2:
-            default_eps_val = float(f_eps) if f_eps is not None else (float(t_eps) if t_eps else 1.0)
+            # 優先使用 AI 抓到的數據，沒有的話才用預設值
+            default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
+            if default_eps_val is None:
+                default_eps_val = float(f_eps) if f_eps is not None else (float(t_eps) if t_eps else 1.0)
+                
             custom_eps = st.number_input("輸入國內法人共識 EPS (元)", min_value=0.01, value=default_eps_val, step=0.5, disabled=not use_custom_eps)
 
         # 動態估值計算邏輯
