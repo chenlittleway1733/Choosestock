@@ -20,7 +20,6 @@ if 'show_whale' not in st.session_state:
 if 'ai_error' not in st.session_state:
     st.session_state.ai_error = None
 
-# 切換股票的回呼函數
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
 
@@ -63,6 +62,7 @@ def get_ai_analysis_final(topic, api_key):
     all_errors = []
 
     for model in models_to_try:
+        # 絕對防禦網址，防止被編輯器加上超連結
         api_host = "https://" + "generativelanguage.googleapis.com"
         url = f"{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
         
@@ -94,7 +94,7 @@ def get_ai_analysis_final(topic, api_key):
     error_details = "\n\n".join(all_errors)
     return f"⚠️ 無法連線至 AI，請確認您的 Google 帳號 API 權限。\n\n詳細錯誤診斷：\n{error_details}", []
 
-# --- 資料獲取函數 (無 twstock，徹底解決安裝報錯) ---
+# --- 資料與翻譯函數 ---
 @st.cache_data(ttl=3600)
 def get_stock_data(symbol):
     try:
@@ -109,7 +109,9 @@ def get_stock_data(symbol):
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
     try:
-        url = f"[https://tw.stock.yahoo.com/quote/](https://tw.stock.yahoo.com/quote/){stock_id}"
+        # 絕對防禦網址，防止抓不到中文名稱
+        base_url = "https://" + "[tw.stock.yahoo.com/quote/](https://tw.stock.yahoo.com/quote/)"
+        url = f"{base_url}{stock_id}"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
         match = re.search(r'<title>(.*?)\(', response.text)
@@ -118,8 +120,21 @@ def get_chinese_name(stock_id):
         pass
     return None
 
+@st.cache_data(ttl=86400)
+def translate_to_zh(text):
+    if not text or text == '暫無簡介。': return text
+    try:
+        # 絕對防禦網址，串接 Google 免費翻譯
+        translate_url = "https://" + "[translate.googleapis.com/translate_a/single](https://translate.googleapis.com/translate_a/single)"
+        params = {"client": "gtx", "sl": "en", "tl": "zh-TW", "dt": "t", "q": text}
+        res = requests.get(translate_url, params=params, timeout=5)
+        translated_text = "".join([item[0] for item in res.json()[0]])
+        return translated_text
+    except Exception:
+        return text + "\n\n(⚠️ 翻譯服務暫時忙碌中，以上為原文顯示)"
+
 # ==========================================
-# 側邊欄：所有功能選單恢復
+# 側邊欄：所有功能選單
 # ==========================================
 with st.sidebar:
     st.header("🔍 個股查詢")
@@ -214,7 +229,7 @@ if curr_id:
         industry = info.get('industry', '未知')
         st.markdown(f"**🏷️ 產業分類：** {sector} / {industry}")
         
-        # --- 修改這裡：套用英翻中功能 ---
+        # --- 自動英翻中區塊 ---
         with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
             summary_en = info.get('longBusinessSummary', '暫無簡介。')
             if summary_en != '暫無簡介。':
@@ -410,11 +425,9 @@ if curr_id:
         pb_ratio = info.get('priceToBook')
         peg_ratio = info.get('pegRatio')
         
-        # 輔助計算 PEG (如果 API 沒給但我們有 PE 和 成長率)
         if peg_ratio is None and pe_ratio is not None and earn_growth is not None and earn_growth > 0:
             peg_ratio = pe_ratio / (earn_growth * 100)
 
-        # 格式化數值與判定顏色與評語
         pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
         if pe_ratio is None:
             pe_color, pe_eval = "gray", "數據不足"
@@ -489,26 +502,18 @@ if curr_id:
         inst_pct = info.get('heldPercentInstitutions')
         market_cap = info.get('marketCap', 0)
 
-        # 格式化持股比例 (若 API 無資料則顯示 N/A)
         insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
         inst_str = f"{inst_pct * 100:.2f}%" if inst_pct is not None else "N/A"
 
-        # 籌碼主力控盤屬性判定 (依據市值規模)
-        if market_cap >= 100_000_000_000: # 大於 1000 億
-            cap_type = "大型權值股"
-            driver = "🌍 外資主導"
+        if market_cap >= 100_000_000_000:
+            cap_type, driver, cap_color = "大型權值股", "🌍 外資主導", "#4169E1"
             driver_desc = "走勢高度受外資資金控盤與國際大盤影響。由於股本龐大，不易被人為炒作，看重長期基本面與被動型 ETF 資金買盤。"
-            cap_color = "#4169E1" # 寶石藍
-        elif market_cap <= 30_000_000_000: # 小於 300 億
-            cap_type = "中小型成長股"
-            driver = "🔥 投信 / 內資主力"
+        elif market_cap <= 30_000_000_000:
+            cap_type, driver, cap_color = "中小型成長股", "🔥 投信 / 內資主力", "#ff8c00"
             driver_desc = "股本較小、籌碼輕，極易受「投信連續買超」的作帳行情帶動。只要具備新題材，容易吸引內資主力或大戶進駐拉抬，爆發力強。"
-            cap_color = "#ff8c00" # 亮橘色
         else:
-            cap_type = "中型股"
-            driver = "🤝 內外資共議"
+            cap_type, driver, cap_color = "中型股", "🤝 內外資共議", "#9370DB"
             driver_desc = "外資與投信皆有著墨空間。當這類股票出現「土洋合作」(外資與投信同步連續買超) 時，往往能走出一段波段大行情。"
-            cap_color = "#9370DB" # 紫色
 
         chip_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
