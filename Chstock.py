@@ -9,7 +9,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import json
 import time
-import datetime # 新增：用於 API 日期計算
+import datetime
 
 # 設定網頁標題與寬度
 st.set_page_config(page_title="way系統", layout="wide")
@@ -133,47 +133,36 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     except: pass
     return None
 
-# --- 📊 終極進化版：改接公開 API 獲取「月營收」與「YoY」(不再被雲端防火牆阻擋) ---
+# --- 📊 公開 API 獲取「月營收」與「YoY」 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
     try:
-        # 計算往前推 25 個月的日期，確保有足夠資料來計算 YoY
         today = datetime.date.today()
         start_year = today.year - 2
         start_str = f"{start_year}-{today.month:02d}-01"
-
-        # 使用 FinMind 開放式量化 API，無阻擋、傳回乾淨 JSON
         url = f"[https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id=](https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id=){stock_id}&start_date={start_str}"
         headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(url, headers=headers, timeout=10)
         data = res.json()
 
-        if data.get('status') != 200 or not data.get('data'):
-            return None
+        if data.get('status') != 200 or not data.get('data'): return None
 
-        # 轉換為 DataFrame 進行運算
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
         df = df.sort_values('date').reset_index(drop=True)
 
-        # 確保格式並計算年增率 (YoY) 與億元營收
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
         df['YoY'] = df['revenue'].pct_change(periods=12) * 100
         df['Month'] = df['date'].dt.strftime('%Y-%m')
-        df['Revenue'] = df['revenue'] / 100000000  # 轉換為億元
+        df['Revenue'] = df['revenue'] / 100000000 
 
-        # 剔除尚未能計算 YoY 的前一年資料，並只取最近 12 個月
         final_df = df.dropna(subset=['YoY']).tail(12).copy()
-
-        if final_df.empty:
-            return None
+        if final_df.empty: return None
 
         final_df['Revenue'] = final_df['Revenue'].round(2)
         final_df['YoY'] = final_df['YoY'].round(2)
-
         return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
-    except Exception as e:
-        return None
+    except Exception as e: return None
 
 # --- 基礎數據函數 ---
 @st.cache_data(ttl=3600)
@@ -387,8 +376,9 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # 3. 財務基本面與營運分析
-        st.markdown("#### 💼 財務基本面與營運分析")
+        # 3. 財務基本面與預估基準設定 (模組大搬風，變為全域核心)
+        st.markdown("#### 💼 財務基本面與獲利基準微調")
+        pb_ratio = info.get('priceToBook')
         pe_ratio = info.get('trailingPE')
         roe = info.get('returnOnEquity')
         gross_margin = info.get('grossMargins')
@@ -396,7 +386,55 @@ if curr_id:
         rev_growth = info.get('revenueGrowth')
         earn_growth = info.get('earningsGrowth')
         t_eps = info.get('trailingEps')
-        f_eps = info.get('forwardEps')
+        sys_f_eps = info.get('forwardEps')
+        sys_peg_ratio = info.get('pegRatio')
+        sys_forward_pe = info.get('forwardPE')
+
+        st.markdown("##### ⚙️ 獲利預估基準設定 (將自動同步更新下方所有數據)")
+        col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
+        with col_eps1:
+            use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
+        with col_eps3:
+            if st.button("🤖 AI 自動上網尋找法人 EPS", disabled=not st.session_state.api_key, help="需在左側選單輸入 API Key"):
+                with st.spinner("AI 爬文中..."):
+                    fetched_val = get_eps_from_ai(c_name, curr_id, st.session_state.api_key)
+                    if fetched_val and fetched_val > 0:
+                        st.session_state.ai_fetched_eps[curr_id] = fetched_val
+                        st.success(f"抓取成功！AI 推估值約為 {fetched_val} 元")
+                    else:
+                        st.error("AI 暫時找不到具體數據，請手動輸入。")
+                        
+        with col_eps2:
+            default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
+            if default_eps_val is None:
+                default_eps_val = float(sys_f_eps) if sys_f_eps is not None else (float(t_eps) if t_eps else 1.0)
+            custom_eps = st.number_input("輸入國內法人共識 EPS (元)", min_value=0.01, value=default_eps_val, step=0.5, disabled=not use_custom_eps)
+
+        # 動態全域變數計算
+        if use_custom_eps:
+            active_f_eps = custom_eps
+            forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
+            # 若啟用自訂 EPS，連帶自動推算「未來獲利成長率 YoY」
+            if t_eps and t_eps > 0 and pe_ratio:
+                custom_growth = (active_f_eps - t_eps) / t_eps
+                peg_ratio = pe_ratio / (custom_growth * 100) if custom_growth > 0 else None
+                eg_str = f"{custom_growth * 100:.2f}%"
+                eg_color = "#ff4d4d" if custom_growth > 0 else ("#00cc66" if custom_growth < 0 else "#fff")
+                eg_label = "預估獲利成長 (YoY)"
+            else:
+                peg_ratio = None
+                eg_str = "N/A"
+                eg_color = "gray"
+                eg_label = "預估獲利成長 (YoY)"
+            eps_source_text = f"自訂法人共識 ({active_f_eps:.2f}元)"
+        else:
+            active_f_eps = sys_f_eps
+            forward_pe = curr_p / sys_f_eps if sys_forward_pe is None and sys_f_eps and sys_f_eps > 0 and curr_p else sys_forward_pe
+            peg_ratio = pe_ratio / (earn_growth * 100) if sys_peg_ratio is None and pe_ratio and earn_growth and earn_growth > 0 else sys_peg_ratio
+            eg_str = f"{earn_growth * 100:.2f}%" if earn_growth is not None else "N/A"
+            eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
+            eg_label = "獲利年增率 (YoY)"
+            eps_source_text = f"海外系統外推 ({sys_f_eps:.2f}元)" if sys_f_eps else "系統預估 (無資料)"
 
         def to_pct(val): return f"{val * 100:.2f}%" if val is not None else "N/A"
 
@@ -405,13 +443,14 @@ if curr_id:
         gm_str = to_pct(gross_margin)
         om_str = to_pct(op_margin)
         rg_str = to_pct(rev_growth)
-        eg_str = to_pct(earn_growth)
+        
         t_eps_str = f"{t_eps:.2f}" if t_eps is not None else "N/A"
-        f_eps_str = f"{f_eps:.2f}" if f_eps is not None else "N/A"
+        f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
+        # 重點連動：當開啟開關時，以醒目藍色標示 6 宮格內的預估 EPS
+        f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {f_eps_str}"
 
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe and roe >= 0.15 else ""
         rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
-        eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
 
         fund_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
@@ -421,14 +460,14 @@ if curr_id:
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
                 <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>EPS (目前 / 預估)</div>
-                <div style='font-size:1.3rem; font-weight:bold; color:#FFD700;'>{t_eps_str} / {f_eps_str}</div>
+                <div style='font-size:1.3rem; font-weight:bold; color:#FFD700;'>{f_eps_display}</div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
                 <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收年增率 (YoY)</div>
                 <div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}</div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
-                <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>獲利年增率 (YoY)</div>
+                <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>{eg_label}</div>
                 <div style='font-size:1.3rem; font-weight:bold; color:{eg_color};'>{eg_str}</div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
@@ -443,7 +482,7 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
-        # 4. 真實月營收與 YoY 雙軸圖表 (改接 API，不再被擋)
+        # 4. 真實月營收與 YoY 雙軸圖表
         df_rev = get_monthly_revenue(curr_id)
         if df_rev is not None and not df_rev.empty:
             st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
@@ -548,51 +587,10 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 7. 進階估值與價格合理性分析
+        # 7. 估值與價格合理性分析 (全盤吃上方的全域變數)
         st.markdown("#### ⚖️ 估值與價格合理性分析", unsafe_allow_html=True)
-        st.markdown("<small style='color:gray;'>*註：透過市場三大估值指標，檢視目前股價是否透支未來成長性或具備足夠的安全邊際。海外資料庫之預估 EPS 可能因模型外推而極度樂觀，建議適時切換為國內法人共識值以防追高。*</small>", unsafe_allow_html=True)
+        st.markdown("<small style='color:gray;'>*註：各項前瞻估值指標已自動套用上方設定之【獲利預估基準】進行重算。*</small>", unsafe_allow_html=True)
 
-        pb_ratio = info.get('priceToBook')
-        pe_ratio = info.get('trailingPE')
-        sys_peg_ratio = info.get('pegRatio')
-        sys_forward_pe = info.get('forwardPE')
-        
-        st.markdown("##### ⚙️ 進階估值微調 (EPS 敏感度分析)")
-        col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
-        with col_eps1:
-            use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
-        with col_eps3:
-            if st.button("🤖 AI 自動上網尋找法人 EPS", disabled=not st.session_state.api_key, help="需在左側選單輸入 API Key"):
-                with st.spinner("AI 爬文中..."):
-                    fetched_val = get_eps_from_ai(c_name, curr_id, st.session_state.api_key)
-                    if fetched_val and fetched_val > 0:
-                        st.session_state.ai_fetched_eps[curr_id] = fetched_val
-                        st.success(f"抓取成功！AI 推估值約為 {fetched_val} 元")
-                    else:
-                        st.error("AI 暫時找不到具體數據，請手動輸入。")
-                        
-        with col_eps2:
-            default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
-            if default_eps_val is None:
-                default_eps_val = float(f_eps) if f_eps is not None else (float(t_eps) if t_eps else 1.0)
-            custom_eps = st.number_input("輸入國內法人共識 EPS (元)", min_value=0.01, value=default_eps_val, step=0.5, disabled=not use_custom_eps)
-
-        if use_custom_eps:
-            active_f_eps = custom_eps
-            forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
-            if t_eps and t_eps > 0 and pe_ratio:
-                custom_growth = (active_f_eps - t_eps) / t_eps
-                peg_ratio = pe_ratio / (custom_growth * 100) if custom_growth > 0 else None
-            else:
-                peg_ratio = None
-            eps_source_text = f"自訂法人共識 ({active_f_eps:.2f}元)"
-        else:
-            active_f_eps = f_eps
-            forward_pe = curr_p / f_eps if sys_forward_pe is None and f_eps and f_eps > 0 and curr_p else sys_forward_pe
-            peg_ratio = pe_ratio / (earn_growth * 100) if sys_peg_ratio is None and pe_ratio and earn_growth and earn_growth > 0 else sys_peg_ratio
-            eps_source_text = f"海外系統外推 ({f_eps:.2f}元)" if f_eps else "系統預估 (無資料)"
-
-        pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
         pe_color, pe_eval = ("#ff4d4d", "偏高 / 高成長溢價") if pe_ratio and pe_ratio > 25 else ("#00cc66", "相對便宜") if pe_ratio and pe_ratio < 15 else ("#FFD700", "合理區間") if pe_ratio else ("gray", "數據不足")
         
         pb_str = f"{pb_ratio:.2f}x" if pb_ratio is not None else "N/A"
