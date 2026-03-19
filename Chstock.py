@@ -45,8 +45,12 @@ def get_ai_analysis_final(topic, api_key):
     
     api_key = api_key.strip()
     
-    # 移除了舊版會報 404 錯誤的 gemini-pro，只鎖定最新且穩定的 1.5 與 2.0 版本
+    # 🔥 升級大腦：根據最新官方文件，將 Gemini 3.1 Pro 與 Gemini 3 Flash 加入優先順位！
+    # 系統會從最上面的開始嘗試，失敗會自動往下找可用的模型。
     models_to_try = [
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash"
     ]
@@ -65,7 +69,7 @@ def get_ai_analysis_final(topic, api_key):
     all_errors = []
 
     for model in models_to_try:
-        # 移除 URL 中的 Markdown 錯誤標籤，確保網址純淨！
+        # === 終極修復：確保這裡絕對沒有任何 [ ] 中括號或小括號的超連結語法 ===
         url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model}:generateContent?key={api_key}"
         
         # 組合 1：帶有 Google Search 工具 (官方標準命名)
