@@ -2,8 +2,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-# 重新引入 twstock 來獲取中文名稱，因為 requirements.txt 已經有 lxml，現在應該可以正常運作了
-import twstock 
+import requests  # 新增：用於輕量抓取網頁
+import re        # 新增：用於正規表達式解析
 
 # 設定網頁標題與寬度
 st.set_page_config(page_title="台股智慧選股系統", layout="wide")
@@ -35,13 +35,17 @@ def get_stock_data(symbol):
     except Exception:
         return None, None
 
-# --- 獲取中文名稱函數 ---
-@st.cache_data(ttl=86400) # 中文名稱很久才變一次，快取久一點
+# --- 獲取中文名稱函數 (改用輕量級網頁抓取，徹底解決 twstock 與 lxml 報錯問題) ---
+@st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
     try:
-        # twstock.codes 是一個包含所有台股代號資訊的字典
-        if stock_id in twstock.codes:
-            return twstock.codes[stock_id].name
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        # 直接從 Yahoo 財經的網頁標題擷取中文名稱，不依賴任何外部套件
+        match = re.search(r'<title>(.*?)\(', response.text)
+        if match: 
+            return match.group(1).strip()
     except:
         pass
     return None
