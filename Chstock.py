@@ -263,12 +263,77 @@ if curr_id:
         with st.expander("📖 查看公司詳細營業項目簡介"):
             st.write(info.get('longBusinessSummary', '暫無簡介。'))
 
-        # 2. 營運指標
-        cur_p = hist['Close'].iloc[-1]
+        # --- 新增：⚡ 即時報價與交易資訊總表 ---
+        st.markdown("#### ⚡ 即時報價與交易資訊")
+        
+        # 抓取並計算盤面數據
+        today_data = hist.iloc[-1]
+        prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
+        
+        curr_p = today_data['Close']
+        open_p = today_data['Open']
+        high_p = today_data['High']
+        low_p = today_data['Low']
+        
+        # 處理台股張數 (yfinance 回傳為股數，需除以1000)
+        vol_shares = today_data['Volume']
+        vol_lots = int(vol_shares // 1000) 
+        prev_vol_lots = int(prev_data['Volume'] // 1000) if len(hist) > 1 else 0
+        
+        # 昨收與漲跌計算
+        prev_close = info.get('previousClose', prev_data['Close'])
+        change = curr_p - prev_close
+        change_pct = (change / prev_close) * 100 if prev_close else 0
+        amp = ((high_p - low_p) / prev_close) * 100 if prev_close else 0
+        
+        # 均價與成交金額 (億) 計算
+        avg_price = (high_p + low_p + curr_p) / 3
+        turnover_100m = (vol_shares * avg_price) / 100000000
+        
+        # 自動變色邏輯 (漲紅、跌綠、平盤白)
+        def get_color(val, base):
+            if val > base: return "#ff4d4d"
+            elif val < base: return "#00cc66"
+            return "#ffffff"
+            
+        c_curr = get_color(curr_p, prev_close)
+        c_open = get_color(open_p, prev_close)
+        c_high = get_color(high_p, prev_close)
+        c_low = get_color(low_p, prev_close)
+        c_change = get_color(change, 0)
+        arrow = "▲" if change > 0 else ("▼" if change < 0 else "")
+        
+        # 構建仿看盤軟體的 HTML 報價表
+        quote_html = f"""
+        <style>
+        .q-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px 30px; background: #1e1e1e; padding: 15px 20px; border-radius: 8px; font-family: sans-serif; margin-bottom: 20px; border: 1px solid #333; }}
+        .q-item {{ display: flex; justify-content: space-between; border-bottom: 1px solid #333; padding-bottom: 4px; }}
+        .q-label {{ color: #aaa; font-size: 1rem; }}
+        .q-val {{ font-weight: bold; font-size: 1.1rem; }}
+        </style>
+        <div class="q-container">
+            <div class="q-item"><span class="q-label">成交</span><span class="q-val" style="color: {c_curr};">{curr_p:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">昨收</span><span class="q-val" style="color: #fff;">{prev_close:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">開盤</span><span class="q-val" style="color: {c_open};">{open_p:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">漲跌幅</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change_pct):.2f}%</span></div>
+            <div class="q-item"><span class="q-label">最高</span><span class="q-val" style="color: {c_high};">{high_p:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">漲跌</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change):.2f}</span></div>
+            <div class="q-item"><span class="q-label">最低</span><span class="q-val" style="color: {c_low};">{low_p:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">總量 (張)</span><span class="q-val" style="color: #ffd700;">{vol_lots:,}</span></div>
+            <div class="q-item"><span class="q-label">均價</span><span class="q-val" style="color: #fff;">{avg_price:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">昨量 (張)</span><span class="q-val" style="color: #fff;">{prev_vol_lots:,}</span></div>
+            <div class="q-item"><span class="q-label">成交金額(億)</span><span class="q-val" style="color: #fff;">{turnover_100m:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">振幅</span><span class="q-val" style="color: #fff;">{amp:.2f}%</span></div>
+        </div>
+        """
+        st.markdown(quote_html, unsafe_allow_html=True)
+
+        # 2. 營運指標 (原本的區塊)
         st.markdown("#### 📊 營運估值報告")
         st.markdown("""<style>[data-testid="stMetricValue"]{font-size:1.6rem !important; color:#FFD700 !important;}</style>""", unsafe_allow_html=True)
         m1, m2, m3 = st.columns(3)
-        m1.metric("目前股價", f"{cur_p:.2f}")
+        # 修改 metric 的股價來源，使用我們剛算好的 curr_p
+        m1.metric("目前股價", f"{curr_p:.2f}")
         m2.metric("預估明年 EPS", f"{info.get('forwardEps', info.get('trailingEps', 0)):.2f}")
         m3.metric("歷史本益比", f"{info.get('trailingPE', 0):.1f}x")
 
