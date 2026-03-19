@@ -754,7 +754,9 @@ if curr_id:
         fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
         max_vol = plot_df['Volume'].max() / 1000
         fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
-        fig.update_yaxes(range=[0, 100], side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
+        
+        # === 修改這裡：加入 dtick=10，讓 KD 值的 Y 軸刻度以 10 為單位 ===
+        fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
 
         fig.update_xaxes(
             rangebreaks=[dict(bounds=["sat", "mon"])],
