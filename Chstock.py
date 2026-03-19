@@ -9,6 +9,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import json
 import time
+import datetime # 新增：用於 API 日期計算
 
 # 設定網頁標題與寬度
 st.set_page_config(page_title="way系統", layout="wide")
@@ -132,75 +133,47 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     except: pass
     return None
 
-# --- 📊 終極進化版：無敵爬取真實「月營收」與「YoY」函數 ---
+# --- 📊 終極進化版：改接公開 API 獲取「月營收」與「YoY」(不再被雲端防火牆阻擋) ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
-    # 建立 4 個公開站點備援，保證絕對不斷線
-    mirrors = [
-        "djinfo.cathaysec.com.tw",
-        "fubon-ebrokerdj.fbs.com.tw",
-        "jdata.yuanta.com.tw",
-        "jsjustweb.jihsun.com.tw"
-    ]
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    }
-    
-    html_content = ""
-    for host in mirrors:
-        try:
-            url = f"https://{host}/z/zc/zch/zch_{stock_id}.djhtm"
-            res = requests.get(url, headers=headers, timeout=5)
-            res.encoding = 'big5'
-            if "營收" in res.text:
-                html_content = res.text
-                break
-        except:
-            continue
-            
-    if not html_content: return None
-        
-    months, revenues, yoys = [], [], []
-    
-    # 終極過濾器：直接解析整條 Table 結構，無視所有內部顏色標籤干擾
-    tr_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.IGNORECASE | re.DOTALL)
-    td_pattern = re.compile(r'<td[^>]*>(.*?)</td>', re.IGNORECASE | re.DOTALL)
-    
-    rows = tr_pattern.findall(html_content)
-    for row in rows:
-        cells = td_pattern.findall(row)
-        if len(cells) >= 5:
-            # 暴力清除所有干擾的 HTML 標籤 (例如 <font color=red>)
-            clean_cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
-            
-            month_text = clean_cells[0]
-            # 確認該列是營收資料列 (例如 113/02)
-            if re.match(r'^\d{3,4}/\d{2}$', month_text):
-                try:
-                    rev_str = clean_cells[1].replace(',', '')
-                    yoy_str = clean_cells[4].replace(',', '').replace('%', '')
-                    
-                    rev_val = float(rev_str) / 100000  # 千元轉換為億元
-                    yoy_val = float(yoy_str)
-                    
-                    # 將民國年月轉為西元年月
-                    y, mo = month_text.split('/')
-                    if len(y) == 3: y = str(int(y) + 1911)
-                    
-                    months.append(f"{y}-{mo}")
-                    revenues.append(round(rev_val, 2))
-                    yoys.append(yoy_val)
-                except:
-                    continue
-                    
-    if not months: return None
-        
-    # 取近 12 個月，並反轉陣列順序(舊到新)以配合折線圖由左畫到右
-    df = pd.DataFrame({'Month': months, 'Revenue': revenues, 'YoY': yoys})
-    df = df.head(12).iloc[::-1].reset_index(drop=True)
-    return df
+    try:
+        # 計算往前推 25 個月的日期，確保有足夠資料來計算 YoY
+        today = datetime.date.today()
+        start_year = today.year - 2
+        start_str = f"{start_year}-{today.month:02d}-01"
+
+        # 使用 FinMind 開放式量化 API，無阻擋、傳回乾淨 JSON
+        url = f"[https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id=](https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id=){stock_id}&start_date={start_str}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=10)
+        data = res.json()
+
+        if data.get('status') != 200 or not data.get('data'):
+            return None
+
+        # 轉換為 DataFrame 進行運算
+        df = pd.DataFrame(data['data'])
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values('date').reset_index(drop=True)
+
+        # 確保格式並計算年增率 (YoY) 與億元營收
+        df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
+        df['YoY'] = df['revenue'].pct_change(periods=12) * 100
+        df['Month'] = df['date'].dt.strftime('%Y-%m')
+        df['Revenue'] = df['revenue'] / 100000000  # 轉換為億元
+
+        # 剔除尚未能計算 YoY 的前一年資料，並只取最近 12 個月
+        final_df = df.dropna(subset=['YoY']).tail(12).copy()
+
+        if final_df.empty:
+            return None
+
+        final_df['Revenue'] = final_df['Revenue'].round(2)
+        final_df['YoY'] = final_df['YoY'].round(2)
+
+        return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
+    except Exception as e:
+        return None
 
 # --- 基礎數據函數 ---
 @st.cache_data(ttl=3600)
@@ -470,7 +443,7 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
-        # 4. 真實月營收與 YoY 雙軸圖表
+        # 4. 真實月營收與 YoY 雙軸圖表 (改接 API，不再被擋)
         df_rev = get_monthly_revenue(curr_id)
         if df_rev is not None and not df_rev.empty:
             st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
