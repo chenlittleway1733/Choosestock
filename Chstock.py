@@ -380,7 +380,8 @@ if curr_id:
             D.append(D[-1]*(2/3) + K[-1]*(1/3))
         hist['K'], hist['D'] = K[1:], D[1:]
         
-        st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;'><b>AI 判定：{'📈 趨勢強勁' if cur_p > ma20 else '📉 處於弱勢'}</b></div>", unsafe_allow_html=True)
+        # 這裡將 cur_p 修正為 curr_p
+        st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;'><b>AI 判定：{'📈 趨勢強勁' if curr_p > ma20 else '📉 處於弱勢'}</b></div>", unsafe_allow_html=True)
         
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線與均線", "KD (9,3,3)", "成交張數"))
         fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
