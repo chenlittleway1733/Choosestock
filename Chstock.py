@@ -5,12 +5,26 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 import re
+import urllib.parse
+import xml.etree.ElementTree as ET
 import json
+import time
 
 # 設定網頁標題與寬度
-st.set_page_config(page_title="台股聯網 AI 投資戰情室", layout="wide")
+st.set_page_config(page_title="way系統", layout="wide")
 
-# --- 初始化 Session State (確保所有變數都在一開始就建立，防止 AttributeError) ---
+# --- 產業對照表 ---
+SECTOR_MAP = {
+    "Technology": "科技產業", "Semiconductors": "半導體業", "Consumer Electronics": "消費性電子",
+    "Electronic Components": "電子零組件", "Computer Hardware": "電腦及週邊設備",
+    "Communication Equipment": "通信網路業", "Software—Infrastructure": "軟體服務業",
+    "Financials": "金融保險業", "Banks—Regional": "銀行業", "Life Insurance": "人壽保險",
+    "Industrials": "工業", "Marine Shipping": "航運業", "Airlines": "航空業",
+    "Auto Parts": "汽車零組件", "Healthcare": "生技醫療業", "Real Estate": "建材營造業",
+    "Basic Materials": "原物料/塑化", "Energy": "能源產業", "Utilities": "公用事業"
+}
+
+# --- 初始化 Session State ---
 if 'selected_stock' not in st.session_state:
     st.session_state.selected_stock = "2330"
 if 'topic_results' not in st.session_state:
@@ -28,29 +42,10 @@ def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
 
 # --- AI 解析與連線函數 ---
-def parse_ai_response(res_json):
-    try:
-        candidates = res_json.get('candidates', [])
-        if not candidates: return "AI 回應為空", []
-        
-        text = candidates[0]['content']['parts'][0]['text']
-        text = text.replace("```json", "").replace("```", "").strip()
-        
-        data = json.loads(text)
-        return data.get('reasoning', ''), data.get('stocks', [])
-    except Exception as e:
-        return f"解析失敗: {str(e)}", []
-
 def get_ai_analysis_final(topic, api_key):
     if not api_key: return "ERROR: 未輸入金鑰", []
     api_key = api_key.strip()
-    
-    models_to_try = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash-8b",
-        "gemini-1.5-flash"
-    ]
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-8b", "gemini-1.5-flash"]
     
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
     必須嚴格回傳 JSON 格式：
@@ -97,43 +92,98 @@ def get_ai_analysis_final(topic, api_key):
     error_details = "\n\n".join(all_errors)
     return f"⚠️ 無法連線至 AI，請確認您的 Google 帳號 API 權限。\n\n詳細錯誤診斷：\n{error_details}", []
 
-# --- 🤖 新增：專屬 AI 聯網抓取法人預估 EPS 函數 ---
+def parse_ai_response(res_json):
+    content = ""
+    try:
+        content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+        clean_json = re.sub(r'```json\n?|```', '', content).strip()
+        grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
+        links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
+        
+        start_idx = clean_json.find('{')
+        end_idx = clean_json.rfind('}')
+        if start_idx != -1 and end_idx != -1:
+            clean_json = clean_json[start_idx:end_idx+1]
+            
+        return json.loads(clean_json), list(set(links))
+    except Exception as e:
+        return f"JSON 解析失敗。AI 原文片段: {content[:100]}...", []
+
+# --- 🤖 專屬 AI 聯網抓取法人預估 EPS 函數 ---
 def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
-    
     model = "gemini-2.5-flash"
     api_host = "https://" + "generativelanguage.googleapis.com"
     url = f"{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
-    
     system_prompt = "你是一個精準的財經數據提取機器人。請上網搜尋國內外法人或投顧，針對該公司「明年」或「今年」所預估的 EPS（每股盈餘）。請綜合最新資訊，『嚴格只回傳一個最合理的數字』（例如：30.5 或 15.2）。不要加上任何單位、不要解釋、不要有其他文字。若真的查無資料，請回傳 0。"
-    
     payload = {
         "contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新的法人預估 EPS"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}],
     }
-    
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             return float(text)
-    except:
-        pass
+    except: pass
     return None
 
-# --- 資料與翻譯函數 ---
+# --- 📊 自動爬取真實「月營收」與「YoY」函數 (補回這個遺失的引擎！) ---
+@st.cache_data(ttl=43200)
+def get_monthly_revenue(stock_id):
+    try:
+        url = f"[https://djinfo.cathaysec.com.tw/z/zc/zch/zch](https://djinfo.cathaysec.com.tw/z/zc/zch/zch)_{stock_id}.djhtm"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        res = requests.get(url, headers=headers, timeout=8)
+        res.encoding = 'big5'
+        
+        pattern = r'<td class="t3n0">(\d{3,4}/\d{2})</td>\s*<td class="t3n1">([\d,]+)</td>\s*<td class="t3n1">([^<]+)</td>\s*<td class="t3n1">([^<]+)</td>'
+        matches = re.findall(pattern, res.text)
+        
+        if not matches:
+            url2 = f"[https://fubon-ebrokerdj.fbs.com.tw/z/zc/zch/zch](https://fubon-ebrokerdj.fbs.com.tw/z/zc/zch/zch)_{stock_id}.djhtm"
+            res = requests.get(url2, headers=headers, timeout=8)
+            res.encoding = 'big5'
+            matches = re.findall(pattern, res.text)
+            
+        if not matches: return None
+        
+        months, revenues, yoys = [], [], []
+        recent_12 = matches[:12][::-1]
+        
+        for m in recent_12:
+            raw_month = m[0]
+            if len(raw_month.split('/')[0]) == 3:
+                y, mo = raw_month.split('/')
+                raw_month = f"{int(y)+1911}/{mo}"
+            months.append(raw_month)
+            
+            rev_val = float(m[1].replace(',', '')) / 100000
+            revenues.append(round(rev_val, 2))
+            
+            yoy_str = m[3].replace('%', '').replace(',', '')
+            try:
+                yoy_val = float(yoy_str)
+            except:
+                yoy_val = 0.0
+            yoys.append(yoy_val)
+            
+        return pd.DataFrame({'Month': months, 'Revenue': revenues, 'YoY': yoys})
+    except Exception as e:
+        return None
+
+# --- 基礎數據函數 ---
 @st.cache_data(ttl=3600)
-def get_stock_data(symbol):
+def get_stock_data(stock_id):
     try:
         for ext in [".TW", ".TWO"]:
-            ticker = yf.Ticker(f"{symbol}{ext}")
-            hist = ticker.history(period="1y") 
+            ticker = yf.Ticker(f"{stock_id}{ext}")
+            hist = ticker.history(period="1y")
             if not hist.empty: return hist, ticker.info
         return None, None
-    except Exception:
-        return None, None
+    except: return None, None
 
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
@@ -141,14 +191,26 @@ def get_chinese_name(stock_id):
         host_name = "tw.stock.yahoo.com"
         path = "/quote/"
         url = f"https://{host_name}{path}{stock_id}"
-        
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
         match = re.search(r'<title>(.*?)\(', response.text)
         if match: return match.group(1).strip()
-    except:
-        pass
+    except: pass
     return None
+
+@st.cache_data(ttl=1800)
+def get_stock_news(query):
+    try:
+        encoded_q = urllib.parse.quote(f"{query} 股票")
+        url = f"[https://news.google.com/rss/search?q=](https://news.google.com/rss/search?q=){encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        res = requests.get(url, timeout=5)
+        root = ET.fromstring(res.text)
+        news = []
+        for item in root.findall('.//item')[:6]:
+            t = item.find('title').text
+            news.append({"title": t, "link": item.find('link').text, "sentiment": "🟢" if any(x in t for x in ["漲","成長","買超"]) else ("🔴" if any(x in t for x in ["跌","賣超","警訊"]) else "⚪")})
+        return news
+    except: return []
 
 @st.cache_data(ttl=86400)
 def translate_to_zh(text):
@@ -157,7 +219,6 @@ def translate_to_zh(text):
         host_name = "translate.googleapis.com"
         path = "/translate_a/single"
         translate_url = f"https://{host_name}{path}"
-        
         params = {"client": "gtx", "sl": "en", "tl": "zh-TW", "dt": "t", "q": text}
         res = requests.get(translate_url, params=params, timeout=5)
         translated_text = "".join([item[0] for item in res.json()[0]])
@@ -169,102 +230,98 @@ def translate_to_zh(text):
 # 側邊欄：所有功能選單
 # ==========================================
 with st.sidebar:
-    st.header("🔍 個股查詢")
-    stock_input = st.text_input("輸入台股代號", st.session_state.selected_stock)
-    st.session_state.selected_stock = stock_input
+    st.markdown("### 🔍 個股查詢")
+    stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
+    if stock_input != st.session_state.selected_stock:
+        st.session_state.selected_stock = stock_input
     
     st.markdown("---")
-    st.header("🐳 籌碼集中度追蹤")
+    
+    st.markdown("### 🐳 籌碼集中度追蹤")
     if st.button("🔍 掃描籌碼增持名單", use_container_width=True):
         st.session_state.show_whale = True
         st.session_state.topic_results = None
-        st.session_state.ai_error = None
         
     st.markdown("---")
-    st.header("🧠 AI 聯網議題選股")
-    topic = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
+    
+    st.markdown("### 🧠 AI 聯網議題選股")
+    topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
     # 綁定 API Key 到 Session State
-    st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key)
+    st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key, help="貼入您從 Google AI Studio 複製的金鑰。")
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
-        if st.session_state.api_key and topic:
-            with st.spinner("AI 深度推演中..."):
-                reasoning, stocks = get_ai_analysis_final(topic, st.session_state.api_key)
-                if not stocks:
-                    st.session_state.ai_error = reasoning
-                    st.session_state.topic_results = None
-                else:
-                    st.session_state.ai_error = None
-                    st.session_state.topic_results = {"topic": topic, "reasoning": reasoning, "stocks": stocks}
-                    st.session_state.show_whale = False
-        else:
-            st.warning("請輸入議題與 API Key")
-
+        if topic_q:
+            if not st.session_state.api_key:
+                st.warning("請先輸入您的 API Key。")
+            else:
+                st.session_state.topic_results = "LOADING"
+            
     st.markdown("---")
     if st.button("🔄 重新整理系統快取", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
 # ==========================================
-# 主畫面：戰情室主體
+# 主畫面開始
 # ==========================================
-st.markdown("### 📈 台股聯網 AI 投資戰情室")
+st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
-# --- 顯示 AI 錯誤訊息 ---
-if st.session_state.ai_error:
-    st.error(f"AI 解析失敗。\n\n詳細原因：{st.session_state.ai_error}")
+# --- 處理 AI 議題結果 ---
+if st.session_state.topic_results == "LOADING":
+    with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
+        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key)
+        if isinstance(data, dict):
+            st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
+            st.session_state.show_whale = False
+        else:
+            st.error(f"AI 解析失敗。\n\n詳細原因：{data}")
+            st.session_state.topic_results = None
 
-# --- 顯示 AI 分析結果 ---
-if st.session_state.topic_results:
-    res = st.session_state.topic_results
-    st.markdown(f"### 💡 議題動態推演：【{res['topic']}】")
-    st.info(f"**AI 深度分析：** {res['reasoning']}")
-    
-    col1, col2 = st.columns(2)
-    with col1:
+if isinstance(st.session_state.topic_results, dict):
+    t = st.session_state.topic_results
+    st.markdown(f"### 💡 議題動態推演：【{t['topic']}】")
+    st.info(f"**AI 深度分析：**\n{t['data'].get('reasoning', '')}")
+    c1, c2 = st.columns(2)
+    with c1:
         st.markdown("#### 🛡️ 潛力權值股")
-        for s in res['stocks']:
-            if s['type'] == '潛力':
-                if st.button(f"{s['name']} ({s['id']})", key=f"ai_{s['id']}", use_container_width=True, on_click=change_stock, args=(s['id'],)): pass
-                st.caption(f"理由：{s['why']}")
-    with col2:
+        for s in [x for x in t['data'].get('stocks', []) if x['type'] == "潛力"]:
+            st.button(f"{s['name']} ({s['id']})", on_click=change_stock, args=(s['id'],), key=f"tp_{s['id']}", use_container_width=True)
+            st.caption(f"理由：{s['why']}")
+    with c2:
         st.markdown("#### 🚀 爆發概念股")
-        for s in res['stocks']:
-            if s['type'] != '潛力':
-                if st.button(f"{s['name']} ({s['id']})", key=f"ai_{s['id']}", use_container_width=True, on_click=change_stock, args=(s['id'],)): pass
-                st.caption(f"理由：{s['why']}")
+        for s in [x for x in t['data'].get('stocks', []) if x['type'] != "潛力"]:
+            st.button(f"{s['name']} ({s['id']})", on_click=change_stock, args=(s['id'],), key=f"ts_{s['id']}", use_container_width=True)
+            st.caption(f"理由：{s['why']}")
+    if t['links']:
+        with st.expander("🔗 查看 AI 參考之網路資訊來源"):
+            for link in t['links']: st.markdown(f"- [{link}]({link})")
     st.markdown("---")
 
-# --- 顯示籌碼追蹤結果 ---
+# --- 籌碼追蹤顯示區 ---
 if st.session_state.show_whale:
     st.markdown("### 🐳 近兩周大戶持股比例顯著增加標的")
     whales = [("2317", "鴻海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("3324", "雙鴻")]
     cols = st.columns(5)
     for idx, (code, name) in enumerate(whales):
-        with cols[idx]: 
-            st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
+        with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
-# ==========================================
-# 個股報表與分析邏輯
-# ==========================================
+# --- 個股報表主體 ---
 curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
         hist, info = get_stock_data(curr_id)
         c_name = get_chinese_name(curr_id)
         if not c_name:
-            c_name = info.get('shortName', curr_id) if info else curr_id
+            c_name = info.get('shortName', curr_id)
+        news_list = get_stock_news(c_name)
 
     if hist is not None and not hist.empty:
         # 1. 簡介與產業
         st.markdown(f"### 🏢 {c_name} ({curr_id})")
-        sector = info.get('sector', '未知')
-        industry = info.get('industry', '未知')
-        st.markdown(f"**🏷️ 產業分類：** {sector} / {industry}")
-        
-        # --- 自動英翻中區塊 ---
+        sector = SECTOR_MAP.get(info.get('sector', '未知'), info.get('sector', '未知'))
+        st.markdown(f"**🏷️ 產業分類：** {sector} / {info.get('industry', '未知')}")
         with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
             summary_en = info.get('longBusinessSummary', '暫無簡介。')
             if summary_en != '暫無簡介。':
@@ -274,25 +331,21 @@ if curr_id:
             else:
                 st.write(summary_en)
 
-        # --- ⚡ 即時報價與交易資訊總表 ---
+        # 2. 即時報價與交易資訊
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
-        
         curr_p = today_data['Close']
         open_p = today_data['Open']
         high_p = today_data['High']
         low_p = today_data['Low']
-        
         vol_shares = today_data['Volume']
         vol_lots = int(vol_shares // 1000) 
         prev_vol_lots = int(prev_data['Volume'] // 1000) if len(hist) > 1 else 0
-        
         prev_close = info.get('previousClose', prev_data['Close'])
         change = curr_p - prev_close
         change_pct = (change / prev_close) * 100 if prev_close else 0
         amp = ((high_p - low_p) / prev_close) * 100 if prev_close else 0
-        
         avg_price = (high_p + low_p + curr_p) / 3
         turnover_100m = (vol_shares * avg_price) / 100000000
         
@@ -332,7 +385,7 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # --- 💼 財務基本面與營運分析 ---
+        # 3. 財務基本面與營運分析
         st.markdown("#### 💼 財務基本面與營運分析")
         pe_ratio = info.get('trailingPE')
         roe = info.get('returnOnEquity')
@@ -388,7 +441,7 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
-        # --- 📊 升級：真實月營收與 YoY 雙軸圖表 ---
+        # 4. 真實月營收與 YoY 雙軸圖表
         df_rev = get_monthly_revenue(curr_id)
         if df_rev is not None and not df_rev.empty:
             st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
@@ -396,56 +449,39 @@ if curr_id:
 
             fig_rev = make_subplots(specs=[[{"secondary_y": True}]])
             
-            # 主軸：單月營收 (直條圖 Bar)
             fig_rev.add_trace(
                 go.Bar(
-                    x=df_rev['Month'],
-                    y=df_rev['Revenue'],
-                    name="單月營收 (億)",
-                    marker_color='#3498db', # 搭配暗黑主題的亮藍色
-                    opacity=0.8,
+                    x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)",
+                    marker_color='#3498db', opacity=0.8,
                     hovertemplate="營收: %{y} 億<extra></extra>"
-                ),
-                secondary_y=False,
+                ), secondary_y=False,
             )
             
-            # 副軸：年增率 YoY (折線圖 Line+Markers)
             fig_rev.add_trace(
                 go.Scatter(
-                    x=df_rev['Month'],
-                    y=df_rev['YoY'],
-                    name="YoY (%)",
-                    mode='lines+markers',
-                    line=dict(color='#ff4d4d', width=3), # 醒目的亮紅色
-                    marker=dict(size=8, symbol='circle'),
-                    hovertemplate="YoY: %{y}%<extra></extra>"
-                ),
-                secondary_y=True,
+                    x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)",
+                    mode='lines+markers', line=dict(color='#ff4d4d', width=3),
+                    marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"
+                ), secondary_y=True,
             )
             
-            # UI/UX 細節優化
             fig_rev.update_layout(
-                height=400,
-                template="plotly_dark", # 套用暗黑主題以融入戰情室背景
-                hovermode="x unified",
+                height=400, template="plotly_dark", hovermode="x unified",
                 margin=dict(l=10, r=10, t=30, b=10),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)'
+                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
             )
             fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
             fig_rev.update_yaxes(
-                title_text="年增率 YoY (%)",
-                secondary_y=True,
-                showgrid=True, gridcolor='#333', # 淡淡的網格線
-                zeroline=True, zerolinewidth=1, zerolinecolor='#555'
+                title_text="年增率 YoY (%)", secondary_y=True,
+                showgrid=True, gridcolor='#333', zeroline=True, zerolinewidth=1, zerolinecolor='#555'
             )
             st.plotly_chart(fig_rev, use_container_width=True)
             st.markdown("---")
         else:
             st.warning("⚠️ 目前暫時無法連線至公開庫取得月營收數據。")
 
-        # --- 🎯 法人目標價 ---
+        # 5. 法人目標價
         hi, me, lo = info.get('targetHighPrice'), info.get('targetMeanPrice'), info.get('targetLowPrice')
         if hi and me and lo:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
@@ -459,17 +495,17 @@ if curr_id:
              st.info(f"法人最高預期：**{hi:.1f}**")
         st.markdown("---")
 
-        # --- 🌟 產業前景與競爭優勢評估 ---
+        # 6. 產業前景與競爭優勢評估
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：此區塊非使用 AI，而是根據全球產業分類與財報毛利率、營益率特徵，進行客觀的競爭力推導。*</small>", unsafe_allow_html=True)
 
         hot_industries = ['Semiconductor', 'Software', 'Hardware', 'Electronic', 'IT Services', 'Communication', 'Technology']
-        is_hot = any(hot in sector for hot in hot_industries) or any(hot in industry for hot in hot_industries)
+        is_hot = any(hot in sector for hot in hot_industries) or any(hot in info.get('industry', '未知') for hot in hot_industries)
         
         if is_hot:
-            trend_icon, trend_title, trend_desc, trend_color = "🚀", "長線成長大趨勢", f"所屬板塊 ({industry}) 涵蓋高階運算、AI 應用或資料中心等剛性需求，具備長期市場成長潛力。", "#ff4d4d"
+            trend_icon, trend_title, trend_desc, trend_color = "🚀", "長線成長大趨勢", f"所屬板塊 ({info.get('industry', '未知')}) 涵蓋高階運算、AI 應用或資料中心等剛性需求，具備長期市場成長潛力。", "#ff4d4d"
         else:
-            trend_icon, trend_title, trend_desc, trend_color = "🏭", "穩定或景氣循環產業", f"所屬板塊 ({industry}) 發展相對成熟，需特別留意整體景氣波動或公司的特殊利基點。", "#FFD700"
+            trend_icon, trend_title, trend_desc, trend_color = "🏭", "穩定或景氣循環產業", f"所屬板塊 ({info.get('industry', '未知')}) 發展相對成熟，需特別留意整體景氣波動或公司的特殊利基點。", "#FFD700"
 
         if gross_margin is None:
             moat_icon, moat_title, moat_desc, moat_color = "❓", "數據不足", "缺乏毛利率數據無法精確評估。", "gray"
@@ -510,7 +546,7 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # --- ⚖️ 估值：判斷買進的價格是否合理區塊分析 ---
+        # 7. 進階估值與價格合理性分析 (包含 AI 聯網抓取 EPS)
         st.markdown("#### ⚖️ 估值與價格合理性分析", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：透過市場三大估值指標，檢視目前股價是否透支未來成長性或具備足夠的安全邊際。海外資料庫之預估 EPS 可能因模型外推而極度樂觀，建議適時切換為國內法人共識值以防追高。*</small>", unsafe_allow_html=True)
 
@@ -518,19 +554,12 @@ if curr_id:
         pe_ratio = info.get('trailingPE')
         sys_peg_ratio = info.get('pegRatio')
         sys_forward_pe = info.get('forwardPE')
-        t_eps = info.get('trailingEps')
-        f_eps = info.get('forwardEps')
-        earn_growth = info.get('earningsGrowth')
         
-        # --- 核心升級：進階估值微調 (法人共識 EPS 動態切換 + AI 聯網抓取) ---
         st.markdown("##### ⚙️ 進階估值微調 (EPS 敏感度分析)")
-        
         col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
         with col_eps1:
             use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
-        
         with col_eps3:
-            # 點擊按鈕後，呼叫 AI 抓取並存入 Session
             if st.button("🤖 AI 自動上網尋找法人 EPS", disabled=not st.session_state.api_key, help="需在左側選單輸入 API Key"):
                 with st.spinner("AI 爬文中..."):
                     fetched_val = get_eps_from_ai(c_name, curr_id, st.session_state.api_key)
@@ -541,84 +570,37 @@ if curr_id:
                         st.error("AI 暫時找不到具體數據，請手動輸入。")
                         
         with col_eps2:
-            # 優先使用 AI 抓到的數據，沒有的話才用預設值
             default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
             if default_eps_val is None:
                 default_eps_val = float(f_eps) if f_eps is not None else (float(t_eps) if t_eps else 1.0)
-                
             custom_eps = st.number_input("輸入國內法人共識 EPS (元)", min_value=0.01, value=default_eps_val, step=0.5, disabled=not use_custom_eps)
 
-        # 動態估值計算邏輯
         if use_custom_eps:
             active_f_eps = custom_eps
-            # 依據使用者輸入的 EPS 重新計算前瞻本益比
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
-            
-            # 依據使用者輸入的 EPS 重新計算 PEG
             if t_eps and t_eps > 0 and pe_ratio:
                 custom_growth = (active_f_eps - t_eps) / t_eps
-                if custom_growth > 0:
-                    peg_ratio = pe_ratio / (custom_growth * 100)
-                else:
-                    peg_ratio = None # 獲利衰退不適用 PEG
+                peg_ratio = pe_ratio / (custom_growth * 100) if custom_growth > 0 else None
             else:
                 peg_ratio = None
-                
             eps_source_text = f"自訂法人共識 ({active_f_eps:.2f}元)"
         else:
             active_f_eps = f_eps
-            # 若 API 沒給前瞻本益比，自動使用系統 EPS 計算
-            if sys_forward_pe is None and f_eps is not None and f_eps > 0 and curr_p:
-                forward_pe = curr_p / f_eps
-            else:
-                forward_pe = sys_forward_pe
-                
-            if sys_peg_ratio is None and pe_ratio is not None and earn_growth is not None and earn_growth > 0:
-                peg_ratio = pe_ratio / (earn_growth * 100)
-            else:
-                peg_ratio = sys_peg_ratio
-                
+            forward_pe = curr_p / f_eps if sys_forward_pe is None and f_eps and f_eps > 0 and curr_p else sys_forward_pe
+            peg_ratio = pe_ratio / (earn_growth * 100) if sys_peg_ratio is None and pe_ratio and earn_growth and earn_growth > 0 else sys_peg_ratio
             eps_source_text = f"海外系統外推 ({f_eps:.2f}元)" if f_eps else "系統預估 (無資料)"
 
         pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
-        if pe_ratio is None:
-            pe_color, pe_eval = "gray", "數據不足"
-        elif pe_ratio > 25:
-            pe_color, pe_eval = "#ff4d4d", "偏高 / 高成長溢價"
-        elif pe_ratio < 15:
-            pe_color, pe_eval = "#00cc66", "相對便宜"
-        else:
-            pe_color, pe_eval = "#FFD700", "合理區間"
-
+        pe_color, pe_eval = ("#ff4d4d", "偏高 / 高成長溢價") if pe_ratio and pe_ratio > 25 else ("#00cc66", "相對便宜") if pe_ratio and pe_ratio < 15 else ("#FFD700", "合理區間") if pe_ratio else ("gray", "數據不足")
+        
         pb_str = f"{pb_ratio:.2f}x" if pb_ratio is not None else "N/A"
-        if pb_ratio is None:
-            pb_color, pb_eval = "gray", "數據不足"
-        elif pb_ratio > 3:
-            pb_color, pb_eval = "#ff4d4d", "偏高溢價"
-        elif pb_ratio < 1.5:
-            pb_color, pb_eval = "#00cc66", "具資產保護"
-        else:
-            pb_color, pb_eval = "#FFD700", "合理區間"
-
+        pb_color, pb_eval = ("#ff4d4d", "偏高溢價") if pb_ratio and pb_ratio > 3 else ("#00cc66", "具資產保護") if pb_ratio and pb_ratio < 1.5 else ("#FFD700", "合理區間") if pb_ratio else ("gray", "數據不足")
+        
         peg_str = f"{peg_ratio:.2f}" if peg_ratio is not None else "N/A"
-        if peg_ratio is None:
-            peg_color, peg_eval = "gray", "衰退或無數據"
-        elif peg_ratio > 2:
-            peg_color, peg_eval = "#ff4d4d", "透支未來成長"
-        elif peg_ratio <= 1:
-            peg_color, peg_eval = "#00cc66", "低估 (成長性支撐)"
-        else:
-            peg_color, peg_eval = "#FFD700", "合理區間"
-            
+        peg_color, peg_eval = ("#ff4d4d", "透支未來成長") if peg_ratio and peg_ratio > 2 else ("#00cc66", "低估 (成長性支撐)") if peg_ratio and peg_ratio <= 1 else ("#FFD700", "合理區間") if peg_ratio else ("gray", "衰退或無數據")
+        
         fpe_str = f"{forward_pe:.1f}x" if forward_pe is not None else "N/A"
-        if forward_pe is None:
-            fpe_color, fpe_eval = "gray", "數據不足"
-        elif forward_pe > 25:
-            fpe_color, fpe_eval = "#ff4d4d", "偏高 / 成長期望高"
-        elif forward_pe < 15:
-            fpe_color, fpe_eval = "#00cc66", "相對便宜"
-        else:
-            fpe_color, fpe_eval = "#FFD700", "合理區間"
+        fpe_color, fpe_eval = ("#ff4d4d", "偏高 / 成長期望高") if forward_pe and forward_pe > 25 else ("#00cc66", "相對便宜") if forward_pe and forward_pe < 15 else ("#FFD700", "合理區間") if forward_pe else ("gray", "數據不足")
 
         st.markdown(f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
@@ -628,9 +610,6 @@ if curr_id:
                     <div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_eval}</div>
                 </div>
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pe_str}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
-                    以過去一年的獲利計算。適合用來和「同業」或是公司「歷史區間」作對比。高成長性科技股通常享有較高溢價，但也需提防過度樂觀導致的估值泡沫。
-                </div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fpe_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
@@ -638,10 +617,7 @@ if curr_id:
                     <div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_eval}</div>
                 </div>
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{fpe_str}</div>
-                <div style='color:#ffd700; font-size:0.85rem; margin-bottom:10px; font-weight:bold;'>基準：{eps_source_text}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
-                    以「預估未來一年 EPS」計算。投資科技成長股看重的是未來，若歷史本益比極高但前瞻本益比大幅下降，代表獲利即將爆發，這正是買盤願意溢價介入的關鍵。
-                </div>
+                <div style='color:#ffd700; font-size:0.85rem; font-weight:bold;'>基準：{eps_source_text}</div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
@@ -649,9 +625,6 @@ if curr_id:
                     <div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_eval}</div>
                 </div>
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{peg_str}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
-                    將本益比除以預估的盈餘成長率，是評估高成長股更進階的指標，能看出目前的股價是否透支了未來的成長性。通常小於 1 視為具投資價值。
-                </div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
@@ -659,128 +632,33 @@ if curr_id:
                     <div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_eval}</div>
                 </div>
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
-                    較常運用在景氣循環股或資產股，用來評估目前股價是否低於公司的清算價值。通常淨值比越低，意味著具備較強的下檔資產保護。
-                </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # --- 📊 升級：真實月營收與 YoY 雙軸圖表 ---
-        df_rev = get_monthly_revenue(curr_id)
-        if df_rev is not None and not df_rev.empty:
-            st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
-            st.markdown("<small style='color:gray;'>*數據來源：自動抓取最新公告之每月營收與年增率 (YoY)*</small>", unsafe_allow_html=True)
-
-            fig_rev = make_subplots(specs=[[{"secondary_y": True}]])
-            
-            # 主軸：單月營收 (直條圖 Bar)
-            fig_rev.add_trace(
-                go.Bar(
-                    x=df_rev['Month'],
-                    y=df_rev['Revenue'],
-                    name="單月營收 (億)",
-                    marker_color='#3498db', # 搭配暗黑主題的亮藍色
-                    opacity=0.8,
-                    hovertemplate="營收: %{y} 億<extra></extra>"
-                ),
-                secondary_y=False,
-            )
-            
-            # 副軸：年增率 YoY (折線圖 Line+Markers)
-            fig_rev.add_trace(
-                go.Scatter(
-                    x=df_rev['Month'],
-                    y=df_rev['YoY'],
-                    name="YoY (%)",
-                    mode='lines+markers',
-                    line=dict(color='#ff4d4d', width=3), # 醒目的亮紅色
-                    marker=dict(size=8, symbol='circle'),
-                    hovertemplate="YoY: %{y}%<extra></extra>"
-                ),
-                secondary_y=True,
-            )
-            
-            # UI/UX 細節優化
-            fig_rev.update_layout(
-                height=400,
-                template="plotly_dark", # 套用暗黑主題以融入戰情室背景
-                hovermode="x unified",
-                margin=dict(l=10, r=10, t=30, b=10),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)'
-            )
-            fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
-            fig_rev.update_yaxes(
-                title_text="年增率 YoY (%)",
-                secondary_y=True,
-                showgrid=True, gridcolor='#333', # 淡淡的網格線
-                zeroline=True, zerolinewidth=1, zerolinecolor='#555'
-            )
-            st.plotly_chart(fig_rev, use_container_width=True)
-            st.markdown("---")
-        else:
-            st.warning("⚠️ 目前暫時無法連線至公開庫取得月營收數據。")
-
-        # --- 🐳 籌碼面與股權結構分析 ---
+        # 8. 籌碼面與股權結構分析
         st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
-        st.markdown("<small style='color:gray;'>*註：籌碼流向為台股短線動能關鍵，透過股本規模與持股結構，自動推估該檔股票的主力控盤屬性。*</small>", unsafe_allow_html=True)
-
         insider_pct = info.get('heldPercentInsiders')
         inst_pct = info.get('heldPercentInstitutions')
-        market_cap = info.get('marketCap', 0)
-        
         shares_out = info.get('sharesOutstanding')
         share_capital = shares_out * 10 if shares_out else None
 
         if share_capital:
             if share_capital >= 10_000_000_000:
-                cap_type, driver, cap_color = "大型權值股", "🌍 外資主導", "#4169E1"
-                driver_desc = f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢高度受外資資金與國際大盤影響，不易被單一主力炒作。"
+                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
             elif share_capital <= 3_000_000_000:
-                cap_type, driver, cap_color = "中小型飆股", "🔥 投信 / 內資主力", "#ff8c00"
-                driver_desc = f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，極易受「投信連續買超」作帳帶動，吸引主力拉抬，爆發力強。"
+                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
             else:
-                cap_type, driver, cap_color = "中型中堅股", "🤝 土洋對作/共議", "#9370DB"
-                driver_desc = f"股本約 {share_capital/100000000:.0f} 億。外資與投信皆有著墨空間。當出現「土洋合作」(同步買超) 時易有大波段行情。"
+                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
         else:
-            if market_cap >= 200_000_000_000:
-                cap_type, driver, cap_color = "大型權值股", "🌍 外資主導", "#4169E1"
-                driver_desc = "走勢高度受外資控盤與國際大盤影響，不易被人為炒作，看重長期基本面。"
-            elif market_cap <= 50_000_000_000:
-                cap_type, driver, cap_color = "中小型飆股", "🔥 投信 / 內資主力", "#ff8c00"
-                driver_desc = "股本小、籌碼輕，極易受「投信連續買超」的作帳行情帶動，爆發力強。"
-            else:
-                cap_type, driver, cap_color = "中型中堅股", "🤝 土洋對作/共議", "#9370DB"
-                driver_desc = "外資與投信皆有著墨空間。當出現「土洋合作」(同步買超) 時，往往能走出大波段行情。"
+            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
 
         inst_str = f"{inst_pct * 100:.2f}%" if inst_pct is not None else "N/A"
-        if inst_pct is None:
-            inst_color, inst_eval, inst_desc = "gray", "數據不足", "缺乏法人持股資料。"
-        elif inst_pct > 0.40:
-            inst_color, inst_eval = "#ff4d4d", "高度集中 (留意結帳)"
-            inst_desc = "法人持股比例極高，代表基本面獲高度認可。籌碼雖穩定，但若趨勢反轉或財報不如預期，需防範法人互相踐踏的「結帳賣壓」。"
-        elif inst_pct > 0.15:
-            inst_color, inst_eval = "#FFD700", "穩定認可"
-            inst_desc = "法人持股水位適中，代表機構持續關注並具備加碼空間，屬於健康的籌碼結構。"
-        else:
-            inst_color, inst_eval = "#00bfff", "內資/散戶主導"
-            inst_desc = "外資與投信介入不深，股價走勢較容易受到市場主力大戶、公司派或散戶情緒的影響。"
-
+        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct else ("gray", "數據不足")
+        
         insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
-        if insider_pct is None:
-            in_color, in_eval, in_desc = "gray", "數據不足", "缺乏大股東持股資料。"
-        elif insider_pct > 0.40:
-            in_color, in_eval = "#ff4d4d", "籌碼極度安定"
-            in_desc = "大股東與內部人持股極高，市面流通籌碼少，只要少量資金即可拉抬股價，且代表內部人對公司前景極度看好。"
-        elif insider_pct > 0.20:
-            in_color, in_eval = "#FFD700", "相對穩健"
-            in_desc = "內部人持股在標準健康區間，股權結構穩定，經營團隊與股東利益一致。"
-        else:
-            in_color, in_eval = "#00cc66", "籌碼較渙散 (警戒)"
-            in_desc = "內部人持股偏低，可能代表大股東已逢高獲利了結，或股權過度分散，股價遇壓時較缺乏內部防守力道。"
+        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct else ("gray", "數據不足")
 
         chip_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
@@ -790,7 +668,6 @@ if curr_id:
                     <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
                 </div>
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{inst_desc}</div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
@@ -798,7 +675,6 @@ if curr_id:
                     <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
                 </div>
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{in_desc}</div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
@@ -813,7 +689,7 @@ if curr_id:
         st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # --- 🤖 專業技術線圖與量化型態分析 (近半年) ---
+        # 9. 專業技術線圖與量化型態分析
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         hist['MA5'] = hist['Close'].rolling(5).mean()
         hist['MA10'] = hist['Close'].rolling(10).mean()
@@ -863,22 +739,22 @@ if curr_id:
             trend_status, trend_color = "↔️ 區間震盪 (方向未明)", "#ffd700"
             
         if high_vol_warning:
-            adv_text = "🚨 【量價警訊】近期高檔爆出天量且跌破低點，主力疑似獲利了結出貨，強烈建議觀望，切勿盲目接刀！"
+            adv_text = "🚨 【量價警訊】高檔爆出天量且跌破低點，主力疑似出貨，切勿盲目接刀！"
             buy_rec, sell_rec = "強烈觀望", f"反彈至 {max_vol_day['High']:.2f} 逃命"
         elif last_close < ma60_last:
-            adv_text = "📉 【趨勢轉弱】股價已跌破季線(生命線)，長線大趨勢走弱或進入深層洗盤，應耐心等待底部確立。"
+            adv_text = "📉 【趨勢轉弱】股價已跌破季線(生命線)，長線大趨勢走弱，應耐心等待底部確立。"
             buy_rec, sell_rec = "等待站回季線", f"{ma60_last:.2f} (季線壓力)"
         elif k_last < 25 and k_last > d_last:
-            adv_text = "📈 【技術反彈】KD 低檔黃金交叉且長線均線有守，具短線反彈契機，可嘗試逢低少量佈局。"
+            adv_text = "📈 【技術反彈】KD 低檔黃金交叉且長線均線有守，可嘗試逢低少量佈局。"
             buy_rec, sell_rec = f"現價~{support_price:.2f} 附近", f"{resist_price:.2f} (上檔壓力)"
         elif k_last > 80 and k_last < d_last:
-            adv_text = "⚠️ 【動能轉弱】KD 高檔死亡交叉，短線上漲動能衰退，建議適度獲利了結保住利潤。"
+            adv_text = "⚠️ 【動能轉弱】KD 高檔死亡交叉，建議適度獲利了結保住利潤。"
             buy_rec, sell_rec = "暫時觀望", f"現價~{resist_price:.2f} 附近"
         elif last_close > ma20_last:
-            adv_text = "🔥 【多方格局】量價配合良好，拉回月線(20MA)有守可伺機介入，跌破支撐應嚴格停損。"
+            adv_text = "🔥 【多方格局】量價配合良好，拉回月線(20MA)有守可伺機介入。"
             buy_rec, sell_rec = f"{ma20_last:.2f} (月線支撐)", f"{resist_price:.2f} (近期前高)"
         else:
-            adv_text = "❄️ 【空方格局】短線均線反壓，建議多看少做，反彈至均線壓力區可考慮減碼。"
+            adv_text = "❄️ 【空方格局】短線均線反壓，反彈至均線壓力區可考慮減碼。"
             buy_rec, sell_rec = "等待技術面打底", f"{ma20_last:.2f} (月線壓力)"
 
         st.markdown(f"""
@@ -915,19 +791,8 @@ if curr_id:
 
         plot_df = hist.tail(120)
 
-        fig = make_subplots(
-            rows=2, cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.03,
-            row_heights=[0.7, 0.3],
-            specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
-        )
-
-        fig.add_trace(go.Candlestick(
-            x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'],
-            name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'
-        ), row=1, col=1, secondary_y=False)
-
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3], specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
+        fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5(周線)', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10(雙周)', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20(月線)', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
@@ -935,35 +800,15 @@ if curr_id:
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA120'], mode='lines', name='MA120(半年線)', line=dict(color='#ff69b4', width=1.5)), row=1, col=1, secondary_y=False)
 
         vol_colors = ['#ff4d4d' if row['Close'] >= row['Open'] else '#00cc66' for _, row in plot_df.iterrows()]
-        fig.add_trace(go.Bar(
-            x=plot_df.index, y=plot_df['Volume']/1000,
-            marker_color=vol_colors, name='成交量(張)', opacity=0.5
-        ), row=1, col=1, secondary_y=True)
-
+        fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
 
         fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
-        max_vol = plot_df['Volume'].max() / 1000
-        fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
-        
+        fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, plot_df['Volume'].max() / 1000 * 3.5], secondary_y=True, row=1, col=1)
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
-
-        fig.update_xaxes(
-            rangebreaks=[dict(bounds=["sat", "mon"])],
-            tickformat="%m/%d",
-            showgrid=True, gridcolor='#333',
-            mirror=True, showline=True, linecolor='#555'
-        )
-
-        fig.update_layout(
-            height=650,
-            template="plotly_dark",
-            xaxis_rangeslider_visible=False,
-            margin=dict(l=10, r=10, t=10, b=10),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            hovermode="x unified"
-        )
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
+        fig.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確。")
