@@ -213,8 +213,16 @@ if curr_id:
         sector = info.get('sector', '未知')
         industry = info.get('industry', '未知')
         st.markdown(f"**🏷️ 產業分類：** {sector} / {industry}")
-        with st.expander("📖 查看公司詳細營業項目簡介"):
-            st.write(info.get('longBusinessSummary', '暫無簡介。'))
+        
+        # --- 修改這裡：套用英翻中功能 ---
+        with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
+            summary_en = info.get('longBusinessSummary', '暫無簡介。')
+            if summary_en != '暫無簡介。':
+                with st.spinner("背景翻譯中..."):
+                    summary_zh = translate_to_zh(summary_en)
+                st.write(summary_zh)
+            else:
+                st.write(summary_en)
 
         # --- ⚡ 即時報價與交易資訊總表 ---
         st.markdown("#### ⚡ 即時報價與交易資訊")
@@ -471,6 +479,66 @@ if curr_id:
             </div>
         </div>
         """, unsafe_allow_html=True)
+        st.markdown("---")
+
+        # --- 🐳 籌碼面與股權結構分析 ---
+        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
+        st.markdown("<small style='color:gray;'>*註：籌碼流向為台股短線動能關鍵，透過股本規模與持股結構，自動推估該檔股票的主力控盤屬性。*</small>", unsafe_allow_html=True)
+
+        insider_pct = info.get('heldPercentInsiders')
+        inst_pct = info.get('heldPercentInstitutions')
+        market_cap = info.get('marketCap', 0)
+
+        # 格式化持股比例 (若 API 無資料則顯示 N/A)
+        insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
+        inst_str = f"{inst_pct * 100:.2f}%" if inst_pct is not None else "N/A"
+
+        # 籌碼主力控盤屬性判定 (依據市值規模)
+        if market_cap >= 100_000_000_000: # 大於 1000 億
+            cap_type = "大型權值股"
+            driver = "🌍 外資主導"
+            driver_desc = "走勢高度受外資資金控盤與國際大盤影響。由於股本龐大，不易被人為炒作，看重長期基本面與被動型 ETF 資金買盤。"
+            cap_color = "#4169E1" # 寶石藍
+        elif market_cap <= 30_000_000_000: # 小於 300 億
+            cap_type = "中小型成長股"
+            driver = "🔥 投信 / 內資主力"
+            driver_desc = "股本較小、籌碼輕，極易受「投信連續買超」的作帳行情帶動。只要具備新題材，容易吸引內資主力或大戶進駐拉抬，爆發力強。"
+            cap_color = "#ff8c00" # 亮橘色
+        else:
+            cap_type = "中型股"
+            driver = "🤝 內外資共議"
+            driver_desc = "外資與投信皆有著墨空間。當這類股票出現「土洋合作」(外資與投信同步連續買超) 時，往往能走出一段波段大行情。"
+            cap_color = "#9370DB" # 紫色
+
+        chip_html = f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid #00bfff;'>
+                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>🏦 三大法人持股率</div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#00bfff; margin-bottom:5px;'>{inst_str}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
+                    觀察外資、投信與自營商的籌碼比例。法人持股比例越高，代表基本面有一定水準的機構認可，但也需留意持股過高時的「結帳賣壓」。
+                </div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid #FFD700;'>
+                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>🏢 內部人與大股東持股</div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#FFD700; margin-bottom:5px;'>{insider_str}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
+                    反映股權集中度。若董監事、大股東或千張大戶的持股比例高且持續上升，代表「最了解公司內部狀況的人」對未來營運抱持極大信心。
+                </div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
+                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
+                </div>
+                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
+                    {driver_desc}
+                </div>
+            </div>
+        </div>
+        """
+        st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
         # --- 🤖 專業技術線圖與量化型態分析 (近半年) ---
