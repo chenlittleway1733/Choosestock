@@ -38,20 +38,17 @@ def change_stock(stock_code):
     # st.session_state.show_whale = False 
     # st.session_state.topic_results = None
 
-# --- [官方文件規範版] 真 AI 聯網分析函數 ---
+# --- [終極除錯版] 真 AI 聯網分析函數 ---
 def get_ai_analysis_final(topic, api_key):
     if not api_key:
         return "ERROR: 未輸入金鑰", []
     
     api_key = api_key.strip()
     
-    # 根據官方文件，優先使用最新版 gemini-2.5-flash
+    # 移除了舊版會報 404 錯誤的 gemini-pro，只鎖定最新且穩定的 1.5 與 2.0 版本
     models_to_try = [
-        "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash",
-        "gemini-pro"
+        "gemini-1.5-flash"
     ]
     
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
@@ -64,53 +61,50 @@ def get_ai_analysis_final(topic, api_key):
     }
     確保代號為純數字。直接輸出 JSON 字串，不要有 ```json 標籤。"""
 
-    # 遵循官方文件的 Header 規範
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key
-    }
-
-    last_error = ""
+    headers = {"Content-Type": "application/json"}
+    all_errors = []
 
     for model in models_to_try:
-        # 移除 URL 中的 Markdown 錯誤標籤，確保網址純淨
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        # 恢復使用最穩定的 URL 參數傳遞金鑰，避免 Header 擋截問題
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model}:generateContent?key={api_key}"
         
-        # 組合 1：帶有 Google Search 工具
+        # 組合 1：帶有 Google Search 工具 (官方標準命名)
         payload_search = {
             "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
             "systemInstruction": {"parts": [{"text": system_prompt}]},
-            "tools": [{"googleSearch": {}}]
+            "tools": [{"google_search": {}}],
+            "generationConfig": {"responseMimeType": "application/json"}
         }
         
         # 組合 2：降級版純 AI 預測 (最安全)
         payload_basic = {
             "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
-            "systemInstruction": {"parts": [{"text": system_prompt}]}
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "generationConfig": {"responseMimeType": "application/json"}
         }
 
-        if "1.5" in model or "2." in model:
-            payload_search["generationConfig"] = {"responseMimeType": "application/json"}
-            payload_basic["generationConfig"] = {"responseMimeType": "application/json"}
-
         try:
-            # 加入 headers 發送請求
+            # 第一波：嘗試聯網搜尋
             response = requests.post(url, headers=headers, json=payload_search, timeout=20)
             if response.status_code == 200:
                 return parse_ai_response(response.json())
             
+            # 第二波：若搜尋被擋，退回純 AI 預測
             res_basic = requests.post(url, headers=headers, json=payload_basic, timeout=20)
             if res_basic.status_code == 200:
                 return parse_ai_response(res_basic.json())
             
+            # 若都失敗，紀錄這個模型「真實」的失敗原因
             err_msg = res_basic.json().get('error', {}).get('message', res_basic.text)
-            last_error = f"模型 {model} 錯誤 ({res_basic.status_code}): {err_msg}"
+            all_errors.append(f"【{model}】: {err_msg}")
             
         except Exception as e:
-            last_error = f"模型 {model} 發生異常: {str(e)}"
+            all_errors.append(f"【{model}】連線異常: {str(e)}")
             continue
             
-    return f"所有 AI 模型皆無法連線。最後錯誤紀錄：\n{last_error}", []
+    # 將所有模型的失敗原因印出，不再被舊模型掩蓋
+    error_details = "\n\n".join(all_errors)
+    return f"無法連線至 AI，請確認金鑰狀態。\n\n詳細錯誤診斷：\n{error_details}", []
 
 def parse_ai_response(res_json):
     content = ""
