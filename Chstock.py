@@ -69,8 +69,9 @@ def get_ai_analysis_final(topic, api_key):
     all_errors = []
 
     for model in models_to_try:
-        # === 終極修復：確保這裡絕對沒有任何 [ ] 中括號或小括號的超連結語法 ===
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model}:generateContent?key={api_key}"
+        # === 絕對防禦寫法：將網址拆開相加，徹底避免被瀏覽器或編輯器自動轉成超連結 ===
+        api_host = "https://" + "generativelanguage.googleapis.com"
+        url = f"{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
         
         # 組合 1：帶有 Google Search 工具 (官方標準命名)
         payload_search = {
