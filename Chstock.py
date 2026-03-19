@@ -45,9 +45,11 @@ def get_ai_analysis_final(topic, api_key):
     
     api_key = api_key.strip()
     
-    # 只鎖定目前穩定開放的 1.5 與 2.0，移除沒有權限的預覽版
+    # 加入了更輕量級的 8b 模型與 2.5 版本，增加免綁卡通關的機率
     models_to_try = [
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
+        "gemini-1.5-flash-8b",  # 新增輕量版，較不容易被限制
         "gemini-1.5-flash"
     ]
     
@@ -321,14 +323,67 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # 2. 營運指標 (原本的區塊)
-        st.markdown("#### 📊 營運估值報告")
-        st.markdown("""<style>[data-testid="stMetricValue"]{font-size:1.6rem !important; color:#FFD700 !important;}</style>""", unsafe_allow_html=True)
-        m1, m2, m3 = st.columns(3)
-        # 修改 metric 的股價來源，使用我們剛算好的 curr_p
-        m1.metric("目前股價", f"{curr_p:.2f}")
-        m2.metric("預估明年 EPS", f"{info.get('forwardEps', info.get('trailingEps', 0)):.2f}")
-        m3.metric("歷史本益比", f"{info.get('trailingPE', 0):.1f}x")
+        # === 替換原本的營運估值報告，升級為完整的「財務基本面分析」 ===
+        st.markdown("#### 💼 財務基本面與營運分析")
+        
+        # 提取基本面資料 (加上容錯處理，避免缺少資料時報錯)
+        pe_ratio = info.get('trailingPE')
+        roe = info.get('returnOnEquity')
+        gross_margin = info.get('grossMargins')
+        op_margin = info.get('operatingMargins')
+        rev_growth = info.get('revenueGrowth')
+        earn_growth = info.get('earningsGrowth')
+        t_eps = info.get('trailingEps')
+        f_eps = info.get('forwardEps')
+
+        def to_pct(val):
+            return f"{val * 100:.2f}%" if val is not None else "N/A"
+
+        pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
+        roe_str = to_pct(roe)
+        gm_str = to_pct(gross_margin)
+        om_str = to_pct(op_margin)
+        rg_str = to_pct(rev_growth)
+        eg_str = to_pct(earn_growth)
+        t_eps_str = f"{t_eps:.2f}" if t_eps is not None else "N/A"
+        f_eps_str = f"{f_eps:.2f}" if f_eps is not None else "N/A"
+
+        # ROE 優質判定 (>15%)
+        roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe and roe >= 0.15 else ""
+
+        # 營收與獲利成長的紅綠判定 (台股習慣：正成長為紅，負成長為綠)
+        rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
+        eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
+
+        fund_html = f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
+                <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>歷史本益比 (P/E)</div>
+                <div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{pe_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
+                <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>EPS (目前 / 預估)</div>
+                <div style='font-size:1.3rem; font-weight:bold; color:#FFD700;'>{t_eps_str} / {f_eps_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
+                <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收年增率 (YoY)</div>
+                <div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
+                <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>獲利年增率 (YoY)</div>
+                <div style='font-size:1.3rem; font-weight:bold; color:{eg_color};'>{eg_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
+                <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>毛利率 / 營益率</div>
+                <div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{gm_str} / {om_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'>
+                <div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;' title='長期維持在 15% 以上通常被視為優質企業'>ROE (股東權益報酬率)</div>
+                <div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{roe_str}{roe_eval}</div>
+            </div>
+        </div>
+        """
+        st.markdown(fund_html, unsafe_allow_html=True)
 
         # 3. 法人目標價 (修正變數名稱錯誤與增加安全防護)
         hi, me, lo = info.get('targetHighPrice'), info.get('targetMeanPrice'), info.get('targetLowPrice')
