@@ -395,6 +395,84 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
+        # --- ⚖️ 估值：判斷買進的價格是否合理區塊分析 ---
+        st.markdown("#### ⚖️ 估值與價格合理性分析", unsafe_allow_html=True)
+        st.markdown("<small style='color:gray;'>*註：透過市場三大估值指標，檢視目前股價是否透支未來成長性或具備足夠的安全邊際。*</small>", unsafe_allow_html=True)
+
+        pb_ratio = info.get('priceToBook')
+        peg_ratio = info.get('pegRatio')
+        
+        # 輔助計算 PEG (如果 API 沒給但我們有 PE 和 成長率)
+        if peg_ratio is None and pe_ratio is not None and earn_growth is not None and earn_growth > 0:
+            peg_ratio = pe_ratio / (earn_growth * 100)
+
+        # 格式化數值與判定顏色與評語
+        pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
+        if pe_ratio is None:
+            pe_color, pe_eval = "gray", "數據不足"
+        elif pe_ratio > 25:
+            pe_color, pe_eval = "#ff4d4d", "偏高 / 高成長溢價"
+        elif pe_ratio < 15:
+            pe_color, pe_eval = "#00cc66", "相對便宜"
+        else:
+            pe_color, pe_eval = "#FFD700", "合理區間"
+
+        pb_str = f"{pb_ratio:.2f}x" if pb_ratio is not None else "N/A"
+        if pb_ratio is None:
+            pb_color, pb_eval = "gray", "數據不足"
+        elif pb_ratio > 3:
+            pb_color, pb_eval = "#ff4d4d", "偏高溢價"
+        elif pb_ratio < 1.5:
+            pb_color, pb_eval = "#00cc66", "具資產保護"
+        else:
+            pb_color, pb_eval = "#FFD700", "合理區間"
+
+        peg_str = f"{peg_ratio:.2f}" if peg_ratio is not None else "N/A"
+        if peg_ratio is None:
+            peg_color, peg_eval = "gray", "數據不足"
+        elif peg_ratio > 2:
+            peg_color, peg_eval = "#ff4d4d", "透支未來成長"
+        elif peg_ratio <= 1:
+            peg_color, peg_eval = "#00cc66", "低估 (成長性支撐)"
+        else:
+            peg_color, peg_eval = "#FFD700", "合理區間"
+
+        st.markdown(f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 本益比 (P/E Ratio)</div>
+                    <div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pe_str}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
+                    計算公式為 <code>每股市價 / 每股盈餘</code>。這項指標適合用來和「同業」或是公司「過去的歷史本益比區間」作對比。高成長性的科技股市場通常願意給予較高的本益比，但也需提防過度樂觀導致的估值泡沫。
+                </div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div>
+                    <div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
+                    較常運用在景氣循環股或資產股，用來評估目前股價是否低於公司的清算價值。通常淨值比越低，意味著具備較強的下檔資產保護。
+                </div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 本益成長比 (PEG)</div>
+                    <div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{peg_str}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
+                    將本益比除以預估的盈餘成長率，是評估高成長股更進階的指標，能看出目前的股價是否透支了未來的成長性。通常小於 1 視為具投資價值。
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("---")
+
         # --- 🤖 專業技術線圖與量化型態分析 (近半年) ---
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         hist['MA5'] = hist['Close'].rolling(5).mean()
