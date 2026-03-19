@@ -370,7 +370,7 @@ if curr_id:
         st.markdown("---")
 
         # 5. 專業技術線圖 (仿看盤軟體)
-        st.markdown("### 🤖 專業技術線圖與 AI 判定 (近半年)")
+        st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         
         # 計算各項技術指標 (使用全資料計算，避免均線在圖表開頭出現斷層)
         hist['MA5'] = hist['Close'].rolling(5).mean()
@@ -386,8 +386,85 @@ if curr_id:
             D.append(D[-1]*(2/3) + K[-1]*(1/3))
         hist['K'], hist['D'] = K[1:], D[1:]
 
+        # === 新增：技術型態量化分析與操作建議 ===
+        # 取得最新一天的數值
+        last_close = hist['Close'].iloc[-1]
+        ma5_last = hist['MA5'].iloc[-1]
         ma20_last = hist['MA20'].iloc[-1]
-        st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;margin-bottom:15px;'><b>AI 趨勢判定：{'📈 站上月線，多方強勢' if curr_p > ma20_last else '📉 跌破月線，空方佔優'}</b></div>", unsafe_allow_html=True)
+        ma60_last = hist['MA60'].iloc[-1]
+        k_last = hist['K'].iloc[-1]
+        d_last = hist['D'].iloc[-1]
+        
+        # 計算支撐與壓力 (取近20日高低點與重要均線)
+        recent_high = hist['High'].tail(20).max()
+        recent_low = hist['Low'].tail(20).min()
+        
+        # 支撐價：如果股價在季線上，季線與近期低點取高者；否則取近期低點
+        support_price = max(recent_low, ma60_last) if last_close > ma60_last else recent_low
+        # 壓力價：如果股價在月線下，月線與近期高點取低者；否則取近期高點
+        resist_price = recent_high if last_close > ma20_last else min(recent_high, ma20_last)
+        
+        # 判斷趨勢與顏色 (台股紅漲綠跌)
+        if last_close > ma20_last and ma5_last > ma20_last:
+            trend_status = "📈 多頭強勢 (站上月線)"
+            trend_color = "#ff4d4d"
+        elif last_close < ma20_last and ma5_last < ma20_last:
+            trend_status = "📉 空頭弱勢 (跌破月線)"
+            trend_color = "#00cc66"
+        else:
+            trend_status = "↔️ 區間震盪 (方向未明)"
+            trend_color = "#ffd700"
+            
+        # 產生買賣點與策略解析
+        if k_last < 25 and k_last > d_last:
+            adv_text = "KD 低檔黃金交叉，具短線反彈契機，可嘗試逢低少量佈局。"
+            buy_rec = f"現價~{support_price:.2f} 附近"
+            sell_rec = f"{resist_price:.2f} (上檔壓力)"
+        elif k_last > 80 and k_last < d_last:
+            adv_text = "KD 高檔死亡交叉，上漲動能轉弱，建議適度獲利了結保住利潤。"
+            buy_rec = "暫時觀望"
+            sell_rec = f"現價~{resist_price:.2f} 附近"
+        elif last_close > ma20_last:
+            adv_text = "多方格局，拉回月線(20MA)有守可伺機介入，跌破支撐應停損。"
+            buy_rec = f"{ma20_last:.2f} (月線支撐)"
+            sell_rec = f"{resist_price:.2f} (近期前高)"
+        else:
+            adv_text = "空方格局，建議多看少做，反彈至均線壓力區可考慮減碼。"
+            buy_rec = "等待技術面打底"
+            sell_rec = f"{ma20_last:.2f} (月線壓力)"
+
+        # 渲染分析面板
+        st.markdown(f"""
+        <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; margin-bottom:20px;'>
+            <h4 style='margin-top:0; color:#fff;'>🎯 演算法量化交易策略</h4>
+            <div style='display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;'>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>目前趨勢</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:{trend_color};'>{trend_status}</div>
+                </div>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>下檔支撐</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#00bfff;'>{support_price:.2f}</div>
+                </div>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>上檔壓力</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#ab82ff;'>{resist_price:.2f}</div>
+                </div>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>建議買點</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#ff4d4d;'>{buy_rec}</div>
+                </div>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>建議賣點</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#00cc66;'>{sell_rec}</div>
+                </div>
+            </div>
+            <div style='margin-top:15px; padding-top:10px; border-top:1px dashed #444;'>
+                <span style='color:#aaa; font-size:0.9rem;'>💡 策略解析：</span>
+                <span style='color:#ffd700; font-weight:bold;'>{adv_text}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
         # 擷取近半年 (約 120 個交易日) 的資料來畫圖
         plot_df = hist.tail(120)
