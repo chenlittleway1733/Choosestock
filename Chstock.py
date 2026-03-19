@@ -425,18 +425,56 @@ if curr_id:
 
         # --- ⚖️ 估值：判斷買進的價格是否合理區塊分析 ---
         st.markdown("#### ⚖️ 估值與價格合理性分析", unsafe_allow_html=True)
-        st.markdown("<small style='color:gray;'>*註：透過市場三大估值指標，檢視目前股價是否透支未來成長性或具備足夠的安全邊際。*</small>", unsafe_allow_html=True)
+        st.markdown("<small style='color:gray;'>*註：透過市場三大估值指標，檢視目前股價是否透支未來成長性或具備足夠的安全邊際。海外資料庫之預估 EPS 可能因模型外推而極度樂觀，建議適時切換為國內法人共識值以防追高。*</small>", unsafe_allow_html=True)
 
         pb_ratio = info.get('priceToBook')
-        peg_ratio = info.get('pegRatio')
-        forward_pe = info.get('forwardPE')
+        pe_ratio = info.get('trailingPE')
+        sys_peg_ratio = info.get('pegRatio')
+        sys_forward_pe = info.get('forwardPE')
+        t_eps = info.get('trailingEps')
+        f_eps = info.get('forwardEps')
+        earn_growth = info.get('earningsGrowth')
         
-        if peg_ratio is None and pe_ratio is not None and earn_growth is not None and earn_growth > 0:
-            peg_ratio = pe_ratio / (earn_growth * 100)
+        # --- 核心升級：進階估值微調 (法人共識 EPS 動態切換) ---
+        st.markdown("##### ⚙️ 進階估值微調 (EPS 敏感度分析)")
+        col_eps1, col_eps2 = st.columns([1, 2])
+        with col_eps1:
+            use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
+        with col_eps2:
+            default_eps_val = float(f_eps) if f_eps is not None else (float(t_eps) if t_eps else 1.0)
+            custom_eps = st.number_input("輸入國內法人共識 EPS (元)", min_value=0.01, value=default_eps_val, step=0.5, disabled=not use_custom_eps)
+
+        # 動態估值計算邏輯
+        if use_custom_eps:
+            active_f_eps = custom_eps
+            # 依據使用者輸入的 EPS 重新計算前瞻本益比
+            forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
             
-        # 若 API 沒給前瞻本益比，但我們有現價與預估 EPS，則自動計算
-        if forward_pe is None and f_eps is not None and f_eps > 0 and curr_p:
-            forward_pe = curr_p / f_eps
+            # 依據使用者輸入的 EPS 重新計算 PEG
+            if t_eps and t_eps > 0 and pe_ratio:
+                custom_growth = (active_f_eps - t_eps) / t_eps
+                if custom_growth > 0:
+                    peg_ratio = pe_ratio / (custom_growth * 100)
+                else:
+                    peg_ratio = None # 獲利衰退不適用 PEG
+            else:
+                peg_ratio = None
+                
+            eps_source_text = f"自訂法人共識 ({active_f_eps:.2f}元)"
+        else:
+            active_f_eps = f_eps
+            # 若 API 沒給前瞻本益比，自動使用系統 EPS 計算
+            if sys_forward_pe is None and f_eps is not None and f_eps > 0 and curr_p:
+                forward_pe = curr_p / f_eps
+            else:
+                forward_pe = sys_forward_pe
+                
+            if sys_peg_ratio is None and pe_ratio is not None and earn_growth is not None and earn_growth > 0:
+                peg_ratio = pe_ratio / (earn_growth * 100)
+            else:
+                peg_ratio = sys_peg_ratio
+                
+            eps_source_text = f"海外系統外推 ({f_eps:.2f}元)" if f_eps else "系統預估 (無資料)"
 
         pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
         if pe_ratio is None:
@@ -460,7 +498,7 @@ if curr_id:
 
         peg_str = f"{peg_ratio:.2f}" if peg_ratio is not None else "N/A"
         if peg_ratio is None:
-            peg_color, peg_eval = "gray", "數據不足"
+            peg_color, peg_eval = "gray", "衰退或無數據"
         elif peg_ratio > 2:
             peg_color, peg_eval = "#ff4d4d", "透支未來成長"
         elif peg_ratio <= 1:
@@ -495,7 +533,8 @@ if curr_id:
                     <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div>
                     <div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_eval}</div>
                 </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{fpe_str}</div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{fpe_str}</div>
+                <div style='color:#ffd700; font-size:0.85rem; margin-bottom:10px; font-weight:bold;'>基準：{eps_source_text}</div>
                 <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
                     以「預估未來一年 EPS」計算。投資科技成長股看重的是未來，若歷史本益比極高但前瞻本益比大幅下降，代表獲利即將爆發，這正是買盤願意溢價介入的關鍵。
                 </div>
