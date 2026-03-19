@@ -61,8 +61,10 @@ def get_ai_analysis_final(topic, api_key):
     all_errors = []
 
     for model in models_to_try:
-        api_host = "https://" + "generativelanguage.googleapis.com"
-        url = f"{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
+        # 終極防禦：打斷網址結構
+        protocol = "https://"
+        api_host = "generativelanguage.googleapis.com"
+        url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
         
         payload_search = {
             "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
@@ -114,8 +116,12 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
     model = "gemini-2.5-flash"
-    api_host = "https://" + "generativelanguage.googleapis.com"
-    url = f"{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
+    
+    # 終極防禦：打斷網址結構
+    protocol = "https://"
+    api_host = "generativelanguage.googleapis.com"
+    url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
+    
     system_prompt = "你是一個精準的財經數據提取機器人。請上網搜尋國內外法人或投顧，針對該公司「明年」或「今年」所預估的 EPS（每股盈餘）。請綜合最新資訊，『嚴格只回傳一個最合理的數字』（例如：30.5 或 15.2）。不要加上任何單位、不要解釋、不要有其他文字。若真的查無資料，請回傳 0。"
     payload = {
         "contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新的法人預估 EPS"}]}],
@@ -130,11 +136,16 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     except: pass
     return None
 
-# --- 📊 自動爬取真實「月營收」與「YoY」函數 (補回這個遺失的引擎！) ---
+# --- 📊 自動爬取真實「月營收」與「YoY」函數 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
     try:
-        url = f"[https://djinfo.cathaysec.com.tw/z/zc/zch/zch](https://djinfo.cathaysec.com.tw/z/zc/zch/zch)_{stock_id}.djhtm"
+        # 終極防禦：打斷網址結構，防止 Markdown 破壞
+        protocol = "https://"
+        host1 = "djinfo.cathaysec.com.tw"
+        path1 = f"/z/zc/zch/zch_{stock_id}.djhtm"
+        url = f"{protocol}{host1}{path1}"
+        
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         res = requests.get(url, headers=headers, timeout=8)
         res.encoding = 'big5'
@@ -143,7 +154,9 @@ def get_monthly_revenue(stock_id):
         matches = re.findall(pattern, res.text)
         
         if not matches:
-            url2 = f"[https://fubon-ebrokerdj.fbs.com.tw/z/zc/zch/zch](https://fubon-ebrokerdj.fbs.com.tw/z/zc/zch/zch)_{stock_id}.djhtm"
+            # 終極防禦：備用鏡像站同樣打斷網址
+            host2 = "fubon-ebrokerdj.fbs.com.tw"
+            url2 = f"{protocol}{host2}{path1}"
             res = requests.get(url2, headers=headers, timeout=8)
             res.encoding = 'big5'
             matches = re.findall(pattern, res.text)
@@ -188,9 +201,10 @@ def get_stock_data(stock_id):
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
     try:
+        protocol = "https://"
         host_name = "tw.stock.yahoo.com"
         path = "/quote/"
-        url = f"https://{host_name}{path}{stock_id}"
+        url = f"{protocol}{host_name}{path}{stock_id}"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
         match = re.search(r'<title>(.*?)\(', response.text)
@@ -202,7 +216,10 @@ def get_chinese_name(stock_id):
 def get_stock_news(query):
     try:
         encoded_q = urllib.parse.quote(f"{query} 股票")
-        url = f"[https://news.google.com/rss/search?q=](https://news.google.com/rss/search?q=){encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        protocol = "https://"
+        host_name = "news.google.com"
+        path = f"/rss/search?q={encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        url = f"{protocol}{host_name}{path}"
         res = requests.get(url, timeout=5)
         root = ET.fromstring(res.text)
         news = []
@@ -216,9 +233,10 @@ def get_stock_news(query):
 def translate_to_zh(text):
     if not text or text == '暫無簡介。': return text
     try:
+        protocol = "https://"
         host_name = "translate.googleapis.com"
         path = "/translate_a/single"
-        translate_url = f"https://{host_name}{path}"
+        translate_url = f"{protocol}{host_name}{path}"
         params = {"client": "gtx", "sl": "en", "tl": "zh-TW", "dt": "t", "q": text}
         res = requests.get(translate_url, params=params, timeout=5)
         translated_text = "".join([item[0] for item in res.json()[0]])
