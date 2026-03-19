@@ -66,7 +66,7 @@ def get_ai_analysis_final(topic, api_key):
 
     for model in models_to_try:
         # 移除 URL 中的 Markdown 錯誤標籤，確保網址純淨！
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model}:generateContent?key={api_key}"
         
         # 組合 1：帶有 Google Search 工具 (官方標準命名)
         payload_search = {
@@ -89,10 +89,17 @@ def get_ai_analysis_final(topic, api_key):
             if response.status_code == 200:
                 return parse_ai_response(response.json())
             
+            # --- 新增：攔截流量限制 (Quota Exceeded) 錯誤 ---
+            if response.status_code == 429 or "Quota exceeded" in response.text:
+                return "⚠️ 【Google API 流量限制】您點擊得太快或免費額度暫時用盡囉！請稍等大約 1 分鐘後再重新點擊分析。", []
+                
             # 第二波：若搜尋被擋，退回純 AI 預測
             res_basic = requests.post(url, headers=headers, json=payload_basic, timeout=20)
             if res_basic.status_code == 200:
                 return parse_ai_response(res_basic.json())
+            
+            if res_basic.status_code == 429 or "Quota exceeded" in res_basic.text:
+                return "⚠️ 【Google API 流量限制】免費額度暫時用盡！請稍等大約 1 分鐘後再重新點擊分析。", []
             
             # 若都失敗，紀錄這個模型「真實」的失敗原因
             err_msg = res_basic.json().get('error', {}).get('message', res_basic.text)
