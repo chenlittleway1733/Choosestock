@@ -65,8 +65,8 @@ def get_ai_analysis_final(topic, api_key):
     all_errors = []
 
     for model in models_to_try:
-        # 恢復使用最穩定的 URL 參數傳遞金鑰，避免 Header 擋截問題
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model}:generateContent?key={api_key}"
+        # 移除 URL 中的 Markdown 錯誤標籤，確保網址純淨！
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         
         # 組合 1：帶有 Google Search 工具 (官方標準命名)
         payload_search = {
