@@ -109,9 +109,11 @@ def get_stock_data(symbol):
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
     try:
-        # 絕對防禦網址，防止抓不到中文名稱
-        base_url = "https://" + "[tw.stock.yahoo.com/quote/](https://tw.stock.yahoo.com/quote/)"
-        url = f"{base_url}{stock_id}"
+        # 終極防禦：將網址拆成一般變數，絕對不會再被轉成超連結
+        host_name = "tw.stock.yahoo.com"
+        path = "/quote/"
+        url = f"https://{host_name}{path}{stock_id}"
+        
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
         match = re.search(r'<title>(.*?)\(', response.text)
@@ -124,8 +126,11 @@ def get_chinese_name(stock_id):
 def translate_to_zh(text):
     if not text or text == '暫無簡介。': return text
     try:
-        # 絕對防禦網址，串接 Google 免費翻譯
-        translate_url = "https://" + "[translate.googleapis.com/translate_a/single](https://translate.googleapis.com/translate_a/single)"
+        # 終極防禦：將網址拆成一般變數，絕對不會再被轉成超連結
+        host_name = "translate.googleapis.com"
+        path = "/translate_a/single"
+        translate_url = f"https://{host_name}{path}"
+        
         params = {"client": "gtx", "sl": "en", "tl": "zh-TW", "dt": "t", "q": text}
         res = requests.get(translate_url, params=params, timeout=5)
         translated_text = "".join([item[0] for item in res.json()[0]])
