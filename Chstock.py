@@ -34,8 +34,9 @@ if 'show_whale' not in st.session_state:
 
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
-    st.session_state.show_whale = False
-    st.session_state.topic_results = None
+    # 刪除原本會清空畫面的這兩行，讓 AI 名單與籌碼名單永遠保留在畫面上！
+    # st.session_state.show_whale = False 
+    # st.session_state.topic_results = None
 
 # --- [官方文件規範版] 真 AI 聯網分析函數 ---
 def get_ai_analysis_final(topic, api_key):
