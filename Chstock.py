@@ -8,7 +8,7 @@ import re
 import json
 
 # 設定網頁標題與寬度
-st.set_page_config(page_title="台股智慧選股系統", layout="wide")
+st.set_page_config(page_title="way系統", layout="wide")
 
 # --- 初始化 Session State ---
 if 'selected_stock' not in st.session_state:
@@ -623,6 +623,8 @@ if curr_id:
         hist['MA10'] = hist['Close'].rolling(10).mean()
         hist['MA20'] = hist['Close'].rolling(20).mean()
         hist['MA60'] = hist['Close'].rolling(60).mean()
+        hist['MA120'] = hist['Close'].rolling(120).mean() # 新增：半年線
+        hist['Vol_MA20'] = hist['Volume'].rolling(20).mean() # 新增：月均量 (判斷爆量基準)
 
         h9, l9 = hist['High'].rolling(9).max(), hist['Low'].rolling(9).min()
         rsv = (hist['Close'] - l9) / (h9 - l9) * 100
@@ -636,30 +638,56 @@ if curr_id:
         ma5_last = hist['MA5'].iloc[-1]
         ma20_last = hist['MA20'].iloc[-1]
         ma60_last = hist['MA60'].iloc[-1]
+        ma120_last = hist['MA120'].iloc[-1] if not pd.isna(hist['MA120'].iloc[-1]) else ma60_last
         k_last = hist['K'].iloc[-1]
         d_last = hist['D'].iloc[-1]
         
-        recent_high = hist['High'].tail(20).max()
-        recent_low = hist['Low'].tail(20).min()
+        recent_20 = hist.tail(20)
+        recent_high = recent_20['High'].max()
+        recent_low = recent_20['Low'].min()
+        
+        # === 核心升級 1：量價關係與高檔爆量偵測雷達 ===
+        max_vol_idx = recent_20['Volume'].idxmax()
+        max_vol_day = recent_20.loc[max_vol_idx]
+        
+        # 條件：量>月均量2倍(爆量) + 處於近20日高點95%區間內(高檔) + 現價跌破爆量日低點(主力出貨確認)
+        is_high_vol = max_vol_day['Volume'] > (max_vol_day['Vol_MA20'] * 2)
+        is_at_high = max_vol_day['High'] >= (recent_high * 0.95)
+        is_dropping = last_close < max_vol_day['Low']
+        high_vol_warning = is_high_vol and is_at_high and is_dropping
         
         support_price = max(recent_low, ma60_last) if last_close > ma60_last else recent_low
         resist_price = recent_high if last_close > ma20_last else min(recent_high, ma20_last)
         
-        if last_close > ma20_last and ma5_last > ma20_last:
+        # === 核心升級 2：加入長天期均線 (季線/半年線) 趨勢防禦 ===
+        if last_close < ma60_last:
+            trend_status, trend_color = "⚠️ 跌破季線 (趨勢轉弱)", "#00cc66" # 跌破生命線，強制綠燈警戒
+        elif last_close > ma20_last and ma5_last > ma20_last:
             trend_status, trend_color = "📈 多頭強勢 (站上月線)", "#ff4d4d"
         elif last_close < ma20_last and ma5_last < ma20_last:
             trend_status, trend_color = "📉 空頭弱勢 (跌破月線)", "#00cc66"
         else:
             trend_status, trend_color = "↔️ 區間震盪 (方向未明)", "#ffd700"
             
-        if k_last < 25 and k_last > d_last:
-            adv_text, buy_rec, sell_rec = "KD 低檔黃金交叉，具短線反彈契機，可嘗試逢低少量佈局。", f"現價~{support_price:.2f} 附近", f"{resist_price:.2f} (上檔壓力)"
+        # === 核心升級 3：交易策略邏輯深度優化 (結合量價與長線趨勢) ===
+        if high_vol_warning:
+            adv_text = "🚨 【量價警訊】近期高檔爆出天量且跌破低點，主力疑似獲利了結出貨，強烈建議觀望，切勿盲目接刀！"
+            buy_rec, sell_rec = "強烈觀望", f"反彈至 {max_vol_day['High']:.2f} 逃命"
+        elif last_close < ma60_last:
+            adv_text = "📉 【趨勢轉弱】股價已跌破季線(生命線)，長線大趨勢走弱或進入深層洗盤，應耐心等待底部確立。"
+            buy_rec, sell_rec = "等待站回季線", f"{ma60_last:.2f} (季線壓力)"
+        elif k_last < 25 and k_last > d_last:
+            adv_text = "📈 【技術反彈】KD 低檔黃金交叉且長線均線有守，具短線反彈契機，可嘗試逢低少量佈局。"
+            buy_rec, sell_rec = f"現價~{support_price:.2f} 附近", f"{resist_price:.2f} (上檔壓力)"
         elif k_last > 80 and k_last < d_last:
-            adv_text, buy_rec, sell_rec = "KD 高檔死亡交叉，上漲動能轉弱，建議適度獲利了結保住利潤。", "暫時觀望", f"現價~{resist_price:.2f} 附近"
+            adv_text = "⚠️ 【動能轉弱】KD 高檔死亡交叉，短線上漲動能衰退，建議適度獲利了結保住利潤。"
+            buy_rec, sell_rec = "暫時觀望", f"現價~{resist_price:.2f} 附近"
         elif last_close > ma20_last:
-            adv_text, buy_rec, sell_rec = "多方格局，拉回月線(20MA)有守可伺機介入，跌破支撐應停損。", f"{ma20_last:.2f} (月線支撐)", f"{resist_price:.2f} (近期前高)"
+            adv_text = "🔥 【多方格局】量價配合良好，拉回月線(20MA)有守可伺機介入，跌破支撐應嚴格停損。"
+            buy_rec, sell_rec = f"{ma20_last:.2f} (月線支撐)", f"{resist_price:.2f} (近期前高)"
         else:
-            adv_text, buy_rec, sell_rec = "空方格局，建議多看少做，反彈至均線壓力區可考慮減碼。", "等待技術面打底", f"{ma20_last:.2f} (月線壓力)"
+            adv_text = "❄️ 【空方格局】短線均線反壓，建議多看少做，反彈至均線壓力區可考慮減碼。"
+            buy_rec, sell_rec = "等待技術面打底", f"{ma20_last:.2f} (月線壓力)"
 
         st.markdown(f"""
         <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; margin-bottom:20px;'>
@@ -708,10 +736,11 @@ if curr_id:
             name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'
         ), row=1, col=1, secondary_y=False)
 
-        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
-        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
-        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
-        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5(周線)', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10(雙周)', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20(月線)', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60(季線)', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA120'], mode='lines', name='MA120(半年線)', line=dict(color='#ff69b4', width=1.5)), row=1, col=1, secondary_y=False)
 
         vol_colors = ['#ff4d4d' if row['Close'] >= row['Open'] else '#00cc66' for _, row in plot_df.iterrows()]
         fig.add_trace(go.Bar(
