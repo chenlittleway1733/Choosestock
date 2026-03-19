@@ -45,12 +45,8 @@ def get_ai_analysis_final(topic, api_key):
     
     api_key = api_key.strip()
     
-    # 🔥 升級大腦：根據最新官方文件，將 Gemini 3.1 Pro 與 Gemini 3 Flash 加入優先順位！
-    # 系統會從最上面的開始嘗試，失敗會自動往下找可用的模型。
+    # 只鎖定目前穩定開放的 1.5 與 2.0，移除沒有權限的預覽版
     models_to_try = [
-        "gemini-3.1-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash"
     ]
@@ -69,11 +65,10 @@ def get_ai_analysis_final(topic, api_key):
     all_errors = []
 
     for model in models_to_try:
-        # === 絕對防禦寫法：將網址拆開相加，徹底避免被瀏覽器或編輯器自動轉成超連結 ===
+        # 絕對防禦寫法：將網址拆開相加
         api_host = "https://" + "generativelanguage.googleapis.com"
         url = f"{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
         
-        # 組合 1：帶有 Google Search 工具 (官方標準命名)
         payload_search = {
             "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
             "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -81,7 +76,6 @@ def get_ai_analysis_final(topic, api_key):
             "generationConfig": {"responseMimeType": "application/json"}
         }
         
-        # 組合 2：降級版純 AI 預測 (最安全)
         payload_basic = {
             "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
             "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -89,24 +83,17 @@ def get_ai_analysis_final(topic, api_key):
         }
 
         try:
-            # 第一波：嘗試聯網搜尋
+            # 嘗試聯網搜尋
             response = requests.post(url, headers=headers, json=payload_search, timeout=20)
             if response.status_code == 200:
                 return parse_ai_response(response.json())
-            
-            # --- 新增：攔截流量限制 (Quota Exceeded) 錯誤 ---
-            if response.status_code == 429 or "Quota exceeded" in response.text:
-                return "⚠️ 【Google API 流量限制】您點擊得太快或免費額度暫時用盡囉！請稍等大約 1 分鐘後再重新點擊分析。", []
                 
-            # 第二波：若搜尋被擋，退回純 AI 預測
+            # 若搜尋被擋，退回純 AI 預測
             res_basic = requests.post(url, headers=headers, json=payload_basic, timeout=20)
             if res_basic.status_code == 200:
                 return parse_ai_response(res_basic.json())
             
-            if res_basic.status_code == 429 or "Quota exceeded" in res_basic.text:
-                return "⚠️ 【Google API 流量限制】免費額度暫時用盡！請稍等大約 1 分鐘後再重新點擊分析。", []
-            
-            # 若都失敗，紀錄這個模型「真實」的失敗原因
+            # ！！！關鍵修復：拔除「請等一分鐘」的假希望，無論什麼錯誤都真實紀錄，並繼續嘗試下一個模型！！！
             err_msg = res_basic.json().get('error', {}).get('message', res_basic.text)
             all_errors.append(f"【{model}】: {err_msg}")
             
@@ -114,9 +101,9 @@ def get_ai_analysis_final(topic, api_key):
             all_errors.append(f"【{model}】連線異常: {str(e)}")
             continue
             
-    # 將所有模型的失敗原因印出，不再被舊模型掩蓋
+    # 如果全部失敗，印出真實原因
     error_details = "\n\n".join(all_errors)
-    return f"無法連線至 AI，請確認金鑰狀態。\n\n詳細錯誤診斷：\n{error_details}", []
+    return f"⚠️ 無法連線至 AI，請確認您的 Google 帳號 API 權限。\n\n詳細錯誤診斷：\n{error_details}", []
 
 def parse_ai_response(res_json):
     content = ""
