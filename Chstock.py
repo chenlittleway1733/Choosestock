@@ -671,6 +671,63 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
+        # --- 📊 升級：真實月營收與 YoY 雙軸圖表 ---
+        df_rev = get_monthly_revenue(curr_id)
+        if df_rev is not None and not df_rev.empty:
+            st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
+            st.markdown("<small style='color:gray;'>*數據來源：自動抓取最新公告之每月營收與年增率 (YoY)*</small>", unsafe_allow_html=True)
+
+            fig_rev = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            # 主軸：單月營收 (直條圖 Bar)
+            fig_rev.add_trace(
+                go.Bar(
+                    x=df_rev['Month'],
+                    y=df_rev['Revenue'],
+                    name="單月營收 (億)",
+                    marker_color='#3498db', # 搭配暗黑主題的亮藍色
+                    opacity=0.8,
+                    hovertemplate="營收: %{y} 億<extra></extra>"
+                ),
+                secondary_y=False,
+            )
+            
+            # 副軸：年增率 YoY (折線圖 Line+Markers)
+            fig_rev.add_trace(
+                go.Scatter(
+                    x=df_rev['Month'],
+                    y=df_rev['YoY'],
+                    name="YoY (%)",
+                    mode='lines+markers',
+                    line=dict(color='#ff4d4d', width=3), # 醒目的亮紅色
+                    marker=dict(size=8, symbol='circle'),
+                    hovertemplate="YoY: %{y}%<extra></extra>"
+                ),
+                secondary_y=True,
+            )
+            
+            # UI/UX 細節優化
+            fig_rev.update_layout(
+                height=400,
+                template="plotly_dark", # 套用暗黑主題以融入戰情室背景
+                hovermode="x unified",
+                margin=dict(l=10, r=10, t=30, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
+            )
+            fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
+            fig_rev.update_yaxes(
+                title_text="年增率 YoY (%)",
+                secondary_y=True,
+                showgrid=True, gridcolor='#333', # 淡淡的網格線
+                zeroline=True, zerolinewidth=1, zerolinecolor='#555'
+            )
+            st.plotly_chart(fig_rev, use_container_width=True)
+            st.markdown("---")
+        else:
+            st.warning("⚠️ 目前暫時無法連線至公開庫取得月營收數據。")
+
         # --- 🐳 籌碼面與股權結構分析 ---
         st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：籌碼流向為台股短線動能關鍵，透過股本規模與持股結構，自動推估該檔股票的主力控盤屬性。*</small>", unsafe_allow_html=True)
