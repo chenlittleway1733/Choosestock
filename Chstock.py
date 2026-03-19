@@ -8,9 +8,9 @@ import re
 import json
 
 # 設定網頁標題與寬度
-st.set_page_config(page_title="way系統", layout="wide")
+st.set_page_config(page_title="台股聯網 AI 投資戰情室", layout="wide")
 
-# --- 初始化 Session State ---
+# --- 初始化 Session State (確保所有變數都在一開始就建立，防止 AttributeError) ---
 if 'selected_stock' not in st.session_state:
     st.session_state.selected_stock = "2330"
 if 'topic_results' not in st.session_state:
@@ -19,6 +19,10 @@ if 'show_whale' not in st.session_state:
     st.session_state.show_whale = False
 if 'ai_error' not in st.session_state:
     st.session_state.ai_error = None
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = ""
+if 'ai_fetched_eps' not in st.session_state:
+    st.session_state.ai_fetched_eps = {}
 
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
@@ -62,7 +66,6 @@ def get_ai_analysis_final(topic, api_key):
     all_errors = []
 
     for model in models_to_try:
-        # 絕對防禦網址，防止被編輯器加上超連結
         api_host = "https://" + "generativelanguage.googleapis.com"
         url = f"{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
         
@@ -94,6 +97,32 @@ def get_ai_analysis_final(topic, api_key):
     error_details = "\n\n".join(all_errors)
     return f"⚠️ 無法連線至 AI，請確認您的 Google 帳號 API 權限。\n\n詳細錯誤診斷：\n{error_details}", []
 
+# --- 🤖 新增：專屬 AI 聯網抓取法人預估 EPS 函數 ---
+def get_eps_from_ai(stock_name, stock_id, api_key):
+    if not api_key: return None
+    api_key = api_key.strip()
+    
+    model = "gemini-2.5-flash"
+    api_host = "https://" + "generativelanguage.googleapis.com"
+    url = f"{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
+    
+    system_prompt = "你是一個精準的財經數據提取機器人。請上網搜尋國內外法人或投顧，針對該公司「明年」或「今年」所預估的 EPS（每股盈餘）。請綜合最新資訊，『嚴格只回傳一個最合理的數字』（例如：30.5 或 15.2）。不要加上任何單位、不要解釋、不要有其他文字。若真的查無資料，請回傳 0。"
+    
+    payload = {
+        "contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新的法人預估 EPS"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "tools": [{"google_search": {}}],
+    }
+    
+    try:
+        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
+        if res.status_code == 200:
+            text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            return float(text)
+    except:
+        pass
+    return None
+
 # --- 資料與翻譯函數 ---
 @st.cache_data(ttl=3600)
 def get_stock_data(symbol):
@@ -109,7 +138,6 @@ def get_stock_data(symbol):
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
     try:
-        # 終極防禦：將網址拆成一般變數，絕對不會再被轉成超連結
         host_name = "tw.stock.yahoo.com"
         path = "/quote/"
         url = f"https://{host_name}{path}{stock_id}"
@@ -126,7 +154,6 @@ def get_chinese_name(stock_id):
 def translate_to_zh(text):
     if not text or text == '暫無簡介。': return text
     try:
-        # 終極防禦：將網址拆成一般變數，絕對不會再被轉成超連結
         host_name = "translate.googleapis.com"
         path = "/translate_a/single"
         translate_url = f"https://{host_name}{path}"
@@ -156,11 +183,14 @@ with st.sidebar:
     st.markdown("---")
     st.header("🧠 AI 聯網議題選股")
     topic = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
-    api_key = st.text_input("🔑 Gemini API Key", type="password")
+    
+    # 綁定 API Key 到 Session State
+    st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key)
+    
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
-        if api_key and topic:
+        if st.session_state.api_key and topic:
             with st.spinner("AI 深度推演中..."):
-                reasoning, stocks = get_ai_analysis_final(topic, api_key)
+                reasoning, stocks = get_ai_analysis_final(topic, st.session_state.api_key)
                 if not stocks:
                     st.session_state.ai_error = reasoning
                     st.session_state.topic_results = None
@@ -438,9 +468,6 @@ if curr_id:
         # --- 核心升級：進階估值微調 (法人共識 EPS 動態切換 + AI 聯網抓取) ---
         st.markdown("##### ⚙️ 進階估值微調 (EPS 敏感度分析)")
         
-        # 初始化儲存 AI 抓到的 EPS
-        if 'ai_fetched_eps' not in st.session_state: st.session_state.ai_fetched_eps = {}
-        
         col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
         with col_eps1:
             use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
@@ -591,22 +618,20 @@ if curr_id:
         inst_pct = info.get('heldPercentInstitutions')
         market_cap = info.get('marketCap', 0)
         
-        # 新增：獲取在外流通股數，換算台股真實「股本」(發行股數 * 面額10元)
         shares_out = info.get('sharesOutstanding')
         share_capital = shares_out * 10 if shares_out else None
 
-        # 1. 控盤主力推估 (升級為最道地的台股「真實股本」判定法)
         if share_capital:
-            if share_capital >= 10_000_000_000: # 股本大於 100 億
+            if share_capital >= 10_000_000_000:
                 cap_type, driver, cap_color = "大型權值股", "🌍 外資主導", "#4169E1"
                 driver_desc = f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢高度受外資資金與國際大盤影響，不易被單一主力炒作。"
-            elif share_capital <= 3_000_000_000: # 股本小於 30 億
+            elif share_capital <= 3_000_000_000:
                 cap_type, driver, cap_color = "中小型飆股", "🔥 投信 / 內資主力", "#ff8c00"
                 driver_desc = f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，極易受「投信連續買超」作帳帶動，吸引主力拉抬，爆發力強。"
-            else: # 股本介於 30億 ~ 100億
+            else:
                 cap_type, driver, cap_color = "中型中堅股", "🤝 土洋對作/共議", "#9370DB"
                 driver_desc = f"股本約 {share_capital/100000000:.0f} 億。外資與投信皆有著墨空間。當出現「土洋合作」(同步買超) 時易有大波段行情。"
-        else: # 備用機制：若海外資料庫漏給股數，退回市值判定
+        else:
             if market_cap >= 200_000_000_000:
                 cap_type, driver, cap_color = "大型權值股", "🌍 外資主導", "#4169E1"
                 driver_desc = "走勢高度受外資控盤與國際大盤影響，不易被人為炒作，看重長期基本面。"
@@ -617,7 +642,6 @@ if curr_id:
                 cap_type, driver, cap_color = "中型中堅股", "🤝 土洋對作/共議", "#9370DB"
                 driver_desc = "外資與投信皆有著墨空間。當出現「土洋合作」(同步買超) 時，往往能走出大波段行情。"
 
-        # 2. 三大法人持股率判定
         inst_str = f"{inst_pct * 100:.2f}%" if inst_pct is not None else "N/A"
         if inst_pct is None:
             inst_color, inst_eval, inst_desc = "gray", "數據不足", "缺乏法人持股資料。"
@@ -631,7 +655,6 @@ if curr_id:
             inst_color, inst_eval = "#00bfff", "內資/散戶主導"
             inst_desc = "外資與投信介入不深，股價走勢較容易受到市場主力大戶、公司派或散戶情緒的影響。"
 
-        # 3. 內部人與大股東持股判定
         insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
         if insider_pct is None:
             in_color, in_eval, in_desc = "gray", "數據不足", "缺乏大股東持股資料。"
@@ -682,8 +705,8 @@ if curr_id:
         hist['MA10'] = hist['Close'].rolling(10).mean()
         hist['MA20'] = hist['Close'].rolling(20).mean()
         hist['MA60'] = hist['Close'].rolling(60).mean()
-        hist['MA120'] = hist['Close'].rolling(120).mean() # 新增：半年線
-        hist['Vol_MA20'] = hist['Volume'].rolling(20).mean() # 新增：月均量 (判斷爆量基準)
+        hist['MA120'] = hist['Close'].rolling(120).mean()
+        hist['Vol_MA20'] = hist['Volume'].rolling(20).mean()
 
         h9, l9 = hist['High'].rolling(9).max(), hist['Low'].rolling(9).min()
         rsv = (hist['Close'] - l9) / (h9 - l9) * 100
@@ -705,11 +728,9 @@ if curr_id:
         recent_high = recent_20['High'].max()
         recent_low = recent_20['Low'].min()
         
-        # === 核心升級 1：量價關係與高檔爆量偵測雷達 ===
         max_vol_idx = recent_20['Volume'].idxmax()
         max_vol_day = recent_20.loc[max_vol_idx]
         
-        # 條件：量>月均量2倍(爆量) + 處於近20日高點95%區間內(高檔) + 現價跌破爆量日低點(主力出貨確認)
         is_high_vol = max_vol_day['Volume'] > (max_vol_day['Vol_MA20'] * 2)
         is_at_high = max_vol_day['High'] >= (recent_high * 0.95)
         is_dropping = last_close < max_vol_day['Low']
@@ -718,9 +739,8 @@ if curr_id:
         support_price = max(recent_low, ma60_last) if last_close > ma60_last else recent_low
         resist_price = recent_high if last_close > ma20_last else min(recent_high, ma20_last)
         
-        # === 核心升級 2：加入長天期均線 (季線/半年線) 趨勢防禦 ===
         if last_close < ma60_last:
-            trend_status, trend_color = "⚠️ 跌破季線 (趨勢轉弱)", "#00cc66" # 跌破生命線，強制綠燈警戒
+            trend_status, trend_color = "⚠️ 跌破季線 (趨勢轉弱)", "#00cc66"
         elif last_close > ma20_last and ma5_last > ma20_last:
             trend_status, trend_color = "📈 多頭強勢 (站上月線)", "#ff4d4d"
         elif last_close < ma20_last and ma5_last < ma20_last:
@@ -728,7 +748,6 @@ if curr_id:
         else:
             trend_status, trend_color = "↔️ 區間震盪 (方向未明)", "#ffd700"
             
-        # === 核心升級 3：交易策略邏輯深度優化 (結合量價與長線趨勢) ===
         if high_vol_warning:
             adv_text = "🚨 【量價警訊】近期高檔爆出天量且跌破低點，主力疑似獲利了結出貨，強烈建議觀望，切勿盲目接刀！"
             buy_rec, sell_rec = "強烈觀望", f"反彈至 {max_vol_day['High']:.2f} 逃命"
@@ -814,7 +833,6 @@ if curr_id:
         max_vol = plot_df['Volume'].max() / 1000
         fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
         
-        # === 修改這裡：加入 dtick=10，讓 KD 值的 Y 軸刻度以 10 為單位 ===
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
 
         fig.update_xaxes(
