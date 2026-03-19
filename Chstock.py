@@ -61,7 +61,6 @@ def get_ai_analysis_final(topic, api_key):
     all_errors = []
 
     for model in models_to_try:
-        # 終極防禦：打斷網址結構
         protocol = "https://"
         api_host = "generativelanguage.googleapis.com"
         url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
@@ -111,13 +110,10 @@ def parse_ai_response(res_json):
     except Exception as e:
         return f"JSON 解析失敗。AI 原文片段: {content[:100]}...", []
 
-# --- 🤖 專屬 AI 聯網抓取法人預估 EPS 函數 ---
 def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
     model = "gemini-2.5-flash"
-    
-    # 終極防禦：打斷網址結構
     protocol = "https://"
     api_host = "generativelanguage.googleapis.com"
     url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
@@ -136,56 +132,75 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     except: pass
     return None
 
-# --- 📊 自動爬取真實「月營收」與「YoY」函數 ---
+# --- 📊 終極進化版：無敵爬取真實「月營收」與「YoY」函數 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
-    try:
-        # 終極防禦：打斷網址結構，防止 Markdown 破壞
-        protocol = "https://"
-        host1 = "djinfo.cathaysec.com.tw"
-        path1 = f"/z/zc/zch/zch_{stock_id}.djhtm"
-        url = f"{protocol}{host1}{path1}"
-        
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        res = requests.get(url, headers=headers, timeout=8)
-        res.encoding = 'big5'
-        
-        pattern = r'<td class="t3n0">(\d{3,4}/\d{2})</td>\s*<td class="t3n1">([\d,]+)</td>\s*<td class="t3n1">([^<]+)</td>\s*<td class="t3n1">([^<]+)</td>'
-        matches = re.findall(pattern, res.text)
-        
-        if not matches:
-            # 終極防禦：備用鏡像站同樣打斷網址
-            host2 = "fubon-ebrokerdj.fbs.com.tw"
-            url2 = f"{protocol}{host2}{path1}"
-            res = requests.get(url2, headers=headers, timeout=8)
+    # 建立 4 個公開站點備援，保證絕對不斷線
+    mirrors = [
+        "djinfo.cathaysec.com.tw",
+        "fubon-ebrokerdj.fbs.com.tw",
+        "jdata.yuanta.com.tw",
+        "jsjustweb.jihsun.com.tw"
+    ]
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    }
+    
+    html_content = ""
+    for host in mirrors:
+        try:
+            url = f"https://{host}/z/zc/zch/zch_{stock_id}.djhtm"
+            res = requests.get(url, headers=headers, timeout=5)
             res.encoding = 'big5'
-            matches = re.findall(pattern, res.text)
+            if "營收" in res.text:
+                html_content = res.text
+                break
+        except:
+            continue
             
-        if not matches: return None
+    if not html_content: return None
         
-        months, revenues, yoys = [], [], []
-        recent_12 = matches[:12][::-1]
+    months, revenues, yoys = [], [], []
+    
+    # 終極過濾器：直接解析整條 Table 結構，無視所有內部顏色標籤干擾
+    tr_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.IGNORECASE | re.DOTALL)
+    td_pattern = re.compile(r'<td[^>]*>(.*?)</td>', re.IGNORECASE | re.DOTALL)
+    
+    rows = tr_pattern.findall(html_content)
+    for row in rows:
+        cells = td_pattern.findall(row)
+        if len(cells) >= 5:
+            # 暴力清除所有干擾的 HTML 標籤 (例如 <font color=red>)
+            clean_cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+            
+            month_text = clean_cells[0]
+            # 確認該列是營收資料列 (例如 113/02)
+            if re.match(r'^\d{3,4}/\d{2}$', month_text):
+                try:
+                    rev_str = clean_cells[1].replace(',', '')
+                    yoy_str = clean_cells[4].replace(',', '').replace('%', '')
+                    
+                    rev_val = float(rev_str) / 100000  # 千元轉換為億元
+                    yoy_val = float(yoy_str)
+                    
+                    # 將民國年月轉為西元年月
+                    y, mo = month_text.split('/')
+                    if len(y) == 3: y = str(int(y) + 1911)
+                    
+                    months.append(f"{y}-{mo}")
+                    revenues.append(round(rev_val, 2))
+                    yoys.append(yoy_val)
+                except:
+                    continue
+                    
+    if not months: return None
         
-        for m in recent_12:
-            raw_month = m[0]
-            if len(raw_month.split('/')[0]) == 3:
-                y, mo = raw_month.split('/')
-                raw_month = f"{int(y)+1911}/{mo}"
-            months.append(raw_month)
-            
-            rev_val = float(m[1].replace(',', '')) / 100000
-            revenues.append(round(rev_val, 2))
-            
-            yoy_str = m[3].replace('%', '').replace(',', '')
-            try:
-                yoy_val = float(yoy_str)
-            except:
-                yoy_val = 0.0
-            yoys.append(yoy_val)
-            
-        return pd.DataFrame({'Month': months, 'Revenue': revenues, 'YoY': yoys})
-    except Exception as e:
-        return None
+    # 取近 12 個月，並反轉陣列順序(舊到新)以配合折線圖由左畫到右
+    df = pd.DataFrame({'Month': months, 'Revenue': revenues, 'YoY': yoys})
+    df = df.head(12).iloc[::-1].reset_index(drop=True)
+    return df
 
 # --- 基礎數據函數 ---
 @st.cache_data(ttl=3600)
@@ -265,7 +280,6 @@ with st.sidebar:
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
-    # 綁定 API Key 到 Session State
     st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key, help="貼入您從 Google AI Studio 複製的金鑰。")
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
@@ -285,7 +299,6 @@ with st.sidebar:
 # ==========================================
 st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
-# --- 處理 AI 議題結果 ---
 if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
         data, links = get_ai_analysis_final(topic_q, st.session_state.api_key)
@@ -316,7 +329,6 @@ if isinstance(st.session_state.topic_results, dict):
             for link in t['links']: st.markdown(f"- [{link}]({link})")
     st.markdown("---")
 
-# --- 籌碼追蹤顯示區 ---
 if st.session_state.show_whale:
     st.markdown("### 🐳 近兩周大戶持股比例顯著增加標的")
     whales = [("2317", "鴻海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("3324", "雙鴻")]
@@ -325,7 +337,6 @@ if st.session_state.show_whale:
         with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
-# --- 個股報表主體 ---
 curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
@@ -349,7 +360,7 @@ if curr_id:
             else:
                 st.write(summary_en)
 
-        # 2. 即時報價與交易資訊
+        # 2. 即時報價
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
@@ -564,7 +575,7 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 7. 進階估值與價格合理性分析 (包含 AI 聯網抓取 EPS)
+        # 7. 進階估值與價格合理性分析
         st.markdown("#### ⚖️ 估值與價格合理性分析", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：透過市場三大估值指標，檢視目前股價是否透支未來成長性或具備足夠的安全邊際。海外資料庫之預估 EPS 可能因模型外推而極度樂觀，建議適時切換為國內法人共識值以防追高。*</small>", unsafe_allow_html=True)
 
