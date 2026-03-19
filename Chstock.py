@@ -369,9 +369,15 @@ if curr_id:
 
         st.markdown("---")
 
-        # 5. 三層技術圖表
-        st.markdown("### 🤖 AI 技術指標判定與專業圖表")
-        ma20 = hist['Close'].rolling(20).mean().iloc[-1]
+        # 5. 專業技術線圖 (仿看盤軟體)
+        st.markdown("### 🤖 專業技術線圖與 AI 判定 (近半年)")
+        
+        # 計算各項技術指標 (使用全資料計算，避免均線在圖表開頭出現斷層)
+        hist['MA5'] = hist['Close'].rolling(5).mean()
+        hist['MA10'] = hist['Close'].rolling(10).mean()
+        hist['MA20'] = hist['Close'].rolling(20).mean()
+        hist['MA60'] = hist['Close'].rolling(60).mean()
+
         h9, l9 = hist['High'].rolling(9).max(), hist['Low'].rolling(9).min()
         rsv = (hist['Close'] - l9) / (h9 - l9) * 100
         K, D = [50], [50]
@@ -379,15 +385,67 @@ if curr_id:
             K.append(K[-1]*(2/3) + v*(1/3))
             D.append(D[-1]*(2/3) + K[-1]*(1/3))
         hist['K'], hist['D'] = K[1:], D[1:]
+
+        ma20_last = hist['MA20'].iloc[-1]
+        st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;margin-bottom:15px;'><b>AI 趨勢判定：{'📈 站上月線，多方強勢' if curr_p > ma20_last else '📉 跌破月線，空方佔優'}</b></div>", unsafe_allow_html=True)
+
+        # 擷取近半年 (約 120 個交易日) 的資料來畫圖
+        plot_df = hist.tail(120)
+
+        # 建立雙層圖表 (上層: K線+均線+成交量, 下層: KD)
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+            row_heights=[0.7, 0.3],
+            specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+        )
+
+        # --- 上層：K線 ---
+        fig.add_trace(go.Candlestick(
+            x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'],
+            name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'
+        ), row=1, col=1, secondary_y=False)
+
+        # --- 上層：均線 ---
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
+
+        # --- 上層：成交量 (疊加在底部) ---
+        # 判斷紅綠量柱：收盤 >= 開盤 為紅，否則為綠
+        vol_colors = ['#ff4d4d' if row['Close'] >= row['Open'] else '#00cc66' for _, row in plot_df.iterrows()]
+        fig.add_trace(go.Bar(
+            x=plot_df.index, y=plot_df['Volume']/1000,
+            marker_color=vol_colors, name='成交量(張)', opacity=0.5
+        ), row=1, col=1, secondary_y=True)
+
+        # --- 下層：KD 指標 ---
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
+
+        # --- 座標軸與版面設定 ---
+        # 設定次坐標軸 (成交量) 的範圍，讓成交量只顯示在 K 線圖的下半段 (最大值的 3.5 倍)
+        max_vol = plot_df['Volume'].max() / 1000
+        fig.update_yaxes(showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
         
-        # 這裡將 cur_p 修正為 curr_p
-        st.markdown(f"<div style='background:#333;padding:10px;border-radius:8px;text-align:center;border-left:5px solid #FFD700;'><b>AI 判定：{'📈 趨勢強勁' if curr_p > ma20 else '📉 處於弱勢'}</b></div>", unsafe_allow_html=True)
-        
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.5, 0.25, 0.25], subplot_titles=("K線與均線", "KD (9,3,3)", "成交張數"))
-        fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=hist.index, y=hist['K'], name='K值', line=dict(color='orange')), row=2, col=1)
-        fig.add_trace(go.Scatter(x=hist.index, y=hist['D'], name='D值', line=dict(color='cyan')), row=2, col=1)
+        # KD 範圍固定 0-100
         fig.update_yaxes(range=[0, 100], row=2, col=1)
-        fig.add_trace(go.Bar(x=hist.index, y=hist['Volume']/1000, marker_color=['red' if x>=0 else 'green' for x in hist['Close'].diff()], name='張數'), row=3, col=1)
-        fig.update_layout(height=850, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=40, b=50), legend=dict(orientation="h", y=-0.1, x=0.5, xanchor="center"))
+
+        # X 軸：隱藏假日、設定格式為 月/日
+        fig.update_xaxes(
+            rangebreaks=[dict(bounds=["sat", "mon"])],
+            tickformat="%m/%d",
+            showgrid=True, gridcolor='#333'
+        )
+
+        fig.update_layout(
+            height=650,
+            template="plotly_dark",
+            xaxis_rangeslider_visible=False,
+            margin=dict(l=10, r=10, t=10, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            hovermode="x unified"
+        )
         st.plotly_chart(fig, use_container_width=True)
