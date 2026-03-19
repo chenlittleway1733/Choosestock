@@ -11,7 +11,7 @@ import json
 import time
 
 # 設定網頁標題與寬度
-st.set_page_config(page_title="台股智慧選股系統", layout="wide")
+st.set_page_config(page_title="way系統", layout="wide")
 
 # --- 產業對照表 ---
 SECTOR_MAP = {
@@ -337,14 +337,22 @@ if curr_id:
         m2.metric("預估明年 EPS", f"{info.get('forwardEps', info.get('trailingEps', 0)):.2f}")
         m3.metric("歷史本益比", f"{info.get('trailingPE', 0):.1f}x")
 
-        # 3. 法人目標價
+        # 3. 法人目標價 (修正變數名稱錯誤與增加安全防護)
         hi, me, lo = info.get('targetHighPrice'), info.get('targetMeanPrice'), info.get('targetLowPrice')
-        if hi:
+        if hi and me and lo:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
             v1, v2, v3 = st.columns(3)
             v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi:.1f}</b></div>", unsafe_allow_html=True)
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {((me/cur_p)-1)*100:+.1f}%</small></div>", unsafe_allow_html=True)
+            
+            # 將這裡的 cur_p 修正為 curr_p 即可正常計算！
+            upside = ((me / curr_p) - 1) * 100 if curr_p else 0
+            
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
             v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo:.1f}</b></div>", unsafe_allow_html=True)
+        elif hi:
+             # 若只有最高價，僅顯示最高價資訊
+             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+             st.info(f"法人最高預期：**{hi:.1f}**")
 
         st.markdown("---")
 
