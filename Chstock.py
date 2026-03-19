@@ -426,18 +426,22 @@ if curr_id:
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
 
         # --- 座標軸與版面設定 ---
-        # 設定次坐標軸 (成交量) 的範圍，讓成交量只顯示在 K 線圖的下半段 (最大值的 3.5 倍)
-        max_vol = plot_df['Volume'].max() / 1000
-        fig.update_yaxes(showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
+        # 1. 價格 Y 軸：移至右側 (方便對照最新 K 線)，開啟左右框線鏡像
+        fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
         
-        # KD 範圍固定 0-100
-        fig.update_yaxes(range=[0, 100], row=2, col=1)
+        # 2. 成交量 Y 軸：隱藏刻度數字，置於左側避免與價格數字衝突
+        max_vol = plot_df['Volume'].max() / 1000
+        fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
+        
+        # 3. KD Y 軸：範圍固定 0-100，移至右側，開啟左右框線鏡像
+        fig.update_yaxes(range=[0, 100], side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
 
-        # X 軸：隱藏假日、設定格式為 月/日
+        # X 軸：隱藏假日、設定格式為 月/日，開啟上下框線鏡像
         fig.update_xaxes(
             rangebreaks=[dict(bounds=["sat", "mon"])],
             tickformat="%m/%d",
-            showgrid=True, gridcolor='#333'
+            showgrid=True, gridcolor='#333',
+            mirror=True, showline=True, linecolor='#555'
         )
 
         fig.update_layout(
