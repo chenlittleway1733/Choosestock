@@ -140,7 +140,14 @@ def get_monthly_revenue(stock_id):
         today = datetime.date.today()
         start_year = today.year - 2
         start_str = f"{start_year}-{today.month:02d}-01"
-        url = f"[https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id=](https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id=){stock_id}&start_date={start_str}"
+        
+        # 終極防禦：打斷網址結構，防止編輯器自動轉成超連結破壞程式碼
+        protocol = "https://"
+        host_name = "api.finmindtrade.com"
+        path = "/api/v4/data"
+        params = f"?dataset=TaiwanStockMonthRevenue&data_id={stock_id}&start_date={start_str}"
+        url = f"{protocol}{host_name}{path}{params}"
+        
         headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(url, headers=headers, timeout=10)
         data = res.json()
