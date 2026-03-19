@@ -388,6 +388,67 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
+        # --- 📊 新增：月營收與 YoY 雙軸圖表 ---
+        st.markdown("#### 📊 近一年月營收與成長動能趨勢 (示意範例)")
+        st.markdown("<small style='color:gray;'>*註：因海外 yfinance 資料庫缺乏台股「月營收」精確欄位，此處暫以模擬數據展示雙軸圖表視覺效果。實戰中可串接公開資訊觀測站 API 替換為真實數據。*</small>", unsafe_allow_html=True)
+
+        rev_data = {
+            'Month': ['2023-04', '2023-05', '2023-06', '2023-07', '2023-08', '2023-09',
+                      '2023-10', '2023-11', '2023-12', '2024-01', '2024-02', '2024-03'],
+            'Revenue': [25.1, 26.8, 28.5, 27.2, 30.1, 32.5, 31.0, 34.2, 35.8, 32.1, 29.5, 36.5],
+            'YoY': [15.2, 18.5, 22.1, 19.8, 28.4, 35.2, 30.1, 42.5, 45.8, 28.5, 12.4, 48.2]
+        }
+        df_rev = pd.DataFrame(rev_data)
+
+        fig_rev = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        # 主軸：單月營收 (直條圖 Bar)
+        fig_rev.add_trace(
+            go.Bar(
+                x=df_rev['Month'],
+                y=df_rev['Revenue'],
+                name="單月營收 (億)",
+                marker_color='#3498db', # 搭配暗黑主題的亮藍色
+                opacity=0.8,
+                hovertemplate="營收: %{y} 億<extra></extra>"
+            ),
+            secondary_y=False,
+        )
+        
+        # 副軸：年增率 YoY (折線圖 Line+Markers)
+        fig_rev.add_trace(
+            go.Scatter(
+                x=df_rev['Month'],
+                y=df_rev['YoY'],
+                name="YoY (%)",
+                mode='lines+markers',
+                line=dict(color='#ff4d4d', width=3), # 醒目的亮紅色
+                marker=dict(size=8, symbol='circle'),
+                hovertemplate="YoY: %{y}%<extra></extra>"
+            ),
+            secondary_y=True,
+        )
+        
+        # UI/UX 細節優化
+        fig_rev.update_layout(
+            height=400,
+            template="plotly_dark", # 套用暗黑主題以融入戰情室背景
+            hovermode="x unified",
+            margin=dict(l=10, r=10, t=30, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
+        )
+        fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
+        fig_rev.update_yaxes(
+            title_text="年增率 YoY (%)",
+            secondary_y=True,
+            showgrid=True, gridcolor='#333', # 淡淡的網格線
+            zeroline=True, zerolinewidth=1, zerolinecolor='#555'
+        )
+        st.plotly_chart(fig_rev, use_container_width=True)
+        st.markdown("---")
+
         # --- 🎯 法人目標價 ---
         hi, me, lo = info.get('targetHighPrice'), info.get('targetMeanPrice'), info.get('targetLowPrice')
         if hi and me and lo:
