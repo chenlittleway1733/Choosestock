@@ -424,9 +424,14 @@ if curr_id:
 
         pb_ratio = info.get('priceToBook')
         peg_ratio = info.get('pegRatio')
+        forward_pe = info.get('forwardPE')
         
         if peg_ratio is None and pe_ratio is not None and earn_growth is not None and earn_growth > 0:
             peg_ratio = pe_ratio / (earn_growth * 100)
+            
+        # 若 API 沒給前瞻本益比，但我們有現價與預估 EPS，則自動計算
+        if forward_pe is None and f_eps is not None and f_eps > 0 and curr_p:
+            forward_pe = curr_p / f_eps
 
         pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
         if pe_ratio is None:
@@ -457,27 +462,37 @@ if curr_id:
             peg_color, peg_eval = "#00cc66", "低估 (成長性支撐)"
         else:
             peg_color, peg_eval = "#FFD700", "合理區間"
+            
+        fpe_str = f"{forward_pe:.1f}x" if forward_pe is not None else "N/A"
+        if forward_pe is None:
+            fpe_color, fpe_eval = "gray", "數據不足"
+        elif forward_pe > 25:
+            fpe_color, fpe_eval = "#ff4d4d", "偏高 / 成長期望高"
+        elif forward_pe < 15:
+            fpe_color, fpe_eval = "#00cc66", "相對便宜"
+        else:
+            fpe_color, fpe_eval = "#FFD700", "合理區間"
 
         st.markdown(f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 本益比 (P/E Ratio)</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 歷史本益比 (Trailing P/E)</div>
                     <div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_eval}</div>
                 </div>
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pe_str}</div>
                 <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
-                    計算公式為 <code>每股市價 / 每股盈餘</code>。這項指標適合用來和「同業」或是公司「過去的歷史本益比區間」作對比。高成長性的科技股市場通常願意給予較高的本益比，但也需提防過度樂觀導致的估值泡沫。
+                    以過去一年的獲利計算。適合用來和「同業」或是公司「歷史區間」作對比。高成長性科技股通常享有較高溢價，但也需提防過度樂觀導致的估值泡沫。
                 </div>
             </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fpe_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div>
-                    <div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_eval}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div>
+                    <div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_eval}</div>
                 </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str}</div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{fpe_str}</div>
                 <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
-                    較常運用在景氣循環股或資產股，用來評估目前股價是否低於公司的清算價值。通常淨值比越低，意味著具備較強的下檔資產保護。
+                    以「預估未來一年 EPS」計算。投資科技成長股看重的是未來，若歷史本益比極高但前瞻本益比大幅下降，代表獲利即將爆發，這正是買盤願意溢價介入的關鍵。
                 </div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_color};'>
@@ -488,6 +503,16 @@ if curr_id:
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{peg_str}</div>
                 <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
                     將本益比除以預估的盈餘成長率，是評估高成長股更進階的指標，能看出目前的股價是否透支了未來的成長性。通常小於 1 視為具投資價值。
+                </div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div>
+                    <div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
+                    較常運用在景氣循環股或資產股，用來評估目前股價是否低於公司的清算價值。通常淨值比越低，意味著具備較強的下檔資產保護。
                 </div>
             </div>
         </div>
@@ -501,35 +526,78 @@ if curr_id:
         insider_pct = info.get('heldPercentInsiders')
         inst_pct = info.get('heldPercentInstitutions')
         market_cap = info.get('marketCap', 0)
+        
+        # 新增：獲取在外流通股數，換算台股真實「股本」(發行股數 * 面額10元)
+        shares_out = info.get('sharesOutstanding')
+        share_capital = shares_out * 10 if shares_out else None
 
-        insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
+        # 1. 控盤主力推估 (升級為最道地的台股「真實股本」判定法)
+        if share_capital:
+            if share_capital >= 10_000_000_000: # 股本大於 100 億
+                cap_type, driver, cap_color = "大型權值股", "🌍 外資主導", "#4169E1"
+                driver_desc = f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢高度受外資資金與國際大盤影響，不易被單一主力炒作。"
+            elif share_capital <= 3_000_000_000: # 股本小於 30 億
+                cap_type, driver, cap_color = "中小型飆股", "🔥 投信 / 內資主力", "#ff8c00"
+                driver_desc = f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，極易受「投信連續買超」作帳帶動，吸引主力拉抬，爆發力強。"
+            else: # 股本介於 30億 ~ 100億
+                cap_type, driver, cap_color = "中型中堅股", "🤝 土洋對作/共議", "#9370DB"
+                driver_desc = f"股本約 {share_capital/100000000:.0f} 億。外資與投信皆有著墨空間。當出現「土洋合作」(同步買超) 時易有大波段行情。"
+        else: # 備用機制：若海外資料庫漏給股數，退回市值判定
+            if market_cap >= 200_000_000_000:
+                cap_type, driver, cap_color = "大型權值股", "🌍 外資主導", "#4169E1"
+                driver_desc = "走勢高度受外資控盤與國際大盤影響，不易被人為炒作，看重長期基本面。"
+            elif market_cap <= 50_000_000_000:
+                cap_type, driver, cap_color = "中小型飆股", "🔥 投信 / 內資主力", "#ff8c00"
+                driver_desc = "股本小、籌碼輕，極易受「投信連續買超」的作帳行情帶動，爆發力強。"
+            else:
+                cap_type, driver, cap_color = "中型中堅股", "🤝 土洋對作/共議", "#9370DB"
+                driver_desc = "外資與投信皆有著墨空間。當出現「土洋合作」(同步買超) 時，往往能走出大波段行情。"
+
+        # 2. 三大法人持股率判定
         inst_str = f"{inst_pct * 100:.2f}%" if inst_pct is not None else "N/A"
-
-        if market_cap >= 100_000_000_000:
-            cap_type, driver, cap_color = "大型權值股", "🌍 外資主導", "#4169E1"
-            driver_desc = "走勢高度受外資資金控盤與國際大盤影響。由於股本龐大，不易被人為炒作，看重長期基本面與被動型 ETF 資金買盤。"
-        elif market_cap <= 30_000_000_000:
-            cap_type, driver, cap_color = "中小型成長股", "🔥 投信 / 內資主力", "#ff8c00"
-            driver_desc = "股本較小、籌碼輕，極易受「投信連續買超」的作帳行情帶動。只要具備新題材，容易吸引內資主力或大戶進駐拉抬，爆發力強。"
+        if inst_pct is None:
+            inst_color, inst_eval, inst_desc = "gray", "數據不足", "缺乏法人持股資料。"
+        elif inst_pct > 0.40:
+            inst_color, inst_eval = "#ff4d4d", "高度集中 (留意結帳)"
+            inst_desc = "法人持股比例極高，代表基本面獲高度認可。籌碼雖穩定，但若趨勢反轉或財報不如預期，需防範法人互相踐踏的「結帳賣壓」。"
+        elif inst_pct > 0.15:
+            inst_color, inst_eval = "#FFD700", "穩定認可"
+            inst_desc = "法人持股水位適中，代表機構持續關注並具備加碼空間，屬於健康的籌碼結構。"
         else:
-            cap_type, driver, cap_color = "中型股", "🤝 內外資共議", "#9370DB"
-            driver_desc = "外資與投信皆有著墨空間。當這類股票出現「土洋合作」(外資與投信同步連續買超) 時，往往能走出一段波段大行情。"
+            inst_color, inst_eval = "#00bfff", "內資/散戶主導"
+            inst_desc = "外資與投信介入不深，股價走勢較容易受到市場主力大戶、公司派或散戶情緒的影響。"
+
+        # 3. 內部人與大股東持股判定
+        insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
+        if insider_pct is None:
+            in_color, in_eval, in_desc = "gray", "數據不足", "缺乏大股東持股資料。"
+        elif insider_pct > 0.40:
+            in_color, in_eval = "#ff4d4d", "籌碼極度安定"
+            in_desc = "大股東與內部人持股極高，市面流通籌碼少，只要少量資金即可拉抬股價，且代表內部人對公司前景極度看好。"
+        elif insider_pct > 0.20:
+            in_color, in_eval = "#FFD700", "相對穩健"
+            in_desc = "內部人持股在標準健康區間，股權結構穩定，經營團隊與股東利益一致。"
+        else:
+            in_color, in_eval = "#00cc66", "籌碼較渙散 (警戒)"
+            in_desc = "內部人持股偏低，可能代表大股東已逢高獲利了結，或股權過度分散，股價遇壓時較缺乏內部防守力道。"
 
         chip_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid #00bfff;'>
-                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>🏦 三大法人持股率</div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#00bfff; margin-bottom:5px;'>{inst_str}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
-                    觀察外資、投信與自營商的籌碼比例。法人持股比例越高，代表基本面有一定水準的機構認可，但也需留意持股過高時的「結帳賣壓」。
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
+                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
                 </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{inst_desc}</div>
             </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid #FFD700;'>
-                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>🏢 內部人與大股東持股</div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#FFD700; margin-bottom:5px;'>{insider_str}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
-                    反映股權集中度。若董監事、大股東或千張大戶的持股比例高且持續上升，代表「最了解公司內部狀況的人」對未來營運抱持極大信心。
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
+                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
                 </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{in_desc}</div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
@@ -537,9 +605,7 @@ if curr_id:
                     <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
                 </div>
                 <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>
-                    {driver_desc}
-                </div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
             </div>
         </div>
         """
