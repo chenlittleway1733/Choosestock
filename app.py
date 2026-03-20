@@ -158,26 +158,33 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
             clean_text = re.sub(r'```json\n?|```', '', text).strip()
             peers = json.loads(clean_text)
             if isinstance(peers, list):
-                return [str(p) for p in peers][:4] # 將回傳數量放寬到最多抓 4 家
+                return [str(p) for p in peers][:4] 
     except: pass
     return []
 
-def get_ai_industry_analysis(stock_name, stock_id, api_key, model_name="gemini-2.5-flash"):
+# 🚀 升級版：解開 Markdown 封印，回歸原生高質感排版
+def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰"
     api_key = api_key.strip()
     
     system_prompt = """你是一位精通台股的資深產業分析師與操盤手。
-    請上網搜尋目標公司的最新動態、財報與法說會資訊，並提供以下深度分析：
+    請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
     1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
     2. 公司競爭優勢 (護城河、市占率、核心技術)
-    3. 具體的買賣點建議與操作策略 (請結合基本面與型態給出具體進出場評估或價位區間參考)
-    請用專業、易讀的 Markdown 格式輸出。"""
+    3. 具體的買賣點建議與操作策略 (請結合我提供的基本面、本益比、目標價潛在空間與技術型態，給出具體進出場評估或價位區間參考)
+    
+    【重要排版要求】：
+    - 標題與重點請使用 Emoji 點綴，增加易讀性。
+    - 請一律使用專業優美的 Markdown 格式排版 (適當運用 ### 小標題、**粗體**、* 條列式重點)。
+    - 絕對不要輸出 HTML 標籤，直接輸出 Markdown 內容即可。"""
 
     headers = {"Content-Type": "application/json"}
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={api_key}"
+    
+    prompt_text = f"請深度分析台股 {stock_name} ({stock_id}) 的產業前景、競爭優勢及買賣點策略。\n\n【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_data}"
     
     payload = {
-        "contents": [{"parts": [{"text": f"請深度分析台股 {stock_name} ({stock_id}) 的產業前景、競爭優勢及買賣點策略"}]}],
+        "contents": [{"parts": [{"text": prompt_text}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}]
     }
@@ -187,6 +194,8 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, model_name="gemini-2
         if response.status_code == 200: 
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            # 清除可能多餘的 markdown 程式碼塊標籤
+            content = re.sub(r'```markdown\n?|```', '', content).strip()
             return content
         else:
             err_msg = response.json().get('error', {}).get('message', response.text)
@@ -230,7 +239,6 @@ def get_monthly_revenue(stock_id):
         return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
     except Exception as e: return None
 
-# --- 🚀 終極防護：Yahoo TW 備用爬蟲 (當 yfinance 被雲端阻擋時啟動) ---
 def get_fallback_info(stock_id):
     info = {}
     try:
@@ -269,7 +277,6 @@ def get_fallback_info(stock_id):
 
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
-    # 確保代號沒有不小心輸入到空白鍵
     stock_id = str(stock_id).strip()
     try:
         for ext in [".TW", ".TWO"]:
@@ -278,14 +285,12 @@ def get_stock_data(stock_id):
             if not hist.empty: 
                 info_data = {}
                 try:
-                    # 🛡️ 獨立保護 info 抓取，避免 Yahoo 阻擋雲端 IP 導致整個畫面崩潰
                     info_data = ticker.info
                     if not isinstance(info_data, dict):
                         info_data = {}
                 except:
                     pass
                     
-                # 🚀 啟動備援：若 yfinance 無法獲取基本面，改用自建爬蟲抓取
                 if not info_data.get('trailingPE') and not info_data.get('trailingEps'):
                     fallback = get_fallback_info(stock_id)
                     info_data.update(fallback)
@@ -348,8 +353,8 @@ with st.sidebar:
     stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
     if stock_input != st.session_state.selected_stock:
         st.session_state.selected_stock = stock_input
-        st.session_state.show_pk = False # 換股時重置 PK 狀態
-        st.session_state.ai_industry_result = None # 重置產業 AI 分析結果
+        st.session_state.show_pk = False 
+        st.session_state.ai_industry_result = None 
     
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
@@ -379,10 +384,10 @@ with st.sidebar:
             else:
                 st.session_state.selected_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
                 st.session_state.topic_results = "LOADING"
+                st.session_state.ai_industry_result = None
                 st.rerun()
                 
     st.markdown("---")
-    # 🎯 PK 按鈕穩穩地放在左側邊欄
     st.markdown("### ⚔️ 產業同業 PK")
     if st.button("🤖 尋找同業競爭對手並 PK", use_container_width=True):
         if not st.session_state.api_key:
@@ -551,6 +556,7 @@ if curr_id:
                     if fetched_val is not None and fetched_val > 0:
                         st.session_state.ai_fetched_eps[curr_id] = fetched_val
                         st.success(f"抓取成功！AI 推估值約為 {fetched_val} 元")
+                        st.rerun()
                     else:
                         st.error("AI 暫時找不到具體數據，請手動輸入。")
                         
@@ -688,33 +694,28 @@ if curr_id:
                             prev_close_val = s_float(p_info.get("previousClose"))
                             prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
                             
-                            # 1 & 2. 新增：預估 EPS 雙年份對比 與 前瞻本益比 (Forward P/E)
-                            t_eps = s_float(p_info.get('trailingEps'))
-                            f_eps = s_float(p_info.get('forwardEps'))
-                            t_eps_str = f"{t_eps:.2f}" if t_eps is not None else "N/A"
-                            f_eps_str = f"{f_eps:.2f}" if f_eps is not None else "N/A"
-                            eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{f_eps_str}</span>"
+                            t_eps_p = s_float(p_info.get('trailingEps'))
+                            f_eps_p = s_float(p_info.get('forwardEps'))
+                            t_eps_p_str = f"{t_eps_p:.2f}" if t_eps_p is not None else "N/A"
+                            f_eps_p_str = f"{f_eps_p:.2f}" if f_eps_p is not None else "N/A"
+                            eps_display = f"{t_eps_p_str} / <span style='color:#00bfff;'>{f_eps_p_str}</span>"
                             
-                            if prev_close_val is not None and f_eps is not None and f_eps > 0:
-                                fpe_val = prev_close_val / f_eps
+                            if prev_close_val is not None and f_eps_p is not None and f_eps_p > 0:
+                                fpe_val = prev_close_val / f_eps_p
                                 fpe_fmt = f"<b style='color:#FFD700;'>{fpe_val:.1f}x</b>"
                             else:
                                 fpe_fmt = "<span style='color:gray;'>N/A</span>"
 
-                            # 3. 新增：目標價共識與潛在空間 (Upside %)
-                            target_mean = s_float(p_info.get('targetMeanPrice'))
-                            if target_mean is not None and prev_close_val is not None and prev_close_val > 0:
-                                upside = ((target_mean - prev_close_val) / prev_close_val) * 100
+                            target_mean_p = s_float(p_info.get('targetMeanPrice'))
+                            if target_mean_p is not None and prev_close_val is not None and prev_close_val > 0:
+                                upside = ((target_mean_p - prev_close_val) / prev_close_val) * 100
                                 if upside >= 25:
-                                    # 大於 25% 亮紅色提示潛力
                                     upside_fmt = f"<span style='color:#ff4d4d; font-weight:bold;'>+{upside:.1f}%</span>"
                                 elif upside > 0:
-                                    # 0~25% 綠色溫和提示
                                     upside_fmt = f"<span style='color:#00cc66;'>+{upside:.1f}%</span>"
                                 else:
-                                    # 小於 0% 灰色提示已反映預期
                                     upside_fmt = f"<span style='color:#aaa;'>{upside:.1f}%</span>"
-                                target_display = f"{target_mean:.1f} ({upside_fmt})"
+                                target_display = f"{target_mean_p:.1f} ({upside_fmt})"
                             else:
                                 target_display = "<span style='color:gray;'>無資料</span>"
                             
@@ -739,7 +740,6 @@ if curr_id:
                             })
                     
                     if compare_data:
-                        # 提亮整個表格的文字顏色 color: #e0e0e0;
                         table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem; color: #e0e0e0;'>"
                         table_html += "<tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>前瞻 P/E</th><th>預估 EPS (今/明)</th><th>目標價 (潛在空間)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
                         for d in compare_data:
@@ -782,24 +782,51 @@ if curr_id:
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：下方為客觀數據推導。您可點擊 AI 按鈕進行聯網深度檢索與買賣點分析。*</small>", unsafe_allow_html=True)
 
-        # 自動抓取左側邊欄目前選定的 AI 模型
+        # 彙整畫面上所有的數據，準備打包傳給 AI 參考
+        hi_val = s_float(info.get('targetHighPrice'))
+        me_val = s_float(info.get('targetMeanPrice'))
+        lo_val = s_float(info.get('targetLowPrice'))
+        hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
+        me_str = f"{me_val:.1f}" if me_val else "無資料"
+        lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
+        
+        context_str = f"""
+        【即時盤面與估值】
+        - 最新收盤價: {curr_p} 元
+        - 歷史本益比 (Trailing P/E): {pe_str}
+        - 前瞻本益比 (Forward P/E): {fpe_str}
+        - 股價淨值比 (P/B): {pb_str}
+        - 本益成長比 (PEG): {peg_str}
+        
+        【財務基本面動能】
+        - 預估 EPS: {active_f_eps} 元
+        - 營收年增率 (YoY): {rg_str}
+        - 毛利率: {gm_str}
+        - 營業利益率: {om_str}
+        - 股東權益報酬率 (ROE): {roe_str}
+        
+        【法人預估目標價】
+        - 最高目標價: {hi_str}
+        - 平均目標價: {me_str}
+        - 最低保底價: {lo_str}
+        """
+
         current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
         
-        if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將根據左側選擇的 AI 大腦進行深度檢索並提供買賣點建議"):
+        if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
             if not st.session_state.api_key:
                 st.warning("請先於左側選單輸入您的 API Key。")
             else:
-                with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並計算買賣點..."):
-                    st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, current_model)
+                with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
+                    st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
         
-        # 顯示 AI 分析結果 (帶有科技感邊框)
+        # 🚀 終極完美解法：改用 Streamlit 原生容器，自動適應淺色/深色主題，100% 完美解析 Markdown 語法
         if st.session_state.ai_industry_result:
-            st.markdown(f"""
-            <div style='background:#1a1a2e; padding:20px; border-radius:8px; border:1px solid #4a4a8a; margin-bottom:15px; line-height: 1.6;'>
-                <h5 style='color:#00bfff; margin-top:0; margin-bottom:15px;'>🤖 AI 產業透視與實戰策略</h5>
-                {st.session_state.ai_industry_result}
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown("### 🤖 AI 產業透視與實戰策略")
+                st.markdown(st.session_state.ai_industry_result)
+            st.markdown("<br>", unsafe_allow_html=True)
 
         hot_industries = ['Semiconductor', 'Software', 'Hardware', 'Electronic', 'IT Services', 'Communication', 'Technology']
         is_hot = any(hot in sector for hot in hot_industries) or any(hot in info.get('industry', '未知') for hot in hot_industries)
@@ -849,10 +876,6 @@ if curr_id:
         st.markdown("---")
 
         # 【7. 法人目標價】
-        hi = s_float(info.get('targetHighPrice'))
-        me = s_float(info.get('targetMeanPrice'))
-        lo = s_float(info.get('targetLowPrice'))
-        
         if hi is not None and me is not None and lo is not None:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
             v1, v2, v3 = st.columns(3)
@@ -1025,8 +1048,6 @@ if curr_id:
             </div>
         </div>
         """, unsafe_allow_html=True)
-
-        plot_df = hist.tail(120)
 
         fig = make_subplots(
             rows=2, cols=1,
