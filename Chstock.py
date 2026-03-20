@@ -38,9 +38,13 @@ if 'api_key' not in st.session_state:
     st.session_state.api_key = ""
 if 'ai_fetched_eps' not in st.session_state:
     st.session_state.ai_fetched_eps = {}
+# 新增：控制 PK 表格是否顯示的開關
+if 'show_pk' not in st.session_state:
+    st.session_state.show_pk = False
 
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
+    st.session_state.show_pk = False # 換股票時自動隱藏 PK 表格
 
 # --- AI 解析與連線函數 ---
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
@@ -249,12 +253,14 @@ with st.sidebar:
     stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
     if stock_input != st.session_state.selected_stock:
         st.session_state.selected_stock = stock_input
+        st.session_state.show_pk = False # 換股時重置 PK 狀態
     
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
     if st.button("🔍 掃描籌碼增持名單", use_container_width=True):
         st.session_state.show_whale = True
         st.session_state.topic_results = None
+        st.session_state.show_pk = False
         
     st.markdown("---")
     st.markdown("### 🧠 AI 聯網議題選股")
@@ -275,6 +281,15 @@ with st.sidebar:
             else:
                 st.session_state.selected_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
                 st.session_state.topic_results = "LOADING"
+                
+    st.markdown("---")
+    # 🎯 把 PK 按鈕移到左側邊欄，方便控制且不雜亂
+    st.markdown("### ⚔️ 產業同業 PK")
+    if st.button("🤖 尋找同業競爭對手並 PK", use_container_width=True):
+        if not st.session_state.api_key:
+            st.warning("請先輸入您的 API Key。")
+        else:
+            st.session_state.show_pk = True # 按下後才開啟顯示狀態
             
     st.markdown("---")
     if st.button("🔄 重新整理系統快取", use_container_width=True):
@@ -554,11 +569,11 @@ if curr_id:
         st.markdown(val_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【4. 產業橫向對比 PK】(現在它穩穩地在 4 宮格的下方了！)
-        st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
-        st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較，助您一眼找出族群領頭羊或低估標的。*</small>", unsafe_allow_html=True)
+        # 【4. 產業橫向對比 PK 表格】(只有在左側點下按鈕後才會顯示)
+        if st.session_state.show_pk:
+            st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
+            st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較，助您一眼找出族群領頭羊或低估標的。*</small>", unsafe_allow_html=True)
 
-        if st.button("🤖 AI 尋找同業競爭對手並 PK", disabled=not st.session_state.api_key, help="需在左側選單輸入 API Key"):
             with st.spinner("AI 正在深度檢索產業鏈與競爭對手，並同步抓取最新財報數據..."):
                 peers = get_peers_from_ai(c_name, curr_id, st.session_state.api_key)
                 if peers:
@@ -606,7 +621,7 @@ if curr_id:
                         st.markdown(table_html, unsafe_allow_html=True)
                 else:
                     st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
-        st.markdown("---")
+            st.markdown("---")
 
         # 【5. 月營收與 YoY 圖表】
         df_rev = get_monthly_revenue(curr_id)
@@ -626,21 +641,7 @@ if curr_id:
         else:
             st.warning("⚠️ 目前暫時無法連線至公開庫取得月營收數據。")
 
-        # 【6. 法人目標價】
-        hi, me, lo = info.get('targetHighPrice'), info.get('targetMeanPrice'), info.get('targetLowPrice')
-        if hi and me and lo:
-            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-            v1, v2, v3 = st.columns(3)
-            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi:.1f}</b></div>", unsafe_allow_html=True)
-            upside = ((me / curr_p) - 1) * 100 if curr_p else 0
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
-            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo:.1f}</b></div>", unsafe_allow_html=True)
-        elif hi:
-             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-             st.info(f"法人最高預期：**{hi:.1f}**")
-        st.markdown("---")
-
-        # 【7. 產業前景與競爭優勢評估】
+        # 【6. 產業前景與競爭優勢評估】
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：此區塊非使用 AI，而是根據全球產業分類與財報毛利率、營益率特徵，進行客觀的競爭力推導。*</small>", unsafe_allow_html=True)
 
@@ -691,7 +692,7 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【8. 籌碼面與股權結構分析】
+        # 【7. 籌碼面與股權結構分析】
         st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
         insider_pct = info.get('heldPercentInsiders')
         inst_pct = info.get('heldPercentInstitutions')
@@ -743,7 +744,7 @@ if curr_id:
         st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【9. 專業技術線圖與量化型態分析】
+        # 【8. 專業技術線圖與量化型態分析】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         hist['MA5'] = hist['Close'].rolling(5).mean()
         hist['MA10'] = hist['Close'].rolling(10).mean()
