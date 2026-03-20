@@ -911,6 +911,10 @@ if curr_id:
         st.markdown("---")
 
         # 【7. 法人目標價】
+        hi = s_float(info.get('targetHighPrice'))
+        me = s_float(info.get('targetMeanPrice'))
+        lo = s_float(info.get('targetLowPrice'))
+        
         if hi is not None and me is not None and lo is not None:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
             v1, v2, v3 = st.columns(3)
