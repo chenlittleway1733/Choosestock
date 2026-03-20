@@ -162,7 +162,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
     except: pass
     return []
 
-# 🚀 新增：深度產業透視與買賣點推演函數 (帶有 Context 參數)
+# 🚀 升級版：強制輸出 HTML 以解決深灰色字體與 Markdown 轉譯問題
 def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰"
     api_key = api_key.strip()
@@ -175,10 +175,11 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
     
     【重要排版要求】：
     - 標題與重點請使用 Emoji 點綴，增加易讀性。
-    - 請直接輸出 Markdown 格式，不要包含 ```markdown 標籤。"""
+    - 請一律使用 HTML 標籤 (如 <h3>, <h4>, <p>, <ul>, <li>, <strong>, <b>, <br>) 進行優美排版。
+    - 絕對不要使用任何 Markdown 語法 (如 ##, **, -, * 等)，所有排版必須是純 HTML。"""
 
     headers = {"Content-Type": "application/json"}
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={api_key}"
     
     prompt_text = f"請深度分析台股 {stock_name} ({stock_id}) 的產業前景、競爭優勢及買賣點策略。\n\n【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_data}"
     
@@ -193,6 +194,8 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         if response.status_code == 200: 
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            # 清除可能多餘的 html 程式碼塊標籤
+            content = re.sub(r'```html\n?|```', '', content).strip()
             return content
         else:
             err_msg = response.json().get('error', {}).get('message', response.text)
@@ -239,7 +242,7 @@ def get_monthly_revenue(stock_id):
 def get_fallback_info(stock_id):
     info = {}
     try:
-        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        url = f"[https://tw.stock.yahoo.com/quote/](https://tw.stock.yahoo.com/quote/){stock_id}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
@@ -817,18 +820,35 @@ if curr_id:
                 with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
                     st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
         
-        # 顯示 AI 分析結果 (加入專屬 CSS 強制覆蓋所有 Markdown 元素的字體顏色為純白)
+        # 顯示 AI 分析結果 (強制使用純白 CSS，並要求 AI 輸出 HTML 以解決深灰黑字問題)
         if st.session_state.ai_industry_result:
             st.markdown(f"""
             <style>
-            .ai-analysis-box p, .ai-analysis-box li, .ai-analysis-box h1, .ai-analysis-box h2, .ai-analysis-box h3, .ai-analysis-box h4, .ai-analysis-box strong {{
+            .ai-analysis-box {{
+                background:#1a1a2e; 
+                padding:25px; 
+                border-radius:10px; 
+                border:1px solid #4a4a8a; 
+                margin-bottom:20px; 
+                box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            }}
+            .ai-analysis-box p, .ai-analysis-box li, .ai-analysis-box h1, .ai-analysis-box h2, .ai-analysis-box h3, .ai-analysis-box h4, .ai-analysis-box h5, .ai-analysis-box strong, .ai-analysis-box b, .ai-analysis-box span {{
                 color: #ffffff !important;
             }}
+            .ai-analysis-box h3, .ai-analysis-box h4 {{
+                color: #00bfff !important;
+                margin-top: 15px;
+                margin-bottom: 10px;
+                border-bottom: 1px solid #333366;
+                padding-bottom: 5px;
+            }}
+            .ai-analysis-box ul {{ margin-bottom: 15px; }}
+            .ai-analysis-box li {{ margin-bottom: 8px; line-height: 1.6; }}
             </style>
-            <div class="ai-analysis-box" style='background:#1a1a2e; padding:20px; border-radius:8px; border:1px solid #4a4a8a; margin-bottom:15px;'>
-                <h5 style='color:#00bfff; margin-top:0; margin-bottom:15px;'>🤖 AI 產業透視與實戰策略</h5>
-                <div style='line-height: 1.6;'>
-                    \n\n{st.session_state.ai_industry_result}\n\n
+            <div class="ai-analysis-box">
+                <h2 style='color:#00bfff !important; margin-top:0; margin-bottom:20px; border-bottom: 2px solid #4a4a8a; padding-bottom: 10px;'>🤖 AI 產業透視與實戰策略</h2>
+                <div style='line-height: 1.8; font-size: 1.1rem;'>
+                    {st.session_state.ai_industry_result}
                 </div>
             </div>
             """, unsafe_allow_html=True)
