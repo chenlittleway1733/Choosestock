@@ -42,11 +42,13 @@ if 'ai_fetched_eps' not in st.session_state:
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
 
-# --- AI 解析與連線函數 ---
+# --- AI 解析與連線函數 (極致省流版：強制全局僅使用 gemini-2.5-flash) ---
 def get_ai_analysis_final(topic, api_key):
     if not api_key: return "ERROR: 未輸入金鑰", []
     api_key = api_key.strip()
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-8b", "gemini-1.5-flash"]
+    
+    # 拔除吃額度的迴圈，全局強制只使用免費額度最高、速度最快的 2.5-flash
+    model = "gemini-2.5-flash"
     
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
     必須嚴格回傳 JSON 格式：
@@ -59,40 +61,27 @@ def get_ai_analysis_final(topic, api_key):
     確保代號為純數字。直接輸出 JSON 字串，不要有 ```json 標籤。"""
 
     headers = {"Content-Type": "application/json"}
-    all_errors = []
+    
+    protocol = "https://"
+    api_host = "generativelanguage.googleapis.com"
+    url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
+    
+    payload_search = {
+        "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
 
-    for model in models_to_try:
-        protocol = "https://"
-        api_host = "generativelanguage.googleapis.com"
-        url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
-        
-        payload_search = {
-            "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
-            "systemInstruction": {"parts": [{"text": system_prompt}]},
-            "tools": [{"google_search": {}}],
-            "generationConfig": {"responseMimeType": "application/json"}
-        }
-        payload_basic = {
-            "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
-            "systemInstruction": {"parts": [{"text": system_prompt}]},
-            "generationConfig": {"responseMimeType": "application/json"}
-        }
-
-        try:
-            response = requests.post(url, headers=headers, json=payload_search, timeout=20)
-            if response.status_code == 200: return parse_ai_response(response.json())
-                
-            res_basic = requests.post(url, headers=headers, json=payload_basic, timeout=20)
-            if res_basic.status_code == 200: return parse_ai_response(res_basic.json())
-            
-            err_msg = res_basic.json().get('error', {}).get('message', res_basic.text)
-            all_errors.append(f"【{model}】: {err_msg}")
-        except Exception as e:
-            all_errors.append(f"【{model}】連線異常: {str(e)}")
-            continue
-            
-    error_details = "\n\n".join(all_errors)
-    return f"⚠️ 無法連線至 AI，請確認您的 Google 帳號 API 權限。\n\n詳細錯誤診斷：\n{error_details}", []
+    try:
+        response = requests.post(url, headers=headers, json=payload_search, timeout=20)
+        if response.status_code == 200: 
+            return parse_ai_response(response.json())
+        else:
+            err_msg = response.json().get('error', {}).get('message', response.text)
+            return f"⚠️ API 連線失敗 (可能達免費次數上限): {err_msg}", []
+    except Exception as e:
+        return f"⚠️ 連線異常: {str(e)}", []
 
 def parse_ai_response(res_json):
     content = ""
@@ -111,9 +100,12 @@ def parse_ai_response(res_json):
     except Exception as e:
         return f"JSON 解析失敗。AI 原文片段: {content[:100]}...", []
 
+# --- 🤖 專屬 AI 聯網抓取法人預估 EPS 函數 ---
 def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
+    
+    # 確保抓取 EPS 功能也只用最輕量的模型，不浪費額度
     model = "gemini-2.5-flash"
     protocol = "https://"
     api_host = "generativelanguage.googleapis.com"
@@ -270,7 +262,10 @@ st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
 if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
-        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key)
+        # 讀取剛剛在側邊欄選擇的模型，預設為 flash
+        model_to_use = st.session_state.get('selected_model', 'gemini-2.5-flash')
+        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, model_to_use)
+        
         if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
             st.session_state.show_whale = False
