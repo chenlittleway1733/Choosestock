@@ -337,6 +337,7 @@ if st.session_state.show_whale:
         with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
+# ⚠️ 這裡就是唯一且乾淨的主執行區塊，絕無重複！
 curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
@@ -517,7 +518,7 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
-        # 3.5 版面大挪移：產業橫向對比 (同業估值與利潤率 PK) 移至此處！
+        # 3.5 🎯 就是這裡！產業橫向對比 (同業估值與利潤率 PK) 
         st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
         st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較，助您一眼找出族群領頭羊或低估標的。*</small>", unsafe_allow_html=True)
 
