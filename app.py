@@ -816,7 +816,6 @@ if curr_id:
             fig_rev.add_trace(go.Bar(x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
             fig_rev.add_trace(go.Scatter(x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
             
-            # 🚀 修正：將圖例移至左上方、增加 margin、強制 X 軸格式
             fig_rev.update_layout(
                 height=400, template="plotly_dark", hovermode="x unified", 
                 margin=dict(l=10, r=10, t=50, b=10), 
@@ -877,17 +876,14 @@ if curr_id:
         if st.session_state.ai_industry_result:
             st.markdown("<br>", unsafe_allow_html=True)
             with st.container(border=True):
-                # 佈局：標題在左，提示在右
                 col1, col2 = st.columns([0.7, 0.3])
                 with col1:
                     st.markdown("### 🤖 AI 產業透視與實戰策略")
                 with col2:
                     st.markdown("<div style='text-align:right; margin-top:20px;'><small style='color:#00bfff;'>💡 往下捲動有【一鍵複製區塊】</small></div>", unsafe_allow_html=True)
                 
-                # 顯示美美的排版報告
                 st.markdown(st.session_state.ai_industry_result)
                 
-                # 🚀 新增：一鍵複製的純文字區塊
                 st.markdown("---")
                 st.markdown("##### 📋 【純文字複製區】")
                 st.markdown("<small style='color:gray;'>*將游標移至下方黑框內，點擊右上角的「📋」圖示，即可將報告全文複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
@@ -1140,7 +1136,16 @@ if curr_id:
         fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
-        fig.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), hovermode="x unified")
+        
+        # 🚀 修正：將 K 線圖的圖例也移到左上角，並加大上方空間 (t=50) 避免跟右邊工具列疊字
+        fig.update_layout(
+            height=650, 
+            template="plotly_dark", 
+            xaxis_rangeslider_visible=False, 
+            margin=dict(l=10, r=10, t=50, b=10), 
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), 
+            hovermode="x unified"
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確。")
