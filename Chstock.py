@@ -42,13 +42,12 @@ if 'ai_fetched_eps' not in st.session_state:
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
 
-# --- AI 解析與連線函數 (極致省流版：強制全局僅使用 gemini-2.5-flash) ---
-def get_ai_analysis_final(topic, api_key):
+# --- AI 解析與連線函數 (支援切換 Flash / Pro 模型) ---
+def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
     api_key = api_key.strip()
     
-    # 拔除吃額度的迴圈，全局強制只使用免費額度最高、速度最快的 2.5-flash
-    model = "gemini-2.5-flash"
+    model = model_name
     
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
     必須嚴格回傳 JSON 格式：
@@ -271,6 +270,12 @@ with st.sidebar:
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
+    ai_model_option = st.radio(
+        "選擇 AI 推演大腦", 
+        ["Gemini 2.5 Flash (快速 / 省額度)", "Gemini 2.5 Pro (深度推演 / 耗額度)"],
+        help="Pro 模型邏輯更深層，但免費版 API 每分鐘僅能呼叫 2 次，請斟酌使用以免耗盡額度。"
+    )
+    
     st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key, help="貼入您從 Google AI Studio 複製的金鑰。")
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
@@ -278,6 +283,7 @@ with st.sidebar:
             if not st.session_state.api_key:
                 st.warning("請先輸入您的 API Key。")
             else:
+                st.session_state.selected_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
                 st.session_state.topic_results = "LOADING"
             
     st.markdown("---")
@@ -292,9 +298,8 @@ st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
 if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
-        # 讀取剛剛在側邊欄選擇的模型，預設為 flash
         model_to_use = st.session_state.get('selected_model', 'gemini-2.5-flash')
-        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key)
+        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, model_to_use)
         
         if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
@@ -434,7 +439,7 @@ if curr_id:
                         st.session_state.ai_fetched_eps[curr_id] = fetched_val
                         st.success(f"抓取成功！AI 推估值約為 {fetched_val} 元")
                     else:
-                        st.error("AI 暫時找不到具體數據，請手手動輸入。")
+                        st.error("AI 暫時找不到具體數據，請手動輸入。")
                         
         with col_eps2:
             default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
