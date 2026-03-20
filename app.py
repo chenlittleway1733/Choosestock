@@ -180,7 +180,11 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
     - 絕對不要輸出 HTML 標籤，直接輸出 Markdown 內容即可。"""
 
     headers = {"Content-Type": "application/json"}
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={api_key}"
+    
+    # 🛡️ 終極防護：將網址拆解，絕對不讓編輯器污染它！
+    protocol = "https://"
+    api_host = "generativelanguage.googleapis.com"
+    url = f"{protocol}{api_host}/v1beta/models/{model_name}:generateContent?key={api_key}"
     
     prompt_text = f"請深度分析台股 {stock_name} ({stock_id}) 的產業前景、競爭優勢及買賣點策略。\n\n【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_data}"
     
@@ -242,7 +246,11 @@ def get_monthly_revenue(stock_id):
 def get_fallback_info(stock_id):
     info = {}
     try:
-        url = f"[https://tw.stock.yahoo.com/quote/](https://tw.stock.yahoo.com/quote/){stock_id}"
+        # 🛡️ 終極防護：將網址拆解，避免被自動轉為 Markdown 超連結
+        protocol = "https://"
+        host_name = "tw.stock.yahoo.com"
+        url = f"{protocol}{host_name}/quote/{stock_id}"
+        
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
@@ -848,7 +856,6 @@ if curr_id:
                 with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
                     st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
         
-        # 🚀 終極完美解法：改用 Streamlit 原生容器，自動適應淺色/深色主題，100% 完美解析 Markdown 語法
         if st.session_state.ai_industry_result:
             st.markdown("<br>", unsafe_allow_html=True)
             with st.container(border=True):
@@ -904,10 +911,6 @@ if curr_id:
         st.markdown("---")
 
         # 【7. 法人目標價】
-        hi = s_float(info.get('targetHighPrice'))
-        me = s_float(info.get('targetMeanPrice'))
-        lo = s_float(info.get('targetLowPrice'))
-        
         if hi is not None and me is not None and lo is not None:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
             v1, v2, v3 = st.columns(3)
@@ -975,7 +978,6 @@ if curr_id:
         # 【9. 專業技術線圖與量化型態分析】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         
-        # 確保所有需要的欄位都存在，避免崩潰
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
             if col not in hist.columns:
                 hist[col] = 0.0
@@ -989,7 +991,6 @@ if curr_id:
 
         h9, l9 = hist['High'].rolling(9).max(), hist['Low'].rolling(9).min()
         
-        # 避免除以 0 的保護機制
         h9_l9_diff = h9 - l9
         h9_l9_diff[h9_l9_diff == 0] = 1e-9 
         rsv = (hist['Close'] - l9) / h9_l9_diff * 100
@@ -1085,55 +1086,25 @@ if curr_id:
 
         plot_df = hist.tail(120)
 
-        fig = make_subplots(
-            rows=2, cols=1, 
-            shared_xaxes=True, 
-            vertical_spacing=0.03, 
-            row_heights=[0.7, 0.3], 
-            specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
-        )
-
-        fig.add_trace(go.Candlestick(
-            x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'],
-            name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'
-        ), row=1, col=1, secondary_y=False)
-
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3], specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
+        fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5(周線)', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10(雙周)', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20(月線)', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60(季線)', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA120'], mode='lines', name='MA120(半年線)', line=dict(color='#ff69b4', width=1.5)), row=1, col=1, secondary_y=False)
-
+        
         vol_colors = ['#ff4d4d' if getattr(row, 'Close', 0) >= getattr(row, 'Open', 0) else '#00cc66' for _, row in plot_df.iterrows()]
-        fig.add_trace(go.Bar(
-            x=plot_df.index, y=plot_df['Volume']/1000,
-            marker_color=vol_colors, name='成交量(張)', opacity=0.5
-        ), row=1, col=1, secondary_y=True)
-
+        fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
 
         fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
         max_vol = plot_df['Volume'].max() / 1000 if not plot_df['Volume'].empty else 100
         fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
-        
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
-
-        fig.update_xaxes(
-            rangebreaks=[dict(bounds=["sat", "mon"])],
-            tickformat="%m/%d",
-            showgrid=True, gridcolor='#333',
-            mirror=True, showline=True, linecolor='#555'
-        )
-
-        fig.update_layout(
-            height=650,
-            template="plotly_dark",
-            xaxis_rangeslider_visible=False,
-            margin=dict(l=10, r=10, t=10, b=10),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            hovermode="x unified"
-        )
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
+        fig.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確。")
