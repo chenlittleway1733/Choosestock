@@ -616,7 +616,7 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 7. 估值與價格合理性分析 (全盤吃上方的全域變數)
+        # 7. 估值與價格合理性分析
         st.markdown("#### ⚖️ 估值與價格合理性分析", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：各項前瞻估值指標已自動套用上方設定之【獲利預估基準】進行重算。*</small>", unsafe_allow_html=True)
 
