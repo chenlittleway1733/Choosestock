@@ -138,10 +138,10 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
     url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
     
     system_prompt = """你是一位精準的台股產業鏈分析師。
-    請列出與目標公司「核心業務最直接競爭、屬於同族群」的 2 到 3 家「台股上市櫃公司」股票代號。
+    請列出與目標公司「核心業務最直接競爭、屬於同族群」的 3 到 5 家「台股上市櫃公司」股票代號。
     【重要規定】：
     1. 必須是競爭對手或同族群。
-    2. 請嚴格只回傳一個 JSON 陣列格式，包含純數字代號字串，例如：["2383", "3044", "6274"]。
+    2. 請嚴格只回傳一個 JSON 陣列格式，包含純數字代號字串，例如：["2383", "3044", "6274", "6153"]。
     3. 絕對不要輸出任何其他文字、不要加上 markdown 標記。"""
     
     payload = {
@@ -155,7 +155,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
             clean_text = re.sub(r'```json\n?|```', '', text).strip()
             peers = json.loads(clean_text)
             if isinstance(peers, list):
-                return [str(p) for p in peers][:3]
+                return [str(p) for p in peers][:4] # 將回傳數量放寬到最多抓 4 家
     except: pass
     return []
 
@@ -199,7 +199,7 @@ def get_monthly_revenue(stock_id):
 def get_fallback_info(stock_id):
     info = {}
     try:
-        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        url = f"[https://tw.stock.yahoo.com/quote/](https://tw.stock.yahoo.com/quote/){stock_id}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
@@ -670,12 +670,14 @@ if curr_id:
                             })
                     
                     if compare_data:
-                        table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem;'>"
+                        # 提亮整個表格的文字顏色 color: #e0e0e0;
+                        table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem; color: #e0e0e0;'>"
                         table_html += "<tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>本益比 (P/E)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
                         for d in compare_data:
                             row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" 
                             table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'>"
-                            table_html += f"<td style='padding:12px;'><b>{d['代號']}</b></td>"
+                            # 強制將公司名稱設定為純白色 #ffffff，不再灰暗
+                            table_html += f"<td style='padding:12px; color:#ffffff;'><b>{d['代號']}</b></td>"
                             table_html += f"<td>{d['股價']}</td>"
                             table_html += f"<td style='color:#FFD700;'><b>{d['本益比 (P/E)']}</b></td>"
                             table_html += f"<td>{d['毛利率']}</td>"
