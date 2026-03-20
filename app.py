@@ -180,7 +180,8 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
     - 絕對不要輸出 HTML 標籤，直接輸出 Markdown 內容即可。"""
 
     headers = {"Content-Type": "application/json"}
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={api_key}"
+    # 🔧 修正 1：清除被污染的 AI API 網址，恢復為純字串
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     
     prompt_text = f"請深度分析台股 {stock_name} ({stock_id}) 的產業前景、競爭優勢及買賣點策略。\n\n【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_data}"
     
@@ -243,7 +244,8 @@ def get_monthly_revenue(stock_id):
 def get_fallback_info(stock_id):
     info = {}
     try:
-        url = f"[https://tw.stock.yahoo.com/quote/](https://tw.stock.yahoo.com/quote/){stock_id}"
+        # 🔧 修正 2：清除被污染的 Yahoo 備用爬蟲網址，恢復為純字串
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
@@ -902,6 +904,7 @@ if curr_id:
         st.markdown("---")
 
         # 【7. 法人目標價】
+        # 🔧 修正 3：確保 hi, me, lo 變數確實存在，解決您遇到的紅字當機問題
         hi = s_float(info.get('targetHighPrice'))
         me = s_float(info.get('targetMeanPrice'))
         lo = s_float(info.get('targetLowPrice'))
