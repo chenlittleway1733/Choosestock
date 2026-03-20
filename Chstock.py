@@ -123,7 +123,8 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     except: pass
     return None
 
-# --- 🤖 新增：AI 動態定位同業競爭對手函數 ---
+# --- 🤖 新增：AI 動態定位同業競爭對手函數 (已加入 Cache 省流機制) ---
+@st.cache_data(ttl=86400)
 def get_peers_from_ai(stock_name, stock_id, api_key):
     if not api_key: return []
     api_key = api_key.strip()
@@ -516,6 +517,60 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
+        # 3.5 版面大挪移：產業橫向對比 (同業估值與利潤率 PK) 移至此處！
+        st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
+        st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較，助您一眼找出族群領頭羊或低估標的。*</small>", unsafe_allow_html=True)
+
+        if st.button("🤖 AI 尋找同業競爭對手並 PK", disabled=not st.session_state.api_key, help="需在左側選單輸入 API Key"):
+            with st.spinner("AI 正在深度檢索產業鏈與競爭對手，並同步抓取最新財報數據..."):
+                peers = get_peers_from_ai(c_name, curr_id, st.session_state.api_key)
+                if peers:
+                    compare_list = [curr_id] + [p for p in peers if p != curr_id]
+                    compare_data = []
+                    for code in compare_list:
+                        _, p_info = get_stock_data(code)
+                        p_name = get_chinese_name(code) or code
+                        if p_info:
+                            pe_val = p_info.get("trailingPE")
+                            pe_fmt = f"{pe_val:.2f}x" if pe_val else "N/A"
+                            
+                            gm_val = p_info.get('grossMargins')
+                            gm_fmt = f"{gm_val * 100:.2f}%" if gm_val else "N/A"
+                            
+                            om_val = p_info.get('operatingMargins')
+                            om_fmt = f"{om_val * 100:.2f}%" if om_val else "N/A"
+                            
+                            roe_val = p_info.get('returnOnEquity')
+                            roe_fmt = f"{roe_val * 100:.2f}%" if roe_val else "N/A"
+                            
+                            compare_data.append({
+                                "代號": f"{p_name} ({code})",
+                                "股價": p_info.get("previousClose", "N/A"),
+                                "本益比 (P/E)": pe_fmt,
+                                "毛利率": gm_fmt,
+                                "營益率": om_fmt,
+                                "ROE": roe_fmt
+                            })
+                    
+                    if compare_data:
+                        table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem;'>"
+                        table_html += "<tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>本益比 (P/E)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
+                        for d in compare_data:
+                            row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" # 藍色突顯當前查詢的股票
+                            table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'>"
+                            table_html += f"<td style='padding:12px;'><b>{d['代號']}</b></td>"
+                            table_html += f"<td>{d['股價']}</td>"
+                            table_html += f"<td style='color:#FFD700;'><b>{d['本益比 (P/E)']}</b></td>"
+                            table_html += f"<td>{d['毛利率']}</td>"
+                            table_html += f"<td>{d['營益率']}</td>"
+                            table_html += f"<td style='color:#00bfff;'><b>{d['ROE']}</b></td>"
+                            table_html += "</tr>"
+                        table_html += "</table>"
+                        st.markdown(table_html, unsafe_allow_html=True)
+                else:
+                    st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
+        st.markdown("---")
+
         # 4. 真實月營收與 YoY 雙軸圖表
         df_rev = get_monthly_revenue(curr_id)
         if df_rev is not None and not df_rev.empty:
@@ -669,60 +724,6 @@ if curr_id:
             </div>
         </div>
         """, unsafe_allow_html=True)
-        st.markdown("---")
-
-        # 7.5 新增：產業橫向對比 (同業估值與利潤率 PK)
-        st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
-        st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務最相近的競爭對手，並抓取最新財報數據進行橫向比較，助您一眼找出族群領頭羊或低估標的。*</small>", unsafe_allow_html=True)
-
-        if st.button("🤖 AI 尋找同業競爭對手並 PK", disabled=not st.session_state.api_key, help="需在左側選單輸入 API Key"):
-            with st.spinner("AI 正在深度檢索產業鏈與競爭對手，並同步抓取最新財報數據..."):
-                peers = get_peers_from_ai(c_name, curr_id, st.session_state.api_key)
-                if peers:
-                    compare_list = [curr_id] + [p for p in peers if p != curr_id]
-                    compare_data = []
-                    for code in compare_list:
-                        _, p_info = get_stock_data(code)
-                        p_name = get_chinese_name(code) or code
-                        if p_info:
-                            pe_val = p_info.get("trailingPE")
-                            pe_fmt = f"{pe_val:.2f}x" if pe_val else "N/A"
-                            
-                            gm_val = p_info.get('grossMargins')
-                            gm_fmt = f"{gm_val * 100:.2f}%" if gm_val else "N/A"
-                            
-                            om_val = p_info.get('operatingMargins')
-                            om_fmt = f"{om_val * 100:.2f}%" if om_val else "N/A"
-                            
-                            roe_val = p_info.get('returnOnEquity')
-                            roe_fmt = f"{roe_val * 100:.2f}%" if roe_val else "N/A"
-                            
-                            compare_data.append({
-                                "代號": f"{p_name} ({code})",
-                                "股價": p_info.get("previousClose", "N/A"),
-                                "本益比 (P/E)": pe_fmt,
-                                "毛利率": gm_fmt,
-                                "營益率": om_fmt,
-                                "ROE": roe_fmt
-                            })
-                    
-                    if compare_data:
-                        table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem;'>"
-                        table_html += "<tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>本益比 (P/E)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
-                        for d in compare_data:
-                            row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" # 藍色突顯當前查詢的股票
-                            table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'>"
-                            table_html += f"<td style='padding:12px;'><b>{d['代號']}</b></td>"
-                            table_html += f"<td>{d['股價']}</td>"
-                            table_html += f"<td style='color:#FFD700;'><b>{d['本益比 (P/E)']}</b></td>"
-                            table_html += f"<td>{d['毛利率']}</td>"
-                            table_html += f"<td>{d['營益率']}</td>"
-                            table_html += f"<td style='color:#00bfff;'><b>{d['ROE']}</b></td>"
-                            table_html += "</tr>"
-                        table_html += "</table>"
-                        st.markdown(table_html, unsafe_allow_html=True)
-                else:
-                    st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
         st.markdown("---")
 
         # 8. 籌碼面與股權結構分析
