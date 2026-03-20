@@ -105,7 +105,6 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
     
-    # 確保抓取 EPS 功能也只用最輕量的模型，不浪費額度
     model = "gemini-2.5-flash"
     protocol = "https://"
     api_host = "generativelanguage.googleapis.com"
@@ -125,6 +124,38 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     except: pass
     return None
 
+# --- 🤖 新增：AI 動態定位同業競爭對手函數 ---
+def get_peers_from_ai(stock_name, stock_id, api_key):
+    if not api_key: return []
+    api_key = api_key.strip()
+    
+    model = "gemini-2.5-flash" # 使用速度快的 flash 即可勝任分類任務
+    protocol = "https://"
+    api_host = "generativelanguage.googleapis.com"
+    url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
+    
+    system_prompt = """你是一位精準的台股產業鏈分析師。
+    請列出與目標公司「核心業務最直接競爭、屬於同族群」的 2 到 3 家「台股上市櫃公司」股票代號。
+    【重要規定】：
+    1. 必須是競爭對手或同族群(例如：金像電的對手是台光電、健鼎、聯茂等)。
+    2. 請嚴格只回傳一個 JSON 陣列格式，包含純數字代號字串，例如：["2383", "3044", "6274"]。
+    3. 絕對不要輸出任何其他文字、不要加上 markdown 標記。"""
+    
+    payload = {
+        "contents": [{"parts": [{"text": f"請尋找 {stock_name} ({stock_id}) 的台股同業競爭對手"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+    }
+    try:
+        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
+        if res.status_code == 200:
+            text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            clean_text = re.sub(r'```json\n?|```', '', text).strip()
+            peers = json.loads(clean_text)
+            if isinstance(peers, list):
+                return [str(p) for p in peers][:3] # 確保最多取 3 家
+    except: pass
+    return []
+
 # --- 📊 公開 API 獲取「月營收」與「YoY」 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
@@ -133,7 +164,6 @@ def get_monthly_revenue(stock_id):
         start_year = today.year - 2
         start_str = f"{start_year}-{today.month:02d}-01"
         
-        # 終極防禦：打斷網址結構，防止編輯器自動轉成超連結破壞程式碼
         protocol = "https://"
         host_name = "api.finmindtrade.com"
         path = "/api/v4/data"
@@ -264,7 +294,7 @@ if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
         # 讀取剛剛在側邊欄選擇的模型，預設為 flash
         model_to_use = st.session_state.get('selected_model', 'gemini-2.5-flash')
-        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, model_to_use)
+        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key)
         
         if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
@@ -378,7 +408,7 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # 3. 財務基本面與預估基準設定 (模組大搬風，變為全域核心)
+        # 3. 財務基本面與預估基準設定
         st.markdown("#### 💼 財務基本面與獲利基準微調")
         pb_ratio = info.get('priceToBook')
         pe_ratio = info.get('trailingPE')
@@ -404,7 +434,7 @@ if curr_id:
                         st.session_state.ai_fetched_eps[curr_id] = fetched_val
                         st.success(f"抓取成功！AI 推估值約為 {fetched_val} 元")
                     else:
-                        st.error("AI 暫時找不到具體數據，請手動輸入。")
+                        st.error("AI 暫時找不到具體數據，請手手動輸入。")
                         
         with col_eps2:
             default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
@@ -412,11 +442,9 @@ if curr_id:
                 default_eps_val = float(sys_f_eps) if sys_f_eps is not None else (float(t_eps) if t_eps else 1.0)
             custom_eps = st.number_input("輸入國內法人共識 EPS (元)", min_value=0.01, value=default_eps_val, step=0.5, disabled=not use_custom_eps)
 
-        # 動態全域變數計算
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
-            # 若啟用自訂 EPS，連帶自動推算「未來獲利成長率 YoY」
             if t_eps and t_eps > 0 and pe_ratio:
                 custom_growth = (active_f_eps - t_eps) / t_eps
                 peg_ratio = pe_ratio / (custom_growth * 100) if custom_growth > 0 else None
@@ -448,7 +476,6 @@ if curr_id:
         
         t_eps_str = f"{t_eps:.2f}" if t_eps is not None else "N/A"
         f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
-        # 重點連動：當開啟開關時，以醒目藍色標示 6 宮格內的預估 EPS
         f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {f_eps_str}"
 
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe and roe >= 0.15 else ""
@@ -637,6 +664,60 @@ if curr_id:
             </div>
         </div>
         """, unsafe_allow_html=True)
+        st.markdown("---")
+
+        # 7.5 新增：產業橫向對比 (同業估值與利潤率 PK)
+        st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
+        st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務最相近的競爭對手，並抓取最新財報數據進行橫向比較，助您一眼找出族群領頭羊或低估標的。*</small>", unsafe_allow_html=True)
+
+        if st.button("🤖 AI 尋找同業競爭對手並 PK", disabled=not st.session_state.api_key, help="需在左側選單輸入 API Key"):
+            with st.spinner("AI 正在深度檢索產業鏈與競爭對手，並同步抓取最新財報數據..."):
+                peers = get_peers_from_ai(c_name, curr_id, st.session_state.api_key)
+                if peers:
+                    compare_list = [curr_id] + [p for p in peers if p != curr_id]
+                    compare_data = []
+                    for code in compare_list:
+                        _, p_info = get_stock_data(code)
+                        p_name = get_chinese_name(code) or code
+                        if p_info:
+                            pe_val = p_info.get("trailingPE")
+                            pe_fmt = f"{pe_val:.2f}x" if pe_val else "N/A"
+                            
+                            gm_val = p_info.get('grossMargins')
+                            gm_fmt = f"{gm_val * 100:.2f}%" if gm_val else "N/A"
+                            
+                            om_val = p_info.get('operatingMargins')
+                            om_fmt = f"{om_val * 100:.2f}%" if om_val else "N/A"
+                            
+                            roe_val = p_info.get('returnOnEquity')
+                            roe_fmt = f"{roe_val * 100:.2f}%" if roe_val else "N/A"
+                            
+                            compare_data.append({
+                                "代號": f"{p_name} ({code})",
+                                "股價": p_info.get("previousClose", "N/A"),
+                                "本益比 (P/E)": pe_fmt,
+                                "毛利率": gm_fmt,
+                                "營益率": om_fmt,
+                                "ROE": roe_fmt
+                            })
+                    
+                    if compare_data:
+                        table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem;'>"
+                        table_html += "<tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>本益比 (P/E)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
+                        for d in compare_data:
+                            row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" # 藍色突顯當前查詢的股票
+                            table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'>"
+                            table_html += f"<td style='padding:12px;'><b>{d['代號']}</b></td>"
+                            table_html += f"<td>{d['股價']}</td>"
+                            table_html += f"<td style='color:#FFD700;'><b>{d['本益比 (P/E)']}</b></td>"
+                            table_html += f"<td>{d['毛利率']}</td>"
+                            table_html += f"<td>{d['營益率']}</td>"
+                            table_html += f"<td style='color:#00bfff;'><b>{d['ROE']}</b></td>"
+                            table_html += "</tr>"
+                        table_html += "</table>"
+                        st.markdown(table_html, unsafe_allow_html=True)
+                else:
+                    st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
         st.markdown("---")
 
         # 8. 籌碼面與股權結構分析
