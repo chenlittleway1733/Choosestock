@@ -195,6 +195,43 @@ def get_monthly_revenue(stock_id):
         return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
     except Exception as e: return None
 
+# --- 🚀 終極防護：Yahoo TW 備用爬蟲 (當 yfinance 被雲端阻擋時啟動) ---
+def get_fallback_info(stock_id):
+    info = {}
+    try:
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        res = requests.get(url, headers=headers, timeout=5)
+        text = res.text
+        
+        def extract(pattern):
+            m = re.search(pattern, text)
+            if m:
+                try: return float(m.group(1).replace(',', ''))
+                except: return None
+            return None
+            
+        info['trailingPE'] = extract(r'本益比</span><span[^>]*>([0-9.,]+)</span>')
+        info['priceToBook'] = extract(r'股價淨值比</span><span[^>]*>([0-9.,]+)</span>')
+        info['trailingEps'] = extract(r'EPS</span><span[^>]*>([0-9.,-]+)</span>')
+        
+        gm = extract(r'毛利率</span><span[^>]*>([0-9.,-]+)%</span>')
+        if gm is not None: info['grossMargins'] = gm / 100.0
+        
+        om = extract(r'營業利益率</span><span[^>]*>([0-9.,-]+)%</span>')
+        if om is not None: info['operatingMargins'] = om / 100.0
+        
+        roe = extract(r'ROE</span><span[^>]*>([0-9.,-]+)%</span>')
+        if roe is not None: info['returnOnEquity'] = roe / 100.0
+        
+        sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text)
+        if sec_match:
+            info['sector'] = urllib.parse.unquote(sec_match.group(1))
+            info['industry'] = info['sector']
+    except:
+        pass
+    return info
+
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     # 確保代號沒有不小心輸入到空白鍵
@@ -212,6 +249,12 @@ def get_stock_data(stock_id):
                         info_data = {}
                 except:
                     pass
+                    
+                # 🚀 啟動備援：若 yfinance 無法獲取基本面，改用自建爬蟲抓取
+                if not info_data.get('trailingPE') and not info_data.get('trailingEps'):
+                    fallback = get_fallback_info(stock_id)
+                    info_data.update(fallback)
+                    
                 return hist, info_data
         return None, None
     except: return None, None
