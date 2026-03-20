@@ -12,7 +12,7 @@ import time
 import datetime
 
 # 設定網頁標題與寬度
-st.set_page_config(page_title="way系統1.0", layout="wide")
+st.set_page_config(page_title="way系統", layout="wide")
 
 # --- 產業對照表 ---
 SECTOR_MAP = {
@@ -38,13 +38,19 @@ if 'api_key' not in st.session_state:
     st.session_state.api_key = ""
 if 'ai_fetched_eps' not in st.session_state:
     st.session_state.ai_fetched_eps = {}
-# 新增：控制 PK 表格是否顯示的開關
 if 'show_pk' not in st.session_state:
     st.session_state.show_pk = False
 
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
     st.session_state.show_pk = False # 換股票時自動隱藏 PK 表格
+
+# --- 🛠️ 核心防護：安全浮點數轉換 (防止髒資料導致 Oh No 崩潰) ---
+def s_float(val, default=None):
+    try:
+        return float(val)
+    except:
+        return default
 
 # --- AI 解析與連線函數 ---
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
@@ -118,7 +124,7 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            return float(text)
+            return s_float(text)
     except: pass
     return None
 
@@ -195,7 +201,11 @@ def get_stock_data(stock_id):
         for ext in [".TW", ".TWO"]:
             ticker = yf.Ticker(f"{stock_id}{ext}")
             hist = ticker.history(period="1y")
-            if not hist.empty: return hist, ticker.info
+            if not hist.empty: 
+                info_data = ticker.info
+                if not isinstance(info_data, dict):
+                    info_data = {}
+                return hist, info_data
         return None, None
     except: return None, None
 
@@ -283,13 +293,12 @@ with st.sidebar:
                 st.session_state.topic_results = "LOADING"
                 
     st.markdown("---")
-    # 🎯 把 PK 按鈕移到左側邊欄，方便控制且不雜亂
     st.markdown("### ⚔️ 產業同業 PK")
     if st.button("🤖 尋找同業競爭對手並 PK", use_container_width=True):
         if not st.session_state.api_key:
             st.warning("請先輸入您的 API Key。")
         else:
-            st.session_state.show_pk = True # 按下後才開啟顯示狀態
+            st.session_state.show_pk = True 
             
     st.markdown("---")
     if st.button("🔄 重新整理系統快取", use_container_width=True):
@@ -349,6 +358,8 @@ curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
         hist, info = get_stock_data(curr_id)
+        if info is None: info = {} # 終極防護：確保 info 永遠是字典
+        
         c_name = get_chinese_name(curr_id)
         if not c_name:
             c_name = info.get('shortName', curr_id)
@@ -371,15 +382,19 @@ if curr_id:
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
-        curr_p = today_data['Close']
-        open_p = today_data['Open']
-        high_p = today_data['High']
-        low_p = today_data['Low']
-        vol_shares = today_data['Volume']
+        
+        # 安全浮點數讀取
+        curr_p = s_float(today_data.get('Close'), 0)
+        open_p = s_float(today_data.get('Open'), 0)
+        high_p = s_float(today_data.get('High'), 0)
+        low_p = s_float(today_data.get('Low'), 0)
+        vol_shares = s_float(today_data.get('Volume'), 0)
+        
         vol_lots = int(vol_shares // 1000) 
-        prev_vol_lots = int(prev_data['Volume'] // 1000) if len(hist) > 1 else 0
-        prev_close = info.get('previousClose', prev_data['Close'])
-        change = curr_p - prev_close
+        prev_vol_lots = int(s_float(prev_data.get('Volume'), 0) // 1000) if len(hist) > 1 else 0
+        
+        prev_close = s_float(info.get('previousClose'), s_float(prev_data.get('Close'), 0))
+        change = curr_p - prev_close if prev_close else 0
         change_pct = (change / prev_close) * 100 if prev_close else 0
         amp = ((high_p - low_p) / prev_close) * 100 if prev_close else 0
         avg_price = (high_p + low_p + curr_p) / 3
@@ -423,17 +438,19 @@ if curr_id:
 
         # 【3. 財務基本面與獲利預估微調】
         st.markdown("#### 💼 財務基本面與獲利基準微調")
-        pb_ratio = info.get('priceToBook')
-        pe_ratio = info.get('trailingPE')
-        roe = info.get('returnOnEquity')
-        gross_margin = info.get('grossMargins')
-        op_margin = info.get('operatingMargins')
-        rev_growth = info.get('revenueGrowth')
-        earn_growth = info.get('earningsGrowth')
-        t_eps = info.get('trailingEps')
-        sys_f_eps = info.get('forwardEps')
-        sys_peg_ratio = info.get('pegRatio')
-        sys_forward_pe = info.get('forwardPE')
+        
+        # 終極安全讀取：全面加上安全浮點數轉換
+        pb_ratio = s_float(info.get('priceToBook'))
+        pe_ratio = s_float(info.get('trailingPE'))
+        roe = s_float(info.get('returnOnEquity'))
+        gross_margin = s_float(info.get('grossMargins'))
+        op_margin = s_float(info.get('operatingMargins'))
+        rev_growth = s_float(info.get('revenueGrowth'))
+        earn_growth = s_float(info.get('earningsGrowth'))
+        t_eps = s_float(info.get('trailingEps'))
+        sys_f_eps = s_float(info.get('forwardEps'))
+        sys_peg_ratio = s_float(info.get('pegRatio'))
+        sys_forward_pe = s_float(info.get('forwardPE'))
 
         st.markdown("##### ⚙️ 獲利預估基準設定 (將同步更新下方數據)")
         col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
@@ -443,7 +460,7 @@ if curr_id:
             if st.button("🤖 AI 自動上網尋找法人 EPS", disabled=not st.session_state.api_key, help="需在左側選單輸入 API Key"):
                 with st.spinner("AI 爬文中..."):
                     fetched_val = get_eps_from_ai(c_name, curr_id, st.session_state.api_key)
-                    if fetched_val and fetched_val > 0:
+                    if fetched_val is not None and fetched_val > 0:
                         st.session_state.ai_fetched_eps[curr_id] = fetched_val
                         st.success(f"抓取成功！AI 推估值約為 {fetched_val} 元")
                     else:
@@ -452,14 +469,16 @@ if curr_id:
         with col_eps2:
             default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
             if default_eps_val is None:
-                default_eps_val = float(sys_f_eps) if sys_f_eps is not None else (float(t_eps) if t_eps else 1.0)
-            custom_eps = st.number_input("輸入國內法人共識 EPS (元)", min_value=0.01, value=default_eps_val, step=0.5, disabled=not use_custom_eps)
+                default_eps_val = sys_f_eps if sys_f_eps is not None else (t_eps if t_eps is not None else 1.0)
+            
+            # 移除 min_value 限制，避免遇到負數 EPS 直接崩潰
+            custom_eps = st.number_input("輸入國內法人共識 EPS (元)", value=s_float(default_eps_val, 1.0), step=0.5, disabled=not use_custom_eps)
 
         # 動態計算邏輯
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
-            if t_eps and t_eps > 0 and pe_ratio:
+            if t_eps is not None and t_eps > 0 and pe_ratio is not None:
                 custom_growth = (active_f_eps - t_eps) / t_eps
                 peg_ratio = pe_ratio / (custom_growth * 100) if custom_growth > 0 else None
                 eg_str = f"{custom_growth * 100:.2f}%"
@@ -473,12 +492,12 @@ if curr_id:
             eps_source_text = f"自訂法人共識 ({active_f_eps:.2f}元)"
         else:
             active_f_eps = sys_f_eps
-            forward_pe = curr_p / sys_f_eps if sys_forward_pe is None and sys_f_eps and sys_f_eps > 0 and curr_p else sys_forward_pe
-            peg_ratio = pe_ratio / (earn_growth * 100) if sys_peg_ratio is None and pe_ratio and earn_growth and earn_growth > 0 else sys_peg_ratio
+            forward_pe = curr_p / sys_f_eps if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0 and curr_p else sys_forward_pe
+            peg_ratio = pe_ratio / (earn_growth * 100) if sys_peg_ratio is None and pe_ratio is not None and earn_growth is not None and earn_growth > 0 else sys_peg_ratio
             eg_str = f"{earn_growth * 100:.2f}%" if earn_growth is not None else "N/A"
-            eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
+            eg_color = "#ff4d4d" if earn_growth is not None and earn_growth > 0 else ("#00cc66" if earn_growth is not None and earn_growth < 0 else "#fff")
             eg_label = "獲利年增率 (YoY)"
-            eps_source_text = f"海外系統外推 ({sys_f_eps:.2f}元)" if sys_f_eps else "系統預估 (無資料)"
+            eps_source_text = f"海外系統外推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
         def to_pct(val): return f"{val * 100:.2f}%" if val is not None else "N/A"
 
@@ -491,8 +510,8 @@ if curr_id:
         t_eps_str = f"{t_eps:.2f}" if t_eps is not None else "N/A"
         f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
         f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {f_eps_str}"
-        roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe and roe >= 0.15 else ""
-        rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
+        roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe is not None and roe >= 0.15 else ""
+        rg_color = "#ff4d4d" if rev_growth is not None and rev_growth > 0 else ("#00cc66" if rev_growth is not None and rev_growth < 0 else "#fff")
 
         fund_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
@@ -583,21 +602,24 @@ if curr_id:
                         _, p_info = get_stock_data(code)
                         p_name = get_chinese_name(code) or code
                         if p_info:
-                            pe_val = p_info.get("trailingPE")
-                            pe_fmt = f"{pe_val:.2f}x" if pe_val else "N/A"
+                            pe_val = s_float(p_info.get("trailingPE"))
+                            pe_fmt = f"{pe_val:.2f}x" if pe_val is not None else "N/A"
                             
-                            gm_val = p_info.get('grossMargins')
-                            gm_fmt = f"{gm_val * 100:.2f}%" if gm_val else "N/A"
+                            gm_val = s_float(p_info.get('grossMargins'))
+                            gm_fmt = f"{gm_val * 100:.2f}%" if gm_val is not None else "N/A"
                             
-                            om_val = p_info.get('operatingMargins')
-                            om_fmt = f"{om_val * 100:.2f}%" if om_val else "N/A"
+                            om_val = s_float(p_info.get('operatingMargins'))
+                            om_fmt = f"{om_val * 100:.2f}%" if om_val is not None else "N/A"
                             
-                            roe_val = p_info.get('returnOnEquity')
-                            roe_fmt = f"{roe_val * 100:.2f}%" if roe_val else "N/A"
+                            roe_val = s_float(p_info.get('returnOnEquity'))
+                            roe_fmt = f"{roe_val * 100:.2f}%" if roe_val is not None else "N/A"
+                            
+                            prev_close_val = s_float(p_info.get("previousClose"))
+                            prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
                             
                             compare_data.append({
                                 "代號": f"{p_name} ({code})",
-                                "股價": p_info.get("previousClose", "N/A"),
+                                "股價": prev_close_fmt,
                                 "本益比 (P/E)": pe_fmt,
                                 "毛利率": gm_fmt,
                                 "營益率": om_fmt,
@@ -692,14 +714,31 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【7. 籌碼面與股權結構分析】
-        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
-        insider_pct = info.get('heldPercentInsiders')
-        inst_pct = info.get('heldPercentInstitutions')
-        shares_out = info.get('sharesOutstanding')
-        share_capital = shares_out * 10 if shares_out else None
+        # 【7. 法人目標價】
+        hi = s_float(info.get('targetHighPrice'))
+        me = s_float(info.get('targetMeanPrice'))
+        lo = s_float(info.get('targetLowPrice'))
+        
+        if hi is not None and me is not None and lo is not None:
+            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+            v1, v2, v3 = st.columns(3)
+            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi:.1f}</b></div>", unsafe_allow_html=True)
+            upside = ((me / curr_p) - 1) * 100 if curr_p else 0
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
+            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo:.1f}</b></div>", unsafe_allow_html=True)
+        elif hi is not None:
+             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+             st.info(f"法人最高預期：**{hi:.1f}**")
+        st.markdown("---")
 
-        if share_capital:
+        # 【8. 籌碼面與股權結構分析】
+        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
+        insider_pct = s_float(info.get('heldPercentInsiders'))
+        inst_pct = s_float(info.get('heldPercentInstitutions'))
+        shares_out = s_float(info.get('sharesOutstanding'))
+        share_capital = shares_out * 10 if shares_out is not None else None
+
+        if share_capital is not None:
             if share_capital >= 10_000_000_000:
                 cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
             elif share_capital <= 3_000_000_000:
@@ -710,10 +749,10 @@ if curr_id:
             cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
 
         inst_str = f"{inst_pct * 100:.2f}%" if inst_pct is not None else "N/A"
-        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct else ("gray", "數據不足")
+        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
         
         insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
-        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct else ("gray", "數據不足")
+        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
 
         chip_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
@@ -744,8 +783,14 @@ if curr_id:
         st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【8. 專業技術線圖與量化型態分析】
+        # 【9. 專業技術線圖與量化型態分析】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
+        
+        # 確保所有需要的欄位都存在，避免崩潰
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            if col not in hist.columns:
+                hist[col] = 0.0
+
         hist['MA5'] = hist['Close'].rolling(5).mean()
         hist['MA10'] = hist['Close'].rolling(10).mean()
         hist['MA20'] = hist['Close'].rolling(20).mean()
@@ -754,7 +799,12 @@ if curr_id:
         hist['Vol_MA20'] = hist['Volume'].rolling(20).mean()
 
         h9, l9 = hist['High'].rolling(9).max(), hist['Low'].rolling(9).min()
-        rsv = (hist['Close'] - l9) / (h9 - l9) * 100
+        
+        # 避免除以 0 的保護機制
+        h9_l9_diff = h9 - l9
+        h9_l9_diff[h9_l9_diff == 0] = 1e-9 
+        rsv = (hist['Close'] - l9) / h9_l9_diff * 100
+        
         K, D = [50], [50]
         for v in rsv.fillna(50):
             K.append(K[-1]*(2/3) + v*(1/3))
@@ -844,6 +894,8 @@ if curr_id:
         </div>
         """, unsafe_allow_html=True)
 
+        plot_df = hist.tail(120)
+
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3], specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
         fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5(周線)', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
@@ -851,13 +903,15 @@ if curr_id:
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20(月線)', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60(季線)', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA120'], mode='lines', name='MA120(半年線)', line=dict(color='#ff69b4', width=1.5)), row=1, col=1, secondary_y=False)
-        vol_colors = ['#ff4d4d' if row['Close'] >= row['Open'] else '#00cc66' for _, row in plot_df.iterrows()]
+        
+        vol_colors = ['#ff4d4d' if getattr(row, 'Close', 0) >= getattr(row, 'Open', 0) else '#00cc66' for _, row in plot_df.iterrows()]
         fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
 
         fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
-        fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, plot_df['Volume'].max() / 1000 * 3.5], secondary_y=True, row=1, col=1)
+        max_vol = plot_df['Volume'].max() / 1000 if not plot_df['Volume'].empty else 100
+        fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
         fig.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), hovermode="x unified")
