@@ -648,8 +648,38 @@ if curr_id:
                         _, p_info = get_stock_data(code)
                         p_name = get_chinese_name(code) or code
                         if p_info:
-                            pe_val = s_float(p_info.get("trailingPE"))
-                            pe_fmt = f"{pe_val:.2f}x" if pe_val is not None else "N/A"
+                            prev_close_val = s_float(p_info.get("previousClose"))
+                            prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
+                            
+                            # 1 & 2. 新增：預估 EPS 雙年份對比 與 前瞻本益比 (Forward P/E)
+                            t_eps = s_float(p_info.get('trailingEps'))
+                            f_eps = s_float(p_info.get('forwardEps'))
+                            t_eps_str = f"{t_eps:.2f}" if t_eps is not None else "N/A"
+                            f_eps_str = f"{f_eps:.2f}" if f_eps is not None else "N/A"
+                            eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{f_eps_str}</span>"
+                            
+                            if prev_close_val is not None and f_eps is not None and f_eps > 0:
+                                fpe_val = prev_close_val / f_eps
+                                fpe_fmt = f"<b style='color:#FFD700;'>{fpe_val:.1f}x</b>"
+                            else:
+                                fpe_fmt = "<span style='color:gray;'>N/A</span>"
+
+                            # 3. 新增：目標價共識與潛在空間 (Upside %)
+                            target_mean = s_float(p_info.get('targetMeanPrice'))
+                            if target_mean is not None and prev_close_val is not None and prev_close_val > 0:
+                                upside = ((target_mean - prev_close_val) / prev_close_val) * 100
+                                if upside >= 25:
+                                    # 大於 25% 亮紅色提示潛力
+                                    upside_fmt = f"<span style='color:#ff4d4d; font-weight:bold;'>+{upside:.1f}%</span>"
+                                elif upside > 0:
+                                    # 0~25% 綠色溫和提示
+                                    upside_fmt = f"<span style='color:#00cc66;'>+{upside:.1f}%</span>"
+                                else:
+                                    # 小於 0% 灰色提示已反映預期
+                                    upside_fmt = f"<span style='color:#aaa;'>{upside:.1f}%</span>"
+                                target_display = f"{target_mean:.1f} ({upside_fmt})"
+                            else:
+                                target_display = "<span style='color:gray;'>無資料</span>"
                             
                             gm_val = s_float(p_info.get('grossMargins'))
                             gm_fmt = f"{gm_val * 100:.2f}%" if gm_val is not None else "N/A"
@@ -660,13 +690,12 @@ if curr_id:
                             roe_val = s_float(p_info.get('returnOnEquity'))
                             roe_fmt = f"{roe_val * 100:.2f}%" if roe_val is not None else "N/A"
                             
-                            prev_close_val = s_float(p_info.get("previousClose"))
-                            prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
-                            
                             compare_data.append({
                                 "代號": f"{p_name} ({code})",
                                 "股價": prev_close_fmt,
-                                "本益比 (P/E)": pe_fmt,
+                                "前瞻 P/E": fpe_fmt,
+                                "預估 EPS": eps_display,
+                                "目標價": target_display,
                                 "毛利率": gm_fmt,
                                 "營益率": om_fmt,
                                 "ROE": roe_fmt
@@ -675,14 +704,15 @@ if curr_id:
                     if compare_data:
                         # 提亮整個表格的文字顏色 color: #e0e0e0;
                         table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem; color: #e0e0e0;'>"
-                        table_html += "<tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>本益比 (P/E)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
+                        table_html += "<tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>前瞻 P/E</th><th>預估 EPS (今/明)</th><th>目標價 (潛在空間)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
                         for d in compare_data:
                             row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" 
                             table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'>"
-                            # 強制將公司名稱設定為純白色 #ffffff，不再灰暗
                             table_html += f"<td style='padding:12px; color:#ffffff;'><b>{d['代號']}</b></td>"
                             table_html += f"<td>{d['股價']}</td>"
-                            table_html += f"<td style='color:#FFD700;'><b>{d['本益比 (P/E)']}</b></td>"
+                            table_html += f"<td>{d['前瞻 P/E']}</td>"
+                            table_html += f"<td>{d['預估 EPS']}</td>"
+                            table_html += f"<td>{d['目標價']}</td>"
                             table_html += f"<td>{d['毛利率']}</td>"
                             table_html += f"<td>{d['營益率']}</td>"
                             table_html += f"<td style='color:#00bfff;'><b>{d['ROE']}</b></td>"
