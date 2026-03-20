@@ -202,7 +202,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
             content = re.sub(r'```markdown\n?|```', '', content).strip()
             return content
         elif response.status_code == 429:
-             return "### ⏳ API 呼叫太頻繁 (達到免費額度上限)！\n\nGoogle 免費版 API 的限制較嚴格（尤其是 **Pro 模型每分鐘僅能呼叫 2 次**）。\n\n👉 **解決方法：**\n1. 請等待約 **30 ~ 60 秒**後再點擊一次。\n2. 或者在左側選單切換為速度更快、額度更高的「**Gemini 2.5 Flash**」大腦！"
+             return "### ⏳ API 呼叫太頻繁 (達到免費額度上限)！\n\nGoogle 免費版 API 的限制較嚴格（尤其是 **Pro 模型每分鐘僅能呼叫 2 次**）。\n\n👉 **解決方法：**\n1. 請等待約 **30 ~ 60 秒**後再點擊一次。\n2. 或者在左側選單切換為速度更快、額度更高的「**Gemini 2.5 Flash**」大腦！\n3. 或者往下捲動，點擊展開右方的「📋 打包提示詞」，直接複製貼到付費版的 Gemini 中提問！"
         else:
             err_msg = response.json().get('error', {}).get('message', response.text)
             return f"⚠️ API 連線失敗: {err_msg}"
@@ -601,7 +601,7 @@ if curr_id:
                         st.success(f"抓取成功！AI 推估值約為 {fetched_val} 元")
                         st.rerun()
                     else:
-                        st.error("AI 暫時找不到具體數據，請手動輸入。")
+                        st.error("AI 暫時找不到具體數據，請手手動輸入。")
                         
         with col_eps2:
             default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
@@ -866,29 +866,36 @@ if curr_id:
 
         current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
         
-        if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
-            if not st.session_state.api_key:
-                st.warning("請先於左側選單輸入您的 API Key。")
-            else:
-                with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
-                    st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
+        # --- 🚀 新增：一鍵打包提示詞模組 (給外部 AI 使用) ---
+        full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
+請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
+1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
+2. 公司競爭優勢 (護城河、市占率、核心技術)
+3. 具體的買賣點建議與操作策略 (請結合我提供的基本面、本益比、目標價潛在空間與技術型態，給出具體進出場評估或價位區間參考)
+
+請深度分析台股 {c_name} ({curr_id}) 的產業前景、競爭優勢及買賣點策略。
+
+【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_str}"""
+
+        col_ai1, col_ai2 = st.columns([1.2, 1])
+        with col_ai1:
+            if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
+                if not st.session_state.api_key:
+                    st.warning("請先於左側選單輸入您的 API Key。")
+                else:
+                    with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
+                        st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
+        
+        with col_ai2:
+            with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
+                st.markdown("<small style='color:gray;'>*點擊下方黑框右上角的 📋 複製圖示，直接貼至付費版 [Gemini Advanced](https://gemini.google.com/) 或 ChatGPT 對話框即可獲得同等專業分析！*</small>", unsafe_allow_html=True)
+                st.code(full_prompt_for_copy, language="text")
         
         if st.session_state.ai_industry_result:
             st.markdown("<br>", unsafe_allow_html=True)
             with st.container(border=True):
-                col1, col2 = st.columns([0.7, 0.3])
-                with col1:
-                    st.markdown("### 🤖 AI 產業透視與實戰策略")
-                with col2:
-                    st.markdown("<div style='text-align:right; margin-top:20px;'><small style='color:#00bfff;'>💡 往下捲動有【一鍵複製區塊】</small></div>", unsafe_allow_html=True)
-                
+                st.markdown("### 🤖 AI 產業透視與實戰策略")
                 st.markdown(st.session_state.ai_industry_result)
-                
-                st.markdown("---")
-                st.markdown("##### 📋 【純文字複製區】")
-                st.markdown("<small style='color:gray;'>*將游標移至下方黑框內，點擊右上角的「📋」圖示，即可將報告全文複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
-                st.code(st.session_state.ai_industry_result, language="markdown")
-                    
             st.markdown("<br>", unsafe_allow_html=True)
 
         hot_industries = ['Semiconductor', 'Software', 'Hardware', 'Electronic', 'IT Services', 'Communication', 'Technology']
