@@ -40,10 +40,13 @@ if 'ai_fetched_eps' not in st.session_state:
     st.session_state.ai_fetched_eps = {}
 if 'show_pk' not in st.session_state:
     st.session_state.show_pk = False
+if 'ai_industry_result' not in st.session_state:
+    st.session_state.ai_industry_result = None
 
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
     st.session_state.show_pk = False # 換股票時自動隱藏 PK 表格
+    st.session_state.ai_industry_result = None # 重置產業 AI 分析結果
 
 # --- 🛠️ 核心防護：安全浮點數轉換 ---
 def s_float(val, default=None):
@@ -158,6 +161,38 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
                 return [str(p) for p in peers][:4] # 將回傳數量放寬到最多抓 4 家
     except: pass
     return []
+
+def get_ai_industry_analysis(stock_name, stock_id, api_key, model_name="gemini-2.5-flash"):
+    if not api_key: return "ERROR: 未輸入金鑰"
+    api_key = api_key.strip()
+    
+    system_prompt = """你是一位精通台股的資深產業分析師與操盤手。
+    請上網搜尋目標公司的最新動態、財報與法說會資訊，並提供以下深度分析：
+    1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
+    2. 公司競爭優勢 (護城河、市占率、核心技術)
+    3. 具體的買賣點建議與操作策略 (請結合基本面與型態給出具體進出場評估或價位區間參考)
+    請用專業、易讀的 Markdown 格式輸出。"""
+
+    headers = {"Content-Type": "application/json"}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    
+    payload = {
+        "contents": [{"parts": [{"text": f"請深度分析台股 {stock_name} ({stock_id}) 的產業前景、競爭優勢及買賣點策略"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "tools": [{"google_search": {}}]
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200: 
+            res_json = response.json()
+            content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            return content
+        else:
+            err_msg = response.json().get('error', {}).get('message', response.text)
+            return f"⚠️ API 連線失敗: {err_msg}"
+    except Exception as e:
+        return f"⚠️ 連線異常: {str(e)}"
 
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
@@ -314,6 +349,7 @@ with st.sidebar:
     if stock_input != st.session_state.selected_stock:
         st.session_state.selected_stock = stock_input
         st.session_state.show_pk = False # 換股時重置 PK 狀態
+        st.session_state.ai_industry_result = None # 重置產業 AI 分析結果
     
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
@@ -321,6 +357,7 @@ with st.sidebar:
         st.session_state.show_whale = True
         st.session_state.topic_results = None
         st.session_state.show_pk = False
+        st.session_state.ai_industry_result = None
         st.rerun()
         
     st.markdown("---")
@@ -743,7 +780,26 @@ if curr_id:
 
         # 【6. 產業前景與競爭優勢評估】
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
-        st.markdown("<small style='color:gray;'>*註：此區塊非使用 AI，而是根據全球產業分類與財報毛利率、營益率特徵，進行客觀的競爭力推導。*</small>", unsafe_allow_html=True)
+        st.markdown("<small style='color:gray;'>*註：下方為客觀數據推導。您可點擊 AI 按鈕進行聯網深度檢索與買賣點分析。*</small>", unsafe_allow_html=True)
+
+        # 自動抓取左側邊欄目前選定的 AI 模型
+        current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
+        
+        if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將根據左側選擇的 AI 大腦進行深度檢索並提供買賣點建議"):
+            if not st.session_state.api_key:
+                st.warning("請先於左側選單輸入您的 API Key。")
+            else:
+                with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並計算買賣點..."):
+                    st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, current_model)
+        
+        # 顯示 AI 分析結果 (帶有科技感邊框)
+        if st.session_state.ai_industry_result:
+            st.markdown(f"""
+            <div style='background:#1a1a2e; padding:20px; border-radius:8px; border:1px solid #4a4a8a; margin-bottom:15px; line-height: 1.6;'>
+                <h5 style='color:#00bfff; margin-top:0; margin-bottom:15px;'>🤖 AI 產業透視與實戰策略</h5>
+                {st.session_state.ai_industry_result}
+            </div>
+            """, unsafe_allow_html=True)
 
         hot_industries = ['Semiconductor', 'Software', 'Hardware', 'Electronic', 'IT Services', 'Communication', 'Technology']
         is_hot = any(hot in sector for hot in hot_industries) or any(hot in info.get('industry', '未知') for hot in hot_industries)
