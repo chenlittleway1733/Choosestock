@@ -88,9 +88,11 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
         response = requests.post(url, headers=headers, json=payload_search, timeout=20)
         if response.status_code == 200: 
             return parse_ai_response(response.json())
+        elif response.status_code == 429:
+            return "⏳ **API 呼叫太頻繁 (達到免費額度上限)！**\n\nGoogle 免費版 API (特別是 Pro 模型) 有每分鐘呼叫 2 次的限制。\n👉 **解決方法：** 請等待約 1 分鐘後再試，或在左側選單切換為「Gemini 2.5 Flash」模型。", []
         else:
             err_msg = response.json().get('error', {}).get('message', response.text)
-            return f"⚠️ API 連線失敗: {err_msg}", []
+            return f"⚠️ API 連線失敗 (可能達免費次數上限): {err_msg}", []
     except Exception as e:
         return f"⚠️ 連線異常: {str(e)}", []
 
@@ -201,6 +203,8 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
             content = re.sub(r'```markdown\n?|```', '', content).strip()
             return content
+        elif response.status_code == 429:
+             return "### ⏳ API 呼叫太頻繁 (達到免費額度上限)！\n\nGoogle 免費版 API 的限制較嚴格（尤其是 **Pro 模型每分鐘僅能呼叫 2 次**）。\n\n👉 **解決方法：**\n1. 請等待約 **30 ~ 60 秒**後再點擊一次。\n2. 或者在左側選單切換為速度更快、額度更高的「**Gemini 2.5 Flash**」大腦！"
         else:
             err_msg = response.json().get('error', {}).get('message', response.text)
             return f"⚠️ API 連線失敗: {err_msg}"
