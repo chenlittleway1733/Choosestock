@@ -232,11 +232,18 @@ def get_monthly_revenue(stock_id):
 
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
+        
+        # 🚀 修正 1：強制排除「當月」的未結算或錯誤資料
+        current_month_start = pd.to_datetime(f"{today.year}-{today.month:02d}-01")
+        df = df[df['date'] < current_month_start]
+
         df = df.sort_values('date').reset_index(drop=True)
 
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
         df['YoY'] = df['revenue'].pct_change(periods=12) * 100
-        df['Month'] = df['date'].dt.strftime('%Y-%m')
+        
+        # 🚀 修正 2：將月份格式改為 YYYY/MM，呈現更專業
+        df['Month'] = df['date'].dt.strftime('%Y/%m')
         df['Revenue'] = df['revenue'] / 100000000 
 
         final_df = df.dropna(subset=['YoY']).tail(12).copy()
@@ -809,9 +816,17 @@ if curr_id:
             fig_rev.add_trace(go.Bar(x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
             fig_rev.add_trace(go.Scatter(x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
             
-            fig_rev.update_layout(height=400, template="plotly_dark", hovermode="x unified", margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+            # 🚀 修正：將圖例移至左上方、增加 margin、強制 X 軸格式
+            fig_rev.update_layout(
+                height=400, template="plotly_dark", hovermode="x unified", 
+                margin=dict(l=10, r=10, t=50, b=10), 
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), 
+                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+            )
             fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
             fig_rev.update_yaxes(title_text="年增率 YoY (%)", secondary_y=True, showgrid=True, gridcolor='#333', zeroline=True, zerolinewidth=1, zerolinecolor='#555')
+            fig_rev.update_xaxes(type='category')
+            
             st.plotly_chart(fig_rev, use_container_width=True)
             st.markdown("---")
         else:
@@ -927,7 +942,7 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【7. 法人目標價】(確保變數被正確讀取不會崩潰)
+        # 【7. 法人目標價】
         hi = s_float(info.get('targetHighPrice'))
         me = s_float(info.get('targetMeanPrice'))
         lo = s_float(info.get('targetLowPrice'))
