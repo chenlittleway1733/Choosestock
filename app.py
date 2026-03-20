@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 import json
 import time
 import datetime
+import os
 
 # 設定網頁標題與寬度
 st.set_page_config(page_title="way系統", layout="wide")
@@ -351,10 +352,35 @@ def translate_to_zh(text):
 with st.sidebar:
     st.markdown("### 🔍 個股查詢")
     stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
+    
+    # --- 讀取快速選股名單 ---
+    quick_stocks = []
+    if os.path.exists("stocklist.txt"):
+        try:
+            with open("stocklist.txt", "r", encoding="utf-8") as f:
+                for line in f:
+                    if "," in line:
+                        quick_stocks.append(line.strip())
+        except Exception as e:
+            pass
+            
+    if quick_stocks:
+        options = ["-- 快速切換標的 --"] + [f"{item.split(',')[0]} {item.split(',')[1]}" for item in quick_stocks]
+        selected_quick = st.selectbox("⚡ 快速選股名單", options, index=0)
+        if selected_quick != "-- 快速切換標的 --":
+            quick_code = selected_quick.split(" ")[0]
+            if quick_code != st.session_state.selected_stock:
+                st.session_state.selected_stock = quick_code
+                st.session_state.show_pk = False
+                st.session_state.ai_industry_result = None
+                st.rerun()
+
+    # 處理上方輸入框的手動變更
     if stock_input != st.session_state.selected_stock:
         st.session_state.selected_stock = stock_input
         st.session_state.show_pk = False 
         st.session_state.ai_industry_result = None 
+        st.rerun()
     
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
