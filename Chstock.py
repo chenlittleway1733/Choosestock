@@ -42,13 +42,12 @@ if 'ai_fetched_eps' not in st.session_state:
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
 
-# --- AI 解析與連線函數 (支援切換 Flash / Pro 模型) ---
+# --- AI 解析與連線函數 ---
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
     api_key = api_key.strip()
     
     model = model_name
-    
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。
     必須嚴格回傳 JSON 格式：
     {
@@ -60,7 +59,6 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     確保代號為純數字。直接輸出 JSON 字串，不要有 ```json 標籤。"""
 
     headers = {"Content-Type": "application/json"}
-    
     protocol = "https://"
     api_host = "generativelanguage.googleapis.com"
     url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
@@ -83,7 +81,6 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
         return f"⚠️ 連線異常: {str(e)}", []
 
 def parse_ai_response(res_json):
-    content = ""
     try:
         content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
         clean_json = re.sub(r'```json\n?|```', '', content).strip()
@@ -97,13 +94,11 @@ def parse_ai_response(res_json):
             
         return json.loads(clean_json), list(set(links))
     except Exception as e:
-        return f"JSON 解析失敗。AI 原文片段: {content[:100]}...", []
+        return f"JSON 解析失敗。", []
 
-# --- 🤖 專屬 AI 聯網抓取法人預估 EPS 函數 ---
 def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
-    
     model = "gemini-2.5-flash"
     protocol = "https://"
     api_host = "generativelanguage.googleapis.com"
@@ -123,13 +118,11 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     except: pass
     return None
 
-# --- 🤖 新增：AI 動態定位同業競爭對手函數 (已加入 Cache 省流機制) ---
 @st.cache_data(ttl=86400)
 def get_peers_from_ai(stock_name, stock_id, api_key):
     if not api_key: return []
     api_key = api_key.strip()
-    
-    model = "gemini-2.5-flash" # 使用速度快的 flash 即可勝任分類任務
+    model = "gemini-2.5-flash"
     protocol = "https://"
     api_host = "generativelanguage.googleapis.com"
     url = f"{protocol}{api_host}/v1beta/models/{model}:generateContent?key={api_key}"
@@ -137,7 +130,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
     system_prompt = """你是一位精準的台股產業鏈分析師。
     請列出與目標公司「核心業務最直接競爭、屬於同族群」的 2 到 3 家「台股上市櫃公司」股票代號。
     【重要規定】：
-    1. 必須是競爭對手或同族群(例如：金像電的對手是台光電、健鼎、聯茂等)。
+    1. 必須是競爭對手或同族群。
     2. 請嚴格只回傳一個 JSON 陣列格式，包含純數字代號字串，例如：["2383", "3044", "6274"]。
     3. 絕對不要輸出任何其他文字、不要加上 markdown 標記。"""
     
@@ -152,11 +145,10 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
             clean_text = re.sub(r'```json\n?|```', '', text).strip()
             peers = json.loads(clean_text)
             if isinstance(peers, list):
-                return [str(p) for p in peers][:3] # 確保最多取 3 家
+                return [str(p) for p in peers][:3]
     except: pass
     return []
 
-# --- 📊 公開 API 獲取「月營收」與「YoY」 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
     try:
@@ -193,7 +185,6 @@ def get_monthly_revenue(stock_id):
         return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
     except Exception as e: return None
 
-# --- 基礎數據函數 ---
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     try:
@@ -260,14 +251,12 @@ with st.sidebar:
         st.session_state.selected_stock = stock_input
     
     st.markdown("---")
-    
     st.markdown("### 🐳 籌碼集中度追蹤")
     if st.button("🔍 掃描籌碼增持名單", use_container_width=True):
         st.session_state.show_whale = True
         st.session_state.topic_results = None
         
     st.markdown("---")
-    
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
@@ -297,6 +286,7 @@ with st.sidebar:
 # ==========================================
 st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
+# 處理 AI 議題結果
 if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
         model_to_use = st.session_state.get('selected_model', 'gemini-2.5-flash')
@@ -337,7 +327,9 @@ if st.session_state.show_whale:
         with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
-# ⚠️ 這裡就是唯一且乾淨的主執行區塊，絕無重複！
+# ==========================================
+# 個股戰情室核心渲染區
+# ==========================================
 curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
@@ -345,10 +337,9 @@ if curr_id:
         c_name = get_chinese_name(curr_id)
         if not c_name:
             c_name = info.get('shortName', curr_id)
-        news_list = get_stock_news(c_name)
 
     if hist is not None and not hist.empty:
-        # 1. 簡介與產業
+        # 【1. 簡介與產業】
         st.markdown(f"### 🏢 {c_name} ({curr_id})")
         sector = SECTOR_MAP.get(info.get('sector', '未知'), info.get('sector', '未知'))
         st.markdown(f"**🏷️ 產業分類：** {sector} / {info.get('industry', '未知')}")
@@ -361,7 +352,7 @@ if curr_id:
             else:
                 st.write(summary_en)
 
-        # 2. 即時報價
+        # 【2. 即時報價】
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
@@ -415,7 +406,7 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # 3. 財務基本面與預估基準設定
+        # 【3. 財務基本面與獲利預估微調】
         st.markdown("#### 💼 財務基本面與獲利基準微調")
         pb_ratio = info.get('priceToBook')
         pe_ratio = info.get('trailingPE')
@@ -429,7 +420,7 @@ if curr_id:
         sys_peg_ratio = info.get('pegRatio')
         sys_forward_pe = info.get('forwardPE')
 
-        st.markdown("##### ⚙️ 獲利預估基準設定 (將自動同步更新下方所有數據)")
+        st.markdown("##### ⚙️ 獲利預估基準設定 (將同步更新下方數據)")
         col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
         with col_eps1:
             use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
@@ -449,6 +440,7 @@ if curr_id:
                 default_eps_val = float(sys_f_eps) if sys_f_eps is not None else (float(t_eps) if t_eps else 1.0)
             custom_eps = st.number_input("輸入國內法人共識 EPS (元)", min_value=0.01, value=default_eps_val, step=0.5, disabled=not use_custom_eps)
 
+        # 動態計算邏輯
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
@@ -475,16 +467,15 @@ if curr_id:
 
         def to_pct(val): return f"{val * 100:.2f}%" if val is not None else "N/A"
 
+        # 準備 6 宮格資料
         pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
         roe_str = to_pct(roe)
         gm_str = to_pct(gross_margin)
         om_str = to_pct(op_margin)
         rg_str = to_pct(rev_growth)
-        
         t_eps_str = f"{t_eps:.2f}" if t_eps is not None else "N/A"
         f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
         f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {f_eps_str}"
-
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe and roe >= 0.15 else ""
         rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
 
@@ -518,7 +509,52 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
-        # 3.5 🎯 就是這裡！產業橫向對比 (同業估值與利潤率 PK) 
+        # 準備 4 宮格估值資料
+        pe_color, pe_eval = ("#ff4d4d", "偏高 / 高成長溢價") if pe_ratio and pe_ratio > 25 else ("#00cc66", "相對便宜") if pe_ratio and pe_ratio < 15 else ("#FFD700", "合理區間") if pe_ratio else ("gray", "數據不足")
+        pb_str = f"{pb_ratio:.2f}x" if pb_ratio is not None else "N/A"
+        pb_color, pb_eval = ("#ff4d4d", "偏高溢價") if pb_ratio and pb_ratio > 3 else ("#00cc66", "具資產保護") if pb_ratio and pb_ratio < 1.5 else ("#FFD700", "合理區間") if pb_ratio else ("gray", "數據不足")
+        peg_str = f"{peg_ratio:.2f}" if peg_ratio is not None else "N/A"
+        peg_color, peg_eval = ("#ff4d4d", "透支未來成長") if peg_ratio and peg_ratio > 2 else ("#00cc66", "低估 (成長性支撐)") if peg_ratio and peg_ratio <= 1 else ("#FFD700", "合理區間") if peg_ratio else ("gray", "衰退或無數據")
+        fpe_str = f"{forward_pe:.1f}x" if forward_pe is not None else "N/A"
+        fpe_color, fpe_eval = ("#ff4d4d", "偏高 / 成長期望高") if forward_pe and forward_pe > 25 else ("#00cc66", "相對便宜") if forward_pe and forward_pe < 15 else ("#FFD700", "合理區間") if forward_pe else ("gray", "數據不足")
+
+        val_html = f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 歷史本益比 (Trailing P/E)</div>
+                    <div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pe_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fpe_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div>
+                    <div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{fpe_str}</div>
+                <div style='color:#ffd700; font-size:0.85rem; font-weight:bold;'>基準：{eps_source_text}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 本益成長比 (PEG)</div>
+                    <div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{peg_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div>
+                    <div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str}</div>
+            </div>
+        </div>
+        """
+        st.markdown(val_html, unsafe_allow_html=True)
+        st.markdown("---")
+
+        # 【4. 產業橫向對比 PK】(現在它穩穩地在 4 宮格的下方了！)
         st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
         st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較，助您一眼找出族群領頭羊或低估標的。*</small>", unsafe_allow_html=True)
 
@@ -572,47 +608,25 @@ if curr_id:
                     st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
         st.markdown("---")
 
-        # 4. 真實月營收與 YoY 雙軸圖表
+        # 【5. 月營收與 YoY 圖表】
         df_rev = get_monthly_revenue(curr_id)
         if df_rev is not None and not df_rev.empty:
             st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
             st.markdown("<small style='color:gray;'>*數據來源：自動抓取最新公告之每月營收與年增率 (YoY)*</small>", unsafe_allow_html=True)
 
             fig_rev = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_rev.add_trace(go.Bar(x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
+            fig_rev.add_trace(go.Scatter(x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
             
-            fig_rev.add_trace(
-                go.Bar(
-                    x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)",
-                    marker_color='#3498db', opacity=0.8,
-                    hovertemplate="營收: %{y} 億<extra></extra>"
-                ), secondary_y=False,
-            )
-            
-            fig_rev.add_trace(
-                go.Scatter(
-                    x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)",
-                    mode='lines+markers', line=dict(color='#ff4d4d', width=3),
-                    marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"
-                ), secondary_y=True,
-            )
-            
-            fig_rev.update_layout(
-                height=400, template="plotly_dark", hovermode="x unified",
-                margin=dict(l=10, r=10, t=30, b=10),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
-            )
+            fig_rev.update_layout(height=400, template="plotly_dark", hovermode="x unified", margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
             fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
-            fig_rev.update_yaxes(
-                title_text="年增率 YoY (%)", secondary_y=True,
-                showgrid=True, gridcolor='#333', zeroline=True, zerolinewidth=1, zerolinecolor='#555'
-            )
+            fig_rev.update_yaxes(title_text="年增率 YoY (%)", secondary_y=True, showgrid=True, gridcolor='#333', zeroline=True, zerolinewidth=1, zerolinecolor='#555')
             st.plotly_chart(fig_rev, use_container_width=True)
             st.markdown("---")
         else:
             st.warning("⚠️ 目前暫時無法連線至公開庫取得月營收數據。")
 
-        # 5. 法人目標價
+        # 【6. 法人目標價】
         hi, me, lo = info.get('targetHighPrice'), info.get('targetMeanPrice'), info.get('targetLowPrice')
         if hi and me and lo:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
@@ -626,7 +640,7 @@ if curr_id:
              st.info(f"法人最高預期：**{hi:.1f}**")
         st.markdown("---")
 
-        # 6. 產業前景與競爭優勢評估
+        # 【7. 產業前景與競爭優勢評估】
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：此區塊非使用 AI，而是根據全球產業分類與財報毛利率、營益率特徵，進行客觀的競爭力推導。*</small>", unsafe_allow_html=True)
 
@@ -677,57 +691,7 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 7. 估值與價格合理性分析
-        st.markdown("#### ⚖️ 估值與價格合理性分析", unsafe_allow_html=True)
-        st.markdown("<small style='color:gray;'>*註：各項前瞻估值指標已自動套用上方設定之【獲利預估基準】進行重算。*</small>", unsafe_allow_html=True)
-
-        pe_color, pe_eval = ("#ff4d4d", "偏高 / 高成長溢價") if pe_ratio and pe_ratio > 25 else ("#00cc66", "相對便宜") if pe_ratio and pe_ratio < 15 else ("#FFD700", "合理區間") if pe_ratio else ("gray", "數據不足")
-        
-        pb_str = f"{pb_ratio:.2f}x" if pb_ratio is not None else "N/A"
-        pb_color, pb_eval = ("#ff4d4d", "偏高溢價") if pb_ratio and pb_ratio > 3 else ("#00cc66", "具資產保護") if pb_ratio and pb_ratio < 1.5 else ("#FFD700", "合理區間") if pb_ratio else ("gray", "數據不足")
-        
-        peg_str = f"{peg_ratio:.2f}" if peg_ratio is not None else "N/A"
-        peg_color, peg_eval = ("#ff4d4d", "透支未來成長") if peg_ratio and peg_ratio > 2 else ("#00cc66", "低估 (成長性支撐)") if peg_ratio and peg_ratio <= 1 else ("#FFD700", "合理區間") if peg_ratio else ("gray", "衰退或無數據")
-        
-        fpe_str = f"{forward_pe:.1f}x" if forward_pe is not None else "N/A"
-        fpe_color, fpe_eval = ("#ff4d4d", "偏高 / 成長期望高") if forward_pe and forward_pe > 25 else ("#00cc66", "相對便宜") if forward_pe and forward_pe < 15 else ("#FFD700", "合理區間") if forward_pe else ("gray", "數據不足")
-
-        st.markdown(f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 歷史本益比 (Trailing P/E)</div>
-                    <div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pe_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fpe_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div>
-                    <div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{fpe_str}</div>
-                <div style='color:#ffd700; font-size:0.85rem; font-weight:bold;'>基準：{eps_source_text}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 本益成長比 (PEG)</div>
-                    <div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{peg_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div>
-                    <div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        st.markdown("---")
-
-        # 8. 籌碼面與股權結構分析
+        # 【8. 籌碼面與股權結構分析】
         st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
         insider_pct = info.get('heldPercentInsiders')
         inst_pct = info.get('heldPercentInstitutions')
@@ -779,7 +743,7 @@ if curr_id:
         st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 9. 專業技術線圖與量化型態分析
+        # 【9. 專業技術線圖與量化型態分析】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         hist['MA5'] = hist['Close'].rolling(5).mean()
         hist['MA10'] = hist['Close'].rolling(10).mean()
@@ -879,8 +843,6 @@ if curr_id:
         </div>
         """, unsafe_allow_html=True)
 
-        plot_df = hist.tail(120)
-
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3], specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
         fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5(周線)', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
@@ -888,7 +850,6 @@ if curr_id:
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20(月線)', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60(季線)', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA120'], mode='lines', name='MA120(半年線)', line=dict(color='#ff69b4', width=1.5)), row=1, col=1, secondary_y=False)
-
         vol_colors = ['#ff4d4d' if row['Close'] >= row['Open'] else '#00cc66' for _, row in plot_df.iterrows()]
         fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
