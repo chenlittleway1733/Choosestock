@@ -45,7 +45,7 @@ def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
     st.session_state.show_pk = False # 換股票時自動隱藏 PK 表格
 
-# --- 🛠️ 核心防護：安全浮點數轉換 (防止髒資料導致 Oh No 崩潰) ---
+# --- 🛠️ 核心防護：安全浮點數轉換 ---
 def s_float(val, default=None):
     try:
         return float(val)
@@ -86,7 +86,7 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
             return parse_ai_response(response.json())
         else:
             err_msg = response.json().get('error', {}).get('message', response.text)
-            return f"⚠️ API 連線失敗 (可能達免費次數上限): {err_msg}", []
+            return f"⚠️ API 連線失敗: {err_msg}", []
     except Exception as e:
         return f"⚠️ 連線異常: {str(e)}", []
 
@@ -197,14 +197,21 @@ def get_monthly_revenue(stock_id):
 
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
+    # 確保代號沒有不小心輸入到空白鍵
+    stock_id = str(stock_id).strip()
     try:
         for ext in [".TW", ".TWO"]:
             ticker = yf.Ticker(f"{stock_id}{ext}")
             hist = ticker.history(period="1y")
             if not hist.empty: 
-                info_data = ticker.info
-                if not isinstance(info_data, dict):
-                    info_data = {}
+                info_data = {}
+                try:
+                    # 🛡️ 獨立保護 info 抓取，避免 Yahoo 阻擋雲端 IP 導致整個畫面崩潰
+                    info_data = ticker.info
+                    if not isinstance(info_data, dict):
+                        info_data = {}
+                except:
+                    pass
                 return hist, info_data
         return None, None
     except: return None, None
@@ -293,6 +300,7 @@ with st.sidebar:
                 st.session_state.topic_results = "LOADING"
                 
     st.markdown("---")
+    # 🎯 PK 按鈕穩穩地放在左側邊欄
     st.markdown("### ⚔️ 產業同業 PK")
     if st.button("🤖 尋找同業競爭對手並 PK", use_container_width=True):
         if not st.session_state.api_key:
@@ -358,7 +366,7 @@ curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
         hist, info = get_stock_data(curr_id)
-        if info is None: info = {} # 終極防護：確保 info 永遠是字典
+        if info is None: info = {} 
         
         c_name = get_chinese_name(curr_id)
         if not c_name:
@@ -383,7 +391,6 @@ if curr_id:
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
         
-        # 安全浮點數讀取
         curr_p = s_float(today_data.get('Close'), 0)
         open_p = s_float(today_data.get('Open'), 0)
         high_p = s_float(today_data.get('High'), 0)
@@ -438,8 +445,6 @@ if curr_id:
 
         # 【3. 財務基本面與獲利預估微調】
         st.markdown("#### 💼 財務基本面與獲利基準微調")
-        
-        # 終極安全讀取：全面加上安全浮點數轉換
         pb_ratio = s_float(info.get('priceToBook'))
         pe_ratio = s_float(info.get('trailingPE'))
         roe = s_float(info.get('returnOnEquity'))
@@ -470,11 +475,8 @@ if curr_id:
             default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
             if default_eps_val is None:
                 default_eps_val = sys_f_eps if sys_f_eps is not None else (t_eps if t_eps is not None else 1.0)
-            
-            # 移除 min_value 限制，避免遇到負數 EPS 直接崩潰
             custom_eps = st.number_input("輸入國內法人共識 EPS (元)", value=s_float(default_eps_val, 1.0), step=0.5, disabled=not use_custom_eps)
 
-        # 動態計算邏輯
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
@@ -501,7 +503,6 @@ if curr_id:
 
         def to_pct(val): return f"{val * 100:.2f}%" if val is not None else "N/A"
 
-        # 準備 6 宮格資料
         pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
         roe_str = to_pct(roe)
         gm_str = to_pct(gross_margin)
@@ -543,7 +544,6 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
-        # 準備 4 宮格估值資料
         pe_color, pe_eval = ("#ff4d4d", "偏高 / 高成長溢價") if pe_ratio and pe_ratio > 25 else ("#00cc66", "相對便宜") if pe_ratio and pe_ratio < 15 else ("#FFD700", "合理區間") if pe_ratio else ("gray", "數據不足")
         pb_str = f"{pb_ratio:.2f}x" if pb_ratio is not None else "N/A"
         pb_color, pb_eval = ("#ff4d4d", "偏高溢價") if pb_ratio and pb_ratio > 3 else ("#00cc66", "具資產保護") if pb_ratio and pb_ratio < 1.5 else ("#FFD700", "合理區間") if pb_ratio else ("gray", "數據不足")
@@ -588,10 +588,10 @@ if curr_id:
         st.markdown(val_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【4. 產業橫向對比 PK 表格】(只有在左側點下按鈕後才會顯示)
+        # 【4. 產業橫向對比 PK 表格】
         if st.session_state.show_pk:
             st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
-            st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較，助您一眼找出族群領頭羊或低估標的。*</small>", unsafe_allow_html=True)
+            st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
 
             with st.spinner("AI 正在深度檢索產業鏈與競爭對手，並同步抓取最新財報數據..."):
                 peers = get_peers_from_ai(c_name, curr_id, st.session_state.api_key)
@@ -630,7 +630,7 @@ if curr_id:
                         table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem;'>"
                         table_html += "<tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>本益比 (P/E)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
                         for d in compare_data:
-                            row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" # 藍色突顯當前查詢的股票
+                            row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" 
                             table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'>"
                             table_html += f"<td style='padding:12px;'><b>{d['代號']}</b></td>"
                             table_html += f"<td>{d['股價']}</td>"
@@ -786,7 +786,6 @@ if curr_id:
         # 【9. 專業技術線圖與量化型態分析】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         
-        # 確保所有需要的欄位都存在，避免崩潰
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
             if col not in hist.columns:
                 hist[col] = 0.0
@@ -800,7 +799,6 @@ if curr_id:
 
         h9, l9 = hist['High'].rolling(9).max(), hist['Low'].rolling(9).min()
         
-        # 避免除以 0 的保護機制
         h9_l9_diff = h9 - l9
         h9_l9_diff[h9_l9_diff == 0] = 1e-9 
         rsv = (hist['Close'] - l9) / h9_l9_diff * 100
@@ -896,25 +894,55 @@ if curr_id:
 
         plot_df = hist.tail(120)
 
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3], specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
-        fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+            row_heights=[0.7, 0.3],
+            specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+        )
+
+        fig.add_trace(go.Candlestick(
+            x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'],
+            name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'
+        ), row=1, col=1, secondary_y=False)
+
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5(周線)', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10(雙周)', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20(月線)', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60(季線)', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA120'], mode='lines', name='MA120(半年線)', line=dict(color='#ff69b4', width=1.5)), row=1, col=1, secondary_y=False)
-        
+
         vol_colors = ['#ff4d4d' if getattr(row, 'Close', 0) >= getattr(row, 'Open', 0) else '#00cc66' for _, row in plot_df.iterrows()]
-        fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
+        fig.add_trace(go.Bar(
+            x=plot_df.index, y=plot_df['Volume']/1000,
+            marker_color=vol_colors, name='成交量(張)', opacity=0.5
+        ), row=1, col=1, secondary_y=True)
+
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
 
         fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
-        max_vol = plot_df['Volume'].max() / 1000 if not plot_df['Volume'].empty else 100
+        max_vol = plot_df['Volume'].max() / 1000
         fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
+        
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
-        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
-        fig.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), hovermode="x unified")
+
+        fig.update_xaxes(
+            rangebreaks=[dict(bounds=["sat", "mon"])],
+            tickformat="%m/%d",
+            showgrid=True, gridcolor='#333',
+            mirror=True, showline=True, linecolor='#555'
+        )
+
+        fig.update_layout(
+            height=650,
+            template="plotly_dark",
+            xaxis_rangeslider_visible=False,
+            margin=dict(l=10, r=10, t=10, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            hovermode="x unified"
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確。")
