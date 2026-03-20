@@ -321,6 +321,7 @@ with st.sidebar:
         st.session_state.show_whale = True
         st.session_state.topic_results = None
         st.session_state.show_pk = False
+        st.rerun()
         
     st.markdown("---")
     st.markdown("### 🧠 AI 聯網議題選股")
@@ -341,6 +342,7 @@ with st.sidebar:
             else:
                 st.session_state.selected_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
                 st.session_state.topic_results = "LOADING"
+                st.rerun()
                 
     st.markdown("---")
     # 🎯 PK 按鈕穩穩地放在左側邊欄
@@ -350,6 +352,7 @@ with st.sidebar:
             st.warning("請先輸入您的 API Key。")
         else:
             st.session_state.show_pk = True 
+            st.rerun()
             
     st.markdown("---")
     if st.button("🔄 重新整理系統快取", use_container_width=True):
