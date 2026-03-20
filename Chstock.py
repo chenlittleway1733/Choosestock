@@ -12,7 +12,7 @@ import time
 import datetime
 
 # 設定網頁標題與寬度
-st.set_page_config(page_title="way系統", layout="wide")
+st.set_page_config(page_title="way系統1.0", layout="wide")
 
 # --- 產業對照表 ---
 SECTOR_MAP = {
