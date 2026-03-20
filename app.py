@@ -49,7 +49,7 @@ def change_stock(stock_code):
     st.session_state.show_pk = False # 換股票時自動隱藏 PK 表格
     st.session_state.ai_industry_result = None # 重置產業 AI 分析結果
 
-# --- 🛠️ 核心防護：安全浮點數轉換 ---
+# --- 🛠️ 核心防護：安全浮點數轉換 (防止髒資料導致崩潰) ---
 def s_float(val, default=None):
     try:
         return float(val)
@@ -180,8 +180,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
     - 絕對不要輸出 HTML 標籤，直接輸出 Markdown 內容即可。"""
 
     headers = {"Content-Type": "application/json"}
-    # 🔧 修正 1：清除被污染的 AI API 網址，恢復為純字串
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={api_key}"
     
     prompt_text = f"請深度分析台股 {stock_name} ({stock_id}) 的產業前景、競爭優勢及買賣點策略。\n\n【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_data}"
     
@@ -196,7 +195,6 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         if response.status_code == 200: 
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-            # 清除可能多餘的 markdown 程式碼塊標籤
             content = re.sub(r'```markdown\n?|```', '', content).strip()
             return content
         else:
@@ -244,8 +242,7 @@ def get_monthly_revenue(stock_id):
 def get_fallback_info(stock_id):
     info = {}
     try:
-        # 🔧 修正 2：清除被污染的 Yahoo 備用爬蟲網址，恢復為純字串
-        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        url = f"[https://tw.stock.yahoo.com/quote/](https://tw.stock.yahoo.com/quote/){stock_id}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
@@ -719,6 +716,18 @@ if curr_id:
                         _, p_info = get_stock_data(code)
                         p_name = get_chinese_name(code) or code
                         if p_info:
+                            pe_val = s_float(p_info.get("trailingPE"))
+                            pe_fmt = f"{pe_val:.2f}x" if pe_val is not None else "N/A"
+                            
+                            gm_val = s_float(p_info.get('grossMargins'))
+                            gm_fmt = f"{gm_val * 100:.2f}%" if gm_val is not None else "N/A"
+                            
+                            om_val = s_float(p_info.get('operatingMargins'))
+                            om_fmt = f"{om_val * 100:.2f}%" if om_val is not None else "N/A"
+                            
+                            roe_val = s_float(p_info.get('returnOnEquity'))
+                            roe_fmt = f"{roe_val * 100:.2f}%" if roe_val is not None else "N/A"
+                            
                             prev_close_val = s_float(p_info.get("previousClose"))
                             prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
                             
@@ -746,15 +755,6 @@ if curr_id:
                                 target_display = f"{target_mean_p:.1f} ({upside_fmt})"
                             else:
                                 target_display = "<span style='color:gray;'>無資料</span>"
-                            
-                            gm_val = s_float(p_info.get('grossMargins'))
-                            gm_fmt = f"{gm_val * 100:.2f}%" if gm_val is not None else "N/A"
-                            
-                            om_val = s_float(p_info.get('operatingMargins'))
-                            om_fmt = f"{om_val * 100:.2f}%" if om_val is not None else "N/A"
-                            
-                            roe_val = s_float(p_info.get('returnOnEquity'))
-                            roe_fmt = f"{roe_val * 100:.2f}%" if roe_val is not None else "N/A"
                             
                             compare_data.append({
                                 "代號": f"{p_name} ({code})",
@@ -904,7 +904,6 @@ if curr_id:
         st.markdown("---")
 
         # 【7. 法人目標價】
-        # 🔧 修正 3：確保 hi, me, lo 變數確實存在，解決您遇到的紅字當機問題
         hi = s_float(info.get('targetHighPrice'))
         me = s_float(info.get('targetMeanPrice'))
         lo = s_float(info.get('targetLowPrice'))
@@ -976,6 +975,7 @@ if curr_id:
         # 【9. 專業技術線圖與量化型態分析】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         
+        # 確保所有需要的欄位都存在，避免崩潰
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
             if col not in hist.columns:
                 hist[col] = 0.0
@@ -989,6 +989,7 @@ if curr_id:
 
         h9, l9 = hist['High'].rolling(9).max(), hist['Low'].rolling(9).min()
         
+        # 避免除以 0 的保護機制
         h9_l9_diff = h9 - l9
         h9_l9_diff[h9_l9_diff == 0] = 1e-9 
         rsv = (hist['Close'] - l9) / h9_l9_diff * 100
@@ -1082,11 +1083,13 @@ if curr_id:
         </div>
         """, unsafe_allow_html=True)
 
+        plot_df = hist.tail(120)
+
         fig = make_subplots(
-            rows=2, cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.03,
-            row_heights=[0.7, 0.3],
+            rows=2, cols=1, 
+            shared_xaxes=True, 
+            vertical_spacing=0.03, 
+            row_heights=[0.7, 0.3], 
             specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
         )
 
@@ -1111,7 +1114,7 @@ if curr_id:
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
 
         fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
-        max_vol = plot_df['Volume'].max() / 1000
+        max_vol = plot_df['Volume'].max() / 1000 if not plot_df['Volume'].empty else 100
         fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
         
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
