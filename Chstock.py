@@ -817,10 +817,15 @@ if curr_id:
                 with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
                     st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
         
-        # 顯示 AI 分析結果 (強制將字體顏色提亮為純白 #ffffff，解決淺色模式下黑字問題)
+        # 顯示 AI 分析結果 (加入專屬 CSS 強制覆蓋所有 Markdown 元素的字體顏色為純白)
         if st.session_state.ai_industry_result:
             st.markdown(f"""
-            <div style='background:#1a1a2e; padding:20px; border-radius:8px; border:1px solid #4a4a8a; margin-bottom:15px; color: #ffffff;'>
+            <style>
+            .ai-analysis-box p, .ai-analysis-box li, .ai-analysis-box h1, .ai-analysis-box h2, .ai-analysis-box h3, .ai-analysis-box h4, .ai-analysis-box strong {{
+                color: #ffffff !important;
+            }}
+            </style>
+            <div class="ai-analysis-box" style='background:#1a1a2e; padding:20px; border-radius:8px; border:1px solid #4a4a8a; margin-bottom:15px;'>
                 <h5 style='color:#00bfff; margin-top:0; margin-bottom:15px;'>🤖 AI 產業透視與實戰策略</h5>
                 <div style='line-height: 1.6;'>
                     \n\n{st.session_state.ai_industry_result}\n\n
