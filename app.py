@@ -233,7 +233,7 @@ def get_monthly_revenue(stock_id):
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
         
-        # 🚀 修正 1：強制排除「當月」的未結算或錯誤資料
+        # 🚀 修正：強制排除「當月」的未結算或錯誤資料
         current_month_start = pd.to_datetime(f"{today.year}-{today.month:02d}-01")
         df = df[df['date'] < current_month_start]
 
@@ -242,7 +242,7 @@ def get_monthly_revenue(stock_id):
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
         df['YoY'] = df['revenue'].pct_change(periods=12) * 100
         
-        # 🚀 修正 2：將月份格式改為 YYYY/MM，呈現更專業
+        # 🚀 修正：將月份格式強制改為 YYYY/MM 格式
         df['Month'] = df['date'].dt.strftime('%Y/%m')
         df['Revenue'] = df['revenue'] / 100000000 
 
@@ -383,7 +383,13 @@ with st.sidebar:
             
     if quick_stocks:
         options = ["-- 快速切換標的 --"] + [f"{item.split(',')[0]} {item.split(',')[1]}" for item in quick_stocks]
-        selected_quick = st.selectbox("⚡ 快速選股名單", options, index=0)
+        
+        # 使用 key 讓 Streamlit 自動管理狀態
+        if "quick_select" not in st.session_state:
+            st.session_state.quick_select = "-- 快速切換標的 --"
+            
+        selected_quick = st.selectbox("⚡ 快速選股名單", options, key="quick_select")
+        
         if selected_quick != "-- 快速切換標的 --":
             quick_code = selected_quick.split(" ")[0]
             if quick_code != st.session_state.selected_stock:
@@ -392,9 +398,10 @@ with st.sidebar:
                 st.session_state.ai_industry_result = None
                 st.rerun()
 
-    # 處理上方輸入框的手動變更
+    # 🚀 修正：處理上方輸入框的手動變更，並且重置下拉選單避免衝突
     if stock_input != st.session_state.selected_stock:
         st.session_state.selected_stock = stock_input
+        st.session_state.quick_select = "-- 快速切換標的 --"
         st.session_state.show_pk = False 
         st.session_state.ai_industry_result = None 
         st.rerun()
@@ -601,7 +608,7 @@ if curr_id:
                         st.success(f"抓取成功！AI 推估值約為 {fetched_val} 元")
                         st.rerun()
                     else:
-                        st.error("AI 暫時找不到具體數據，請手手動輸入。")
+                        st.error("AI 暫時找不到具體數據，請手動輸入。")
                         
         with col_eps2:
             default_eps_val = st.session_state.ai_fetched_eps.get(curr_id)
@@ -816,6 +823,7 @@ if curr_id:
             fig_rev.add_trace(go.Bar(x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
             fig_rev.add_trace(go.Scatter(x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
             
+            # 🚀 修正：將圖例移至左上方、增加 margin 避免擋住工具列，並強制 X 軸使用類別字串格式 (YYYY/MM)
             fig_rev.update_layout(
                 height=400, template="plotly_dark", hovermode="x unified", 
                 margin=dict(l=10, r=10, t=50, b=10), 
@@ -835,7 +843,6 @@ if curr_id:
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：下方為客觀數據推導。您可點擊 AI 按鈕進行聯網深度檢索與買賣點分析。*</small>", unsafe_allow_html=True)
 
-        # 彙整畫面上所有的數據，準備打包傳給 AI 參考 (確保安全讀取)
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
         lo_val = s_float(info.get('targetLowPrice'))
@@ -866,7 +873,7 @@ if curr_id:
 
         current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
         
-        # --- 🚀 新增：一鍵打包提示詞模組 (給外部 AI 使用) ---
+        # 🚀 新增：一鍵打包提示詞模組 (給外部 AI 使用)
         full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
 請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
 1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
@@ -888,7 +895,7 @@ if curr_id:
         
         with col_ai2:
             with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
-                st.markdown("<small style='color:gray;'>*點擊下方黑框右上角的 📋 複製圖示，直接貼至付費版 [Gemini Advanced](https://gemini.google.com/) 或 ChatGPT 對話框即可獲得同等專業分析！*</small>", unsafe_allow_html=True)
+                st.markdown("<small style='color:gray;'>*點擊下方黑框右上角的 📋 複製圖示，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
                 st.code(full_prompt_for_copy, language="text")
         
         if st.session_state.ai_industry_result:
