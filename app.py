@@ -292,7 +292,6 @@ def get_yahoo_finance_api_info(stock_id):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json',
     }
-    # 加入雙網域備援，提升穩定度
     for domain in ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]:
         for ext in ['.TW', '.TWO']:
             try:
@@ -334,29 +333,31 @@ def get_yahoo_finance_api_info(stock_id):
                 pass
     return info
 
-# 🚀 全新強化：無敵多重別名掃描引擎 (專治 KY 股財報命名不同)
+# 🚀 終極精準網頁爬蟲：結合舊版標籤優勢與新版容錯結構，徹底拒絕抓錯年份！
 def get_fallback_info(stock_id):
     info = {}
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
     domain = "tw.stock.yahoo.com"
     
-    # 建立強效擷取引擎：同時搜尋多個標籤別名，免疫網頁改版
-    def ext_val(text_corpus, labels, is_pct=False):
+    def extract_exact(html_text, labels, is_pct=False):
         for label in labels:
-            idx = text_corpus.find(label)
-            if idx != -1:
-                # 擷取後方 200 字元，強制剝除所有 HTML 標籤
-                chunk = text_corpus[idx:idx+200]
-                chunk = chunk.replace(label, '') 
-                pct_str = r'\s*%' if is_pct else r''
-                # 允許冒號、空格，直接抓取純數字
-                pattern = r'[:：]?\s*([-0-9.,]+)' + pct_str
-                m = re.search(pattern, chunk)
-                if m:
-                    try:
-                        val = float(m.group(1).replace(',', ''))
-                        return val / 100.0 if is_pct else val
-                    except: pass
+            # 模式 1：相容您提供的舊版結構 </span><span...>數值</span>
+            pattern1 = rf'{label}</span><span[^>]*>([-0-9.,]+)</span>'
+            m1 = re.search(pattern1, html_text)
+            if m1:
+                try:
+                    val = float(m1.group(1).replace(',', ''))
+                    return val / 100.0 if is_pct else val
+                except: pass
+
+            # 模式 2：相容新版 <div> 結構，要求標籤關閉後，最多相隔 3 個 tag 就要出現數字
+            pattern2 = rf'>\s*{label}\s*</[^>]+>\s*(?:<[^>]+>\s*){{0,4}}([-0-9.,]+)\s*%?\s*<'
+            m2 = re.search(pattern2, html_text)
+            if m2:
+                try:
+                    val = float(m2.group(1).replace(',', ''))
+                    return val / 100.0 if is_pct else val
+                except: pass
         return None
 
     # 1. 抓取主要報價頁面
@@ -364,30 +365,30 @@ def get_fallback_info(stock_id):
         url1 = f"https://{domain}/quote/{stock_id}"
         res1 = requests.get(url1, headers=headers, timeout=5)
         if res1.status_code == 200:
-            clean_text = re.sub(r'<[^>]+>', ' ', res1.text)
-            info['trailingPE'] = ext_val(clean_text, ['本益比'])
-            info['priceToBook'] = ext_val(clean_text, ['股價淨值比'])
-            info['trailingEps'] = ext_val(clean_text, ['EPS', '每股盈餘'])
-            info['grossMargins'] = ext_val(clean_text, ['毛利率', '營業毛利率'], True)
-            info['operatingMargins'] = ext_val(clean_text, ['營業利益率', '營益率'], True)
-            info['returnOnEquity'] = ext_val(clean_text, ['ROE', '權益報酬率', '股東權益報酬率'], True)
+            text1 = res1.text
+            info['trailingPE'] = extract_exact(text1, ['本益比'])
+            info['priceToBook'] = extract_exact(text1, ['股價淨值比'])
+            info['trailingEps'] = extract_exact(text1, ['EPS', '每股盈餘'])
+            info['grossMargins'] = extract_exact(text1, ['毛利率', '營業毛利率'], True)
+            info['operatingMargins'] = extract_exact(text1, ['營業利益率', '營益率'], True)
+            info['returnOnEquity'] = extract_exact(text1, ['ROE', '權益報酬率', '股東權益報酬率'], True)
             
-            sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', res1.text)
+            sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text1)
             if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
     except: pass
 
-    # 2. 如果首頁抓不到，自動深入「財務比率」專屬頁面
+    # 2. 如果首頁抓不到，自動深入「財務比率」專屬頁面再抓一次
     if info.get('returnOnEquity') is None or info.get('grossMargins') is None:
         try:
             url2 = f"https://{domain}/quote/{stock_id}/financial-ratio"
             res2 = requests.get(url2, headers=headers, timeout=5)
             if res2.status_code == 200:
-                clean_text2 = re.sub(r'<[^>]+>', ' ', res2.text)
-                gm = ext_val(clean_text2, ['毛利率', '營業毛利率'], True)
+                text2 = res2.text
+                gm = extract_exact(text2, ['毛利率', '營業毛利率'], True)
                 if gm is not None: info['grossMargins'] = gm
-                om = ext_val(clean_text2, ['營業利益率', '營益率'], True)
+                om = extract_exact(text2, ['營業利益率', '營益率'], True)
                 if om is not None: info['operatingMargins'] = om
-                roe = ext_val(clean_text2, ['ROE', '權益報酬率', '股東權益報酬率'], True)
+                roe = extract_exact(text2, ['ROE', '權益報酬率', '股東權益報酬率'], True)
                 if roe is not None: info['returnOnEquity'] = roe
         except: pass
     
@@ -561,8 +562,7 @@ with st.sidebar:
             if target_cat: break
             
         if target_cat and target_stocks:
-            # 🚀 升級：加入進度條與防封鎖冷卻機制，避免 Yahoo 瞬間拉黑 IP
-            with st.spinner(f"正在啟動防護網掃描 {target_cat} 族群財報..."):
+            with st.spinner(f"正在掃描 {target_cat} 族群財報..."):
                 results = []
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -592,7 +592,6 @@ with st.sidebar:
                             'peg_str': f"{peg:.2f}" if peg is not None else "N/A"
                         })
                     
-                    # 關鍵：每掃一檔股票強制暫停 0.8 秒，完美閃避 Yahoo 防火牆
                     time.sleep(0.8)
                     progress_bar.progress((i + 1) / len(target_stocks))
                         
