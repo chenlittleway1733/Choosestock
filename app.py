@@ -52,7 +52,7 @@ def change_stock(stock_code):
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
 
-# --- 🛠️ 核心防護：安全浮點數轉換 ---
+# --- 🛠️ 核心防護：絕對安全的格式轉換工具 ---
 def s_float(val, default=None):
     try:
         if val is None: return default
@@ -62,6 +62,13 @@ def s_float(val, default=None):
         return v
     except:
         return default
+
+def to_pct(val):
+    try:
+        if val is None or pd.isna(val): return "N/A"
+        return f"{val * 100:.2f}%"
+    except:
+        return "N/A"
 
 # --- AI 解析與連線函數 ---
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
@@ -187,24 +194,22 @@ def get_global_market_trend():
 
         tickers = yf.Tickers('^SOX TSM NQ=F EWT')
         
-        def get_pct(ticker_obj):
+        def get_price_and_pct(ticker_obj):
             try:
                 hist = ticker_obj.history(period='5d')
                 if len(hist) >= 2:
                     c = float(hist['Close'].iloc[-1])
                     p = float(hist['Close'].iloc[-2])
                     if not math.isnan(c) and not math.isnan(p) and p != 0:
-                        return (c - p) / p * 100
+                        return c, (c - p) / p * 100
             except: pass
-            return 0.0
+            return 0.0, 0.0
 
-        sox_pct = get_pct(tickers.tickers['^SOX'])
-        tsm_pct = get_pct(tickers.tickers['TSM'])
-        nq_pct = get_pct(tickers.tickers['NQ=F'])
-        ewt_pct = get_pct(tickers.tickers['EWT'])
+        sox_price, sox_pct = get_price_and_pct(tickers.tickers['^SOX'])
+        tsm_price, tsm_pct = get_price_and_pct(tickers.tickers['TSM'])
+        nq_price, nq_pct = get_price_and_pct(tickers.tickers['NQ=F'])
+        ewt_price, ewt_pct = get_price_and_pct(tickers.tickers['EWT'])
         
-        # 🚀 終極修復：移除下午時段的條件判斷，永遠採用 4 個指標的綜合計算！
-        # 這樣才能保證上方的「趨勢評估文字」與下方的「綠色紅色數字」完全吻合！
         score = sox_pct * 0.3 + tsm_pct * 0.3 + nq_pct * 0.1 + ewt_pct * 0.3
         
         if score > 1.0:
@@ -217,7 +222,10 @@ def get_global_market_trend():
             trend, color = f"❄️ 悲觀警戒 ({target_day}台股面臨回檔壓力)", "#00cc66"
             
         return {
-            "sox": sox_pct, "tsm": tsm_pct, "nq": nq_pct, "ewt": ewt_pct,
+            "sox_p": sox_price, "sox": sox_pct, 
+            "tsm_p": tsm_price, "tsm": tsm_pct, 
+            "nq_p": nq_price, "nq": nq_pct, 
+            "ewt_p": ewt_price, "ewt": ewt_pct,
             "trend": trend, "color": color, 
             "target_day": target_day, "time_status": time_status
         }
@@ -441,10 +449,7 @@ with st.sidebar:
                         p_sort = sys_peg if sys_peg is not None and not pd.isna(sys_peg) and not peg_is_neg else 999
                         p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None and not pd.isna(sys_peg) else "N/A")
                         
-                        # 在漏斗中也需要安全的百分比轉換
-                        roe_str_local = f"{roe*100:.1f}%" if roe is not None and not pd.isna(roe) else "N/A"
-                        
-                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':roe_str_local,'peg_str':p_str})
+                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':to_pct(roe),'peg_str':p_str})
                     time.sleep(0.5); pbar.progress((i+1)/len(target_stocks))
                 pbar.empty(); results.sort(key=lambda x: (x['peg_sort'], -x['roe'] if x['roe'] else 0))
                 st.markdown("<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果</b></div>", unsafe_allow_html=True)
@@ -506,10 +511,10 @@ if curr_id:
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {trend_data['color']}; margin-bottom: 20px; border-top:1px solid #333; border-right:1px solid #333; border-bottom:1px solid #333;'>
                 <div style='font-size:1.15rem; font-weight:bold; color:{trend_data['color']}; margin-bottom:10px;'>{trend_data['trend']}</div>
                 <div style='display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;'>
-                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>費城半導體 (^SOX)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["sox"])};'>{trend_data["sox"]:+.2f}%</b></div>
-                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>台積電 ADR (TSM)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["tsm"])};'>{trend_data["tsm"]:+.2f}%</b></div>
-                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>納斯達克期貨 (NQ=F)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["nq"])};'>{trend_data["nq"]:+.2f}%</b></div>
-                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>台股 ETF (EWT)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["ewt"])};'>{trend_data["ewt"]:+.2f}%</b></div>
+                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>費城半導體 (^SOX)</span><br><b style='font-size:1.1rem; color:#fff;'>{trend_data["sox_p"]:,.2f}</b> <span style='font-size:1rem; color:{c_color(trend_data["sox"])};'>({trend_data["sox"]:+.2f}%)</span></div>
+                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>台積電 ADR (TSM)</span><br><b style='font-size:1.1rem; color:#fff;'>{trend_data["tsm_p"]:,.2f}</b> <span style='font-size:1rem; color:{c_color(trend_data["tsm"])};'>({trend_data["tsm"]:+.2f}%)</span></div>
+                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>納斯達克期貨 (NQ=F)</span><br><b style='font-size:1.1rem; color:#fff;'>{trend_data["nq_p"]:,.2f}</b> <span style='font-size:1rem; color:{c_color(trend_data["nq"])};'>({trend_data["nq"]:+.2f}%)</span></div>
+                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>台股 ETF (EWT)</span><br><b style='font-size:1.1rem; color:#fff;'>{trend_data["ewt_p"]:,.2f}</b> <span style='font-size:1rem; color:{c_color(trend_data["ewt"])};'>({trend_data["ewt"]:+.2f}%)</span></div>
                 </div>
             </div>
             """
@@ -530,7 +535,7 @@ if curr_id:
 
         roe = s_float(info.get('returnOnEquity'))
         gross_margin = s_float(info.get('grossMargins'))
-        op_margin = s_float(info.get('operatingMargins'))
+        om = s_float(info.get('operatingMargins'))
         
         rev_growth = s_float(info.get('revenueGrowth'))
         if rev_growth is None and df_rev_bk is not None and not df_rev_bk.empty:
@@ -568,19 +573,13 @@ if curr_id:
             default_eps = st.session_state.ai_fetched_eps.get(curr_id, sys_f_eps if sys_f_eps else (t_eps if t_eps else 1.0))
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
-        # ==========================================
-        # 🚀 絕對安全的本地格式化工具：杜絕 NameError 與 ValueError
-        # ==========================================
-        def safe_pct(val):
-            return f"{val * 100:.2f}%" if val is not None and not pd.isna(val) else "N/A"
-
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
             if t_eps and t_eps > 0 and pe_ratio:
                 cg = (active_f_eps - t_eps) / t_eps
                 peg_ratio = pe_ratio / (cg * 100) if cg > 0 else -999
-                eg_str = safe_pct(cg)
+                eg_str = to_pct(cg)
                 eg_color = "#ff4d4d" if cg > 0 else "#00cc66"
             else:
                 peg_ratio = None
@@ -591,7 +590,7 @@ if curr_id:
             active_f_eps = sys_f_eps
             forward_pe = sys_forward_pe
             peg_ratio = sys_peg_ratio
-            eg_str = safe_pct(earn_growth)
+            eg_str = to_pct(earn_growth)
             eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
             eps_source_text = f"海外系統或反推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
@@ -600,11 +599,11 @@ if curr_id:
         active_f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
         f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{active_f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {active_f_eps_str}"
             
-        rg_str = safe_pct(rev_growth)
+        rg_str = to_pct(rev_growth)
         rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
-        gm_str = safe_pct(gross_margin)
-        om_str = safe_pct(op_margin)
-        roe_str = safe_pct(roe)
+        gm_str = to_pct(gross_margin)
+        om_str = to_pct(op_margin)
+        roe_str = to_pct(roe)
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe is not None and roe >= 0.15 else ""
 
         fund_html = f"""
@@ -681,7 +680,7 @@ if curr_id:
         # 【6. 產業前景與 AI 報告】
         if st.button("🤖 啟動 AI 深度報告 (含一鍵複製)", use_container_width=True):
             if st.session_state.api_key:
-                ctx = f"現價:{curr_p}, P/E:{pe_ratio}, ROE:{safe_pct(roe)}, 毛利:{safe_pct(gross_margin)}, 營收YoY:{safe_pct(rev_growth)}, 預估EPS:{active_f_eps}"
+                ctx = f"現價:{curr_p}, P/E:{pe_ratio}, ROE:{to_pct(roe)}, 毛利:{to_pct(gross_margin)}, 營收YoY:{to_pct(rev_growth)}, 預估EPS:{active_f_eps}"
                 st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, ctx, st.session_state.get('selected_model', 'gemini-2.5-flash'))
         if st.session_state.ai_industry_result:
             with st.container(border=True):
@@ -692,15 +691,21 @@ if curr_id:
                     st.code(st.session_state.ai_industry_result, language="markdown")
 
         # 🚀 【9. 必備神兵：回歸最真實階梯狀的本益比河流圖 (P/E River Chart)】
-        if df_per_bk is not None and not df_per_bk.empty:
-            st.markdown("### 🌊 近五年本益比河流圖 (P/E River)")
-            st.markdown("<small style='color:gray;'>*實戰價值：以最真實未平滑的財報數據繪製。一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
+        st.markdown("### 🌊 近五年本益比河流圖 (P/E River)")
+        st.markdown("<small style='color:gray;'>*實戰價值：以最真實未平滑的財報數據繪製。一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
+        
+        with st.spinner("抓取近五年每日歷史本益比數據中..."):
+            df_per_bk_river = get_pe_pb_data(curr_id)
             
+        # 🚀 防呆機制：若 API 限制導致抓不到資料，明確顯示原因而不讓整個圖表消失
+        if df_per_bk_river is None or df_per_bk_river.empty:
+            st.warning("⚠️ 目前公開資料庫 (FinMind) 連線忙碌或已達免費呼叫上限，無法繪製歷史河流圖。請稍候重新整理網頁再試。")
+        else:
             h_reset = hist.copy().reset_index()
             if h_reset['Date'].dt.tz is not None: h_reset['Date'] = h_reset['Date'].dt.tz_localize(None)
             h_reset['Date_only'] = h_reset['Date'].dt.date
             
-            d_per = df_per_bk.drop_duplicates(subset=['date'], keep='last').copy()
+            d_per = df_per_bk_river.drop_duplicates(subset=['date'], keep='last').copy()
             d_per['date_only'] = d_per['date'].dt.date
             h_reset = h_reset.drop_duplicates(subset=['Date_only'], keep='last')
 
@@ -749,20 +754,152 @@ if curr_id:
 
                 st.markdown(f"<div style='background:#f8f9fa; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px; color:#333;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x)</div>", unsafe_allow_html=True)
                 st.plotly_chart(fig_river, use_container_width=True)
+            else:
+                st.info("💡 該股票有效資料筆數不足，系統無法為其繪製河流圖。")
         st.markdown("---")
 
-        # 【10. 專業技術線圖】
+        # 🚀 【10. 專業技術線圖與量化型態分析 (重新加回！)】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
+        
+        # 確保必要欄位存在
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            if col not in hist.columns: hist[col] = 0.0
+
+        hist['MA5'] = hist['Close'].rolling(5).mean()
+        hist['MA10'] = hist['Close'].rolling(10).mean()
+        hist['MA20'] = hist['Close'].rolling(20).mean()
+        hist['MA60'] = hist['Close'].rolling(60).mean()
+        hist['MA120'] = hist['Close'].rolling(120).mean()
+        hist['Vol_MA20'] = hist['Volume'].rolling(20).mean()
+
+        # 🚀 KD 指標計算邏輯
+        h9, l9 = hist['High'].rolling(9).max(), hist['Low'].rolling(9).min()
+        h9_l9_diff = h9 - l9
+        h9_l9_diff[h9_l9_diff == 0] = 1e-9 
+        rsv = (hist['Close'] - l9) / h9_l9_diff * 100
+        
+        K, D = [50], [50]
+        for v in rsv.fillna(50):
+            K.append(K[-1]*(2/3) + v*(1/3))
+            D.append(D[-1]*(2/3) + K[-1]*(1/3))
+        hist['K'], hist['D'] = K[1:], D[1:]
+
+        last_close = hist['Close'].iloc[-1]
+        ma5_last = hist['MA5'].iloc[-1]
+        ma20_last = hist['MA20'].iloc[-1]
+        ma60_last = hist['MA60'].iloc[-1]
+        ma120_last = hist['MA120'].iloc[-1] if not pd.isna(hist['MA120'].iloc[-1]) else ma60_last
+        k_last = hist['K'].iloc[-1]
+        d_last = hist['D'].iloc[-1]
+        
+        recent_20 = hist.tail(20)
+        recent_high = recent_20['High'].max()
+        recent_low = recent_20['Low'].min()
+        
+        max_vol_idx = recent_20['Volume'].idxmax()
+        max_vol_day = recent_20.loc[max_vol_idx]
+        
+        is_high_vol = max_vol_day['Volume'] > (max_vol_day['Vol_MA20'] * 2)
+        is_at_high = max_vol_day['High'] >= (recent_high * 0.95)
+        is_dropping = last_close < max_vol_day['Low']
+        high_vol_warning = is_high_vol and is_at_high and is_dropping
+        
+        support_price = max(recent_low, ma60_last) if last_close > ma60_last else recent_low
+        resist_price = recent_high if last_close > ma20_last else min(recent_high, ma20_last)
+        
+        # 🚀 策略分析文字判定
+        if last_close < ma60_last:
+            trend_status, trend_color = "⚠️ 跌破季線 (趨勢轉弱)", "#00cc66"
+        elif last_close > ma20_last and ma5_last > ma20_last:
+            trend_status, trend_color = "📈 多頭強勢 (站上月線)", "#ff4d4d"
+        elif last_close < ma20_last and ma5_last < ma20_last:
+            trend_status, trend_color = "📉 空頭弱勢 (跌破月線)", "#00cc66"
+        else:
+            trend_status, trend_color = "↔️ 區間震盪 (方向未明)", "#ffd700"
+            
+        if high_vol_warning:
+            adv_text = "🚨 【量價警訊】高檔爆出天量且跌破低點，主力疑似出貨，切勿盲目接刀！"
+            buy_rec, sell_rec = "強烈觀望", f"反彈至 {max_vol_day['High']:.2f} 逃命"
+        elif last_close < ma60_last:
+            adv_text = "📉 【趨勢轉弱】股價已跌破季線(生命線)，長線大趨勢走弱，應耐心等待底部確立。"
+            buy_rec, sell_rec = "等待站回季線", f"{ma60_last:.2f} (季線壓力)"
+        elif k_last < 25 and k_last > d_last:
+            adv_text = "📈 【技術反彈】KD 低檔黃金交叉且長線均線有守，可嘗試逢低少量佈局。"
+            buy_rec, sell_rec = f"現價~{support_price:.2f} 附近", f"{resist_price:.2f} (上檔壓力)"
+        elif k_last > 80 and k_last < d_last:
+            adv_text = "⚠️ 【動能轉弱】KD 高檔死亡交叉，建議適度獲利了結保住利潤。"
+            buy_rec, sell_rec = "暫時觀望", f"現價~{resist_price:.2f} 附近"
+        elif last_close > ma20_last:
+            adv_text = "🔥 【多方格局】量價配合良好，拉回月線(20MA)有守可伺機介入。"
+            buy_rec, sell_rec = f"{ma20_last:.2f} (月線支撐)", f"{resist_price:.2f} (近期前高)"
+        else:
+            adv_text = "❄️ 【空方格局】短線均線反壓，反彈至均線壓力區可考慮減碼。"
+            buy_rec, sell_rec = "等待技術面打底", f"{ma20_last:.2f} (月線壓力)"
+
+        st.markdown(f"""
+        <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; margin-bottom:20px;'>
+            <h4 style='margin-top:0; color:#fff;'>🎯 演算法量化交易策略</h4>
+            <div style='display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;'>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>目前趨勢</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:{trend_color};'>{trend_status}</div>
+                </div>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>下檔支撐</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#00bfff;'>{support_price:.2f}</div>
+                </div>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>上檔壓力</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#ab82ff;'>{resist_price:.2f}</div>
+                </div>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>建議買點</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#ff4d4d;'>{buy_rec}</div>
+                </div>
+                <div style='flex:1; min-width:120px;'>
+                    <div style='color:#aaa; font-size:0.9rem;'>建議賣點</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#00cc66;'>{sell_rec}</div>
+                </div>
+            </div>
+            <div style='margin-top:15px; padding-top:10px; border-top:1px dashed #444;'>
+                <span style='color:#aaa; font-size:0.9rem;'>💡 策略解析：</span>
+                <span style='color:#ffd700; font-weight:bold;'>{adv_text}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
         plot_df = hist.tail(120).copy()
         
-        plot_df['MA5'] = plot_df['Close'].rolling(5).mean()
-        plot_df['MA20'] = plot_df['Close'].rolling(20).mean()
-        plot_df['MA60'] = plot_df['Close'].rolling(60).mean()
-        
+        # 🚀 繪製整合 K線、均線、成交量與 KD 指標的圖表
         fig_k = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-        fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線'), row=1, col=1)
-        fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='成交量'), row=2, col=1)
-        fig_k.update_layout(height=600, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark")
+        fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5(周線)', line=dict(color='#00bfff', width=1.5)), row=1, col=1)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10(雙周)', line=dict(color='#ab82ff', width=1.5)), row=1, col=1)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20(月線)', line=dict(color='#ff8c00', width=1.5)), row=1, col=1)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60(季線)', line=dict(color='#ffd700', width=1.5)), row=1, col=1)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA120'], mode='lines', name='MA120(半年線)', line=dict(color='#ff69b4', width=1.5)), row=1, col=1)
+        
+        vol_colors = ['#ff4d4d' if getattr(row, 'Close', 0) >= getattr(row, 'Open', 0) else '#00cc66' for _, row in plot_df.iterrows()]
+        fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
+        
+        # 繪製 KD 指標
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
+
+        fig_k.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
+        max_vol = plot_df['Volume'].max() / 1000 if not plot_df['Volume'].empty else 100
+        fig_k.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
+        fig_k.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
+        fig_k.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
+
+        fig_k.update_layout(
+            height=650, 
+            xaxis_rangeslider_visible=False, 
+            margin=dict(l=10, r=10, t=50, b=10), 
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), 
+            template="plotly_dark",
+            hovermode="x unified"
+        )
         st.plotly_chart(fig_k, use_container_width=True)
     else:
         st.error(f"找不到代號 {curr_id} 的資料。")
