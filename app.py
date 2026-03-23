@@ -280,117 +280,46 @@ def get_pe_pb_data(stock_id):
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
         df['PER'] = pd.to_numeric(df['PER'], errors='coerce')
+        # 🚀 同時抓取準確的股價淨值比 (PBR)
+        df['PBR'] = pd.to_numeric(df.get('PBR'), errors='coerce') 
         df = df[df['PER'] > 0] 
         
-        return df[['date', 'PER']].dropna().reset_index(drop=True)
+        return df[['date', 'PER', 'PBR']].dropna(subset=['date', 'PER']).reset_index(drop=True)
     except Exception as e: 
         return None
 
-def get_yahoo_finance_api_info(stock_id):
-    info = {}
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-    }
-    for domain in ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]:
-        for ext in ['.TW', '.TWO']:
-            try:
-                url = f"https://{domain}/v10/finance/quoteSummary/{stock_id}{ext}?modules=summaryDetail,financialData,defaultKeyStatistics"
-                res = requests.get(url, headers=headers, timeout=5)
-                if res.status_code == 200:
-                    data = res.json()
-                    result = data.get('quoteSummary', {}).get('result', [])
-                    if result:
-                        res_dict = result[0]
-                        
-                        summary = res_dict.get('summaryDetail', {})
-                        info['trailingPE'] = summary.get('trailingPE', {}).get('raw')
-                        info['forwardPE'] = summary.get('forwardPE', {}).get('raw')
-                        info['priceToBook'] = summary.get('priceToBook', {}).get('raw')
-                        info['previousClose'] = summary.get('previousClose', {}).get('raw')
-                        
-                        fin = res_dict.get('financialData', {})
-                        info['grossMargins'] = fin.get('grossMargins', {}).get('raw')
-                        info['operatingMargins'] = fin.get('operatingMargins', {}).get('raw')
-                        info['returnOnEquity'] = fin.get('returnOnEquity', {}).get('raw')
-                        info['revenueGrowth'] = fin.get('revenueGrowth', {}).get('raw')
-                        info['earningsGrowth'] = fin.get('earningsGrowth', {}).get('raw')
-                        info['targetHighPrice'] = fin.get('targetHighPrice', {}).get('raw')
-                        info['targetMeanPrice'] = fin.get('targetMeanPrice', {}).get('raw')
-                        info['targetLowPrice'] = fin.get('targetLowPrice', {}).get('raw')
-                        info['numberOfAnalystOpinions'] = fin.get('numberOfAnalystOpinions', {}).get('raw')
-                        
-                        stats = res_dict.get('defaultKeyStatistics', {})
-                        info['trailingEps'] = stats.get('trailingEps', {}).get('raw')
-                        info['forwardEps'] = stats.get('forwardEps', {}).get('raw')
-                        info['pegRatio'] = stats.get('pegRatio', {}).get('raw')
-                        info['heldPercentInsiders'] = stats.get('heldPercentInsiders', {}).get('raw')
-                        info['heldPercentInstitutions'] = stats.get('heldPercentInstitutions', {}).get('raw')
-                        info['sharesOutstanding'] = stats.get('sharesOutstanding', {}).get('raw')
-                        
-                        return info
-            except Exception:
-                pass
-    return info
-
-# 🚀 終極精準網頁爬蟲：結合舊版標籤優勢與新版容錯結構，徹底拒絕抓錯年份！
+# 🚀 終極重構：捨棄脆弱的 HTML，僅抓取有防護的財務比率 (%)，防範 2026 年份誤判
 def get_fallback_info(stock_id):
     info = {}
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     domain = "tw.stock.yahoo.com"
     
-    def extract_exact(html_text, labels, is_pct=False):
-        for label in labels:
-            # 模式 1：相容您提供的舊版結構 </span><span...>數值</span>
-            pattern1 = rf'{label}</span><span[^>]*>([-0-9.,]+)</span>'
-            m1 = re.search(pattern1, html_text)
-            if m1:
-                try:
-                    val = float(m1.group(1).replace(',', ''))
-                    return val / 100.0 if is_pct else val
-                except: pass
-
-            # 模式 2：相容新版 <div> 結構，要求標籤關閉後，最多相隔 3 個 tag 就要出現數字
-            pattern2 = rf'>\s*{label}\s*</[^>]+>\s*(?:<[^>]+>\s*){{0,4}}([-0-9.,]+)\s*%?\s*<'
-            m2 = re.search(pattern2, html_text)
-            if m2:
-                try:
-                    val = float(m2.group(1).replace(',', ''))
-                    return val / 100.0 if is_pct else val
-                except: pass
-        return None
-
-    # 1. 抓取主要報價頁面
+    # 專門抓取財務比率專屬頁面 (利用嚴格正則表達式，且只抓 %)
     try:
-        url1 = f"https://{domain}/quote/{stock_id}"
-        res1 = requests.get(url1, headers=headers, timeout=5)
-        if res1.status_code == 200:
-            text1 = res1.text
-            info['trailingPE'] = extract_exact(text1, ['本益比'])
-            info['priceToBook'] = extract_exact(text1, ['股價淨值比'])
-            info['trailingEps'] = extract_exact(text1, ['EPS', '每股盈餘'])
-            info['grossMargins'] = extract_exact(text1, ['毛利率', '營業毛利率'], True)
-            info['operatingMargins'] = extract_exact(text1, ['營業利益率', '營益率'], True)
-            info['returnOnEquity'] = extract_exact(text1, ['ROE', '權益報酬率', '股東權益報酬率'], True)
+        url2 = f"https://{domain}/quote/{stock_id}/financial-ratio"
+        res_ratio = requests.get(url2, headers=headers, timeout=5)
+        if res_ratio.status_code == 200:
+            # 將 HTML 標籤徹底清除為純文字
+            clean_text2 = re.sub(r'<[^>]+>', ' ', res_ratio.text)
             
-            sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text1)
-            if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
+            def ext_pct(labels):
+                for label in labels:
+                    # 嚴格規則：找到關鍵字後，只抓緊接在後面的「數字 + %」，確保不會抓到年份
+                    m = re.search(rf'{label}(?:.|\n){{1,50}}?([-0-9.,]+)\s*%', clean_text2)
+                    if m:
+                        try:
+                            val = float(m.group(1).replace(',', ''))
+                            # 邏輯檢查：利潤率與 ROE 應在合理範圍 (-500% ~ 500%)
+                            if -500 <= val <= 500:
+                                return val / 100.0
+                        except: pass
+                return None
+                
+            # 加入多重別名，專治 KY 股財報命名
+            info['grossMargins'] = ext_pct(['毛利率', '營業毛利率'])
+            info['operatingMargins'] = ext_pct(['營業利益率', '營益率'])
+            info['returnOnEquity'] = ext_pct(['ROE', '權益報酬率', '股東權益報酬率'])
     except: pass
-
-    # 2. 如果首頁抓不到，自動深入「財務比率」專屬頁面再抓一次
-    if info.get('returnOnEquity') is None or info.get('grossMargins') is None:
-        try:
-            url2 = f"https://{domain}/quote/{stock_id}/financial-ratio"
-            res2 = requests.get(url2, headers=headers, timeout=5)
-            if res2.status_code == 200:
-                text2 = res2.text
-                gm = extract_exact(text2, ['毛利率', '營業毛利率'], True)
-                if gm is not None: info['grossMargins'] = gm
-                om = extract_exact(text2, ['營業利益率', '營益率'], True)
-                if om is not None: info['operatingMargins'] = om
-                roe = extract_exact(text2, ['ROE', '權益報酬率', '股東權益報酬率'], True)
-                if roe is not None: info['returnOnEquity'] = roe
-        except: pass
     
     return info
 
@@ -417,13 +346,8 @@ def get_stock_data(stock_id):
             continue
             
     if hist is not None and not hist.empty:
-        if not info_data.get('returnOnEquity') or not info_data.get('trailingPE'):
-            api_info = get_yahoo_finance_api_info(stock_id)
-            for k, v in api_info.items():
-                if v is not None:
-                    info_data[k] = v
-                    
-        if not info_data.get('returnOnEquity') or not info_data.get('trailingPE'):
+        # 直接補上穩定的備援，只抓 ROE 與毛利
+        if not info_data.get('returnOnEquity'):
             fallback = get_fallback_info(stock_id)
             for k, v in fallback.items():
                 if v is not None:
@@ -494,7 +418,6 @@ with st.sidebar:
         st.session_state.ai_industry_result = None 
         st.rerun()
 
-    # --- 讀取快速選股名單，並建立分類字典庫 ---
     options = ["-- 快速切換標的 --"]
     categories = {}
     current_cat = "未分類"
@@ -543,7 +466,6 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # --- 🎯 策略漏斗掃描器 ---
     st.markdown("### 🎯 策略漏斗掃描器")
     st.caption("尋找目前標的所屬族群中的「高 ROE + 低 PEG」潛力股。")
     
@@ -572,13 +494,19 @@ with st.sidebar:
                     _, info = get_stock_data(c)
                     
                     if info:
-                        roe = s_float(info.get('returnOnEquity'))
-                        pe = s_float(info.get('trailingPE'))
+                        # 在掃描器中也套用無敵代理運算機制
+                        df_per_bk = get_pe_pb_data(c)
+                        df_rev_bk = get_monthly_revenue(c)
                         
+                        fm_pe = s_float(df_per_bk['PER'].iloc[-1]) if df_per_bk is not None and not df_per_bk.empty else None
+                        pe = fm_pe if fm_pe and fm_pe > 0 else s_float(info.get('trailingPE'))
+                        if pe is not None and (pe < 0 or pe > 1000): pe = None
+                        
+                        roe = s_float(info.get('returnOnEquity'))
+                        
+                        rev_g = s_float(df_rev_bk['YoY'].iloc[-1]) / 100.0 if df_rev_bk is not None and not df_rev_bk.empty else None
                         eg = s_float(info.get('earningsGrowth'))
-                        if eg is None:
-                            rev = s_float(info.get('revenueGrowth'))
-                            if rev is not None: eg = rev
+                        if eg is None and rev_g is not None: eg = rev_g
                             
                         sys_peg = s_float(info.get('pegRatio'))
                         peg = sys_peg if sys_peg is not None else (pe / (eg * 100) if pe and eg and eg > 0 else None)
@@ -661,7 +589,6 @@ with st.sidebar:
 # ==========================================
 st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
-# 處理 AI 議題結果
 if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
         model_to_use = st.session_state.get('selected_model', 'gemini-2.5-flash')
@@ -702,9 +629,6 @@ if st.session_state.show_whale:
         with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
-# ==========================================
-# 個股戰情室核心渲染區
-# ==========================================
 curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
@@ -716,7 +640,6 @@ if curr_id:
             c_name = info.get('shortName', curr_id)
 
     if hist is not None and not hist.empty:
-        # 【1. 簡介與產業】
         st.markdown(f"### 🏢 {c_name} ({curr_id})")
         sector = SECTOR_MAP.get(info.get('sector', '未知'), info.get('sector', '未知'))
         st.markdown(f"**🏷️ 產業分類：** {sector} / {info.get('industry', '未知')}")
@@ -729,7 +652,6 @@ if curr_id:
             else:
                 st.write(summary_en)
 
-        # 【2. 即時報價】
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
@@ -747,7 +669,7 @@ if curr_id:
         change = curr_p - prev_close if prev_close else 0
         change_pct = (change / prev_close) * 100 if prev_close else 0
         amp = ((high_p - low_p) / prev_close) * 100 if prev_close else 0
-        avg_price = (high_p + low_p + curr_p) / 3
+        avg_price = (high_p + low_p + curr_p) / 3 if curr_p else 0
         turnover_100m = (vol_shares * avg_price) / 100000000
         
         def get_color(val, base):
@@ -786,36 +708,46 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # 【3. 財務基本面與獲利預估微調】
         st.markdown("#### 💼 財務基本面與獲利基準微調")
         
+        # 🚀 終極數據還原與代理計算核心
         df_rev_backup = get_monthly_revenue(curr_id)
         df_per_backup = get_pe_pb_data(curr_id)
 
-        pb_ratio = s_float(info.get('priceToBook'))
-        pe_ratio = s_float(info.get('trailingPE'))
-        if pe_ratio is None and df_per_backup is not None and not df_per_backup.empty:
-            pe_ratio = s_float(df_per_backup['PER'].iloc[-1])
+        # 優先相信公開資料庫 (FinMind) 的精準本益比與淨值比
+        finmind_pe = s_float(df_per_backup['PER'].iloc[-1]) if df_per_backup is not None and not df_per_backup.empty else None
+        finmind_pb = s_float(df_per_backup['PBR'].iloc[-1]) if df_per_backup is not None and not df_per_backup.empty and 'PBR' in df_per_backup.columns else None
+
+        pe_ratio = finmind_pe if finmind_pe and finmind_pe > 0 else s_float(info.get('trailingPE'))
+        pb_ratio = finmind_pb if finmind_pb and finmind_pb > 0 else s_float(info.get('priceToBook'))
+
+        # 嚴密排除 HTML 爬蟲抓到的年份或不合理資料
+        if pe_ratio is not None and (pe_ratio < 0 or pe_ratio > 1000): pe_ratio = None
+        if pb_ratio is not None and (pb_ratio < 0 or pb_ratio > 500): pb_ratio = None
             
         roe = s_float(info.get('returnOnEquity'))
         gross_margin = s_float(info.get('grossMargins'))
         op_margin = s_float(info.get('operatingMargins'))
         
-        rev_growth = s_float(info.get('revenueGrowth'))
-        if rev_growth is None and df_rev_backup is not None and not df_rev_backup.empty:
-            rev_growth = s_float(df_rev_backup['YoY'].iloc[-1]) / 100.0
+        rev_growth = s_float(df_rev_backup['YoY'].iloc[-1]) / 100.0 if df_rev_backup is not None and not df_rev_backup.empty else s_float(info.get('revenueGrowth'))
             
         earn_growth = s_float(info.get('earningsGrowth'))
         if earn_growth is None and rev_growth is not None:
-            earn_growth = rev_growth
+            earn_growth = rev_growth # 用營收成長率代理獲利成長率
             
         t_eps = s_float(info.get('trailingEps'))
+        if t_eps is not None and (t_eps > 500 or t_eps < -500): 
+            t_eps = None # 消滅 2026 年份 Bug
+            
         if t_eps is None and pe_ratio is not None and pe_ratio > 0 and curr_p > 0:
-            t_eps = curr_p / pe_ratio 
+            t_eps = curr_p / pe_ratio # 直接用現價與 P/E 反推出 100% 正確的 EPS
             
         sys_f_eps = s_float(info.get('forwardEps'))
+        if sys_f_eps is not None and (sys_f_eps > 500 or sys_f_eps < -500): 
+            sys_f_eps = None
+            
         if sys_f_eps is None and t_eps is not None and earn_growth is not None:
-            sys_f_eps = t_eps * (1 + earn_growth) 
+            sys_f_eps = t_eps * (1 + earn_growth) # 用當前 EPS 乘上成長率反推預估 EPS
             
         sys_forward_pe = s_float(info.get('forwardPE'))
         if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0:
