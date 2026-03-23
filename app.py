@@ -46,10 +46,10 @@ if 'ai_industry_result' not in st.session_state:
 
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
-    st.session_state.show_pk = False # 換股票時自動隱藏 PK 表格
-    st.session_state.ai_industry_result = None # 重置產業 AI 分析結果
+    st.session_state.show_pk = False
+    st.session_state.ai_industry_result = None
 
-# --- 🛠️ 核心防護：安全浮點數轉換 (防止髒資料導致崩潰) ---
+# --- 🛠️ 核心防護：安全浮點數轉換 ---
 def s_float(val, default=None):
     try:
         return float(val)
@@ -92,7 +92,7 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
             return "⏳ **API 呼叫太頻繁 (達到免費額度上限)！**\n\nGoogle 免費版 API (特別是 Pro 模型) 有每分鐘呼叫 2 次的限制。\n👉 **解決方法：** 請等待約 1 分鐘後再試，或在左側選單切換為「Gemini 2.5 Flash」模型。", []
         else:
             err_msg = response.json().get('error', {}).get('message', response.text)
-            return f"⚠️ API 連線失敗 (可能達免費次數上限): {err_msg}", []
+            return f"⚠️ API 連線失敗: {err_msg}", []
     except Exception as e:
         return f"⚠️ 連線異常: {str(e)}", []
 
@@ -182,8 +182,6 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
     - 絕對不要輸出 HTML 標籤，直接輸出 Markdown 內容即可。"""
 
     headers = {"Content-Type": "application/json"}
-    
-    # 🛡️ 終極防護：將網址拆解，絕對不讓編輯器污染它！
     protocol = "https://"
     api_host = "generativelanguage.googleapis.com"
     url = f"{protocol}{api_host}/v1beta/models/{model_name}:generateContent?key={api_key}"
@@ -197,7 +195,6 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
     }
 
     try:
-        # 🔧 修正：將 timeout 從 30 秒大幅延長到 90 秒，給予 Pro 模型充分的深度推演時間
         response = requests.post(url, headers=headers, json=payload, timeout=90)
         if response.status_code == 200: 
             res_json = response.json()
@@ -205,12 +202,11 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
             content = re.sub(r'```markdown\n?|```', '', content).strip()
             return content
         elif response.status_code == 429:
-             return "### ⏳ API 呼叫太頻繁 (達到免費額度上限)！\n\nGoogle 免費版 API 的限制較嚴格（尤其是 **Pro 模型每分鐘僅能呼叫 2 次**）。\n\n👉 **解決方法：**\n1. 請等待約 **30 ~ 60 秒**後再點擊一次。\n2. 或者在左側選單切換為速度更快、額度更高的「**Gemini 2.5 Flash**」大腦！"
+             return "### ⏳ API 呼叫太頻繁 (達到免費額度上限)！\n\nGoogle 免費版 API 的限制較嚴格（尤其是 **Pro 模型每分鐘僅能呼叫 2 次**）。\n\n👉 **解決方法：**\n1. 請等待約 **30 ~ 60 秒**後再點擊一次。\n2. 或者在左側選單切換為速度更快、額度更高的「**Gemini 2.5 Flash**」大腦！\n3. 或者往下捲動，點擊展開右方的「📋 打包提示詞」，直接複製貼到付費版的 Gemini 中提問！"
         else:
             err_msg = response.json().get('error', {}).get('message', response.text)
             return f"⚠️ API 連線失敗: {err_msg}"
     except Exception as e:
-        # 🔧 新增：捕捉 Timeout 逾時錯誤，給予友善中文提示
         if "timeout" in str(e).lower():
             return "### ⏳ API 連線逾時 (Timeout)！\n\nAI (特別是 Pro 深度模型) 正在進行非常複雜的運算，超過了系統的等待上限。\n👉 **解決方法：** 請再次點擊按鈕重試，或者先切換為速度極快的「Gemini 2.5 Flash」模型進行初步分析。"
         return f"⚠️ 連線異常: {str(e)}"
@@ -236,11 +232,18 @@ def get_monthly_revenue(stock_id):
 
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
+        
+        # 強制排除「當月」的未結算或錯誤資料
+        current_month_start = pd.to_datetime(f"{today.year}-{today.month:02d}-01")
+        df = df[df['date'] < current_month_start]
+
         df = df.sort_values('date').reset_index(drop=True)
 
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
         df['YoY'] = df['revenue'].pct_change(periods=12) * 100
-        df['Month'] = df['date'].dt.strftime('%Y-%m')
+        
+        # 將月份格式強制改為 YYYY/MM 格式
+        df['Month'] = df['date'].dt.strftime('%Y/%m')
         df['Revenue'] = df['revenue'] / 100000000 
 
         final_df = df.dropna(subset=['YoY']).tail(12).copy()
@@ -251,10 +254,37 @@ def get_monthly_revenue(stock_id):
         return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
     except Exception as e: return None
 
+# 🚀 新增：抓取近三年歷史本益比數據 (供河流圖使用)
+@st.cache_data(ttl=43200)
+def get_pe_pb_data(stock_id):
+    try:
+        today = datetime.date.today()
+        start_year = today.year - 3
+        start_str = f"{start_year}-{today.month:02d}-01"
+
+        protocol = "https://"
+        host_name = "api.finmindtrade.com"
+        path = "/api/v4/data"
+        params = f"?dataset=TaiwanStockPER&data_id={stock_id}&start_date={start_str}"
+        url = f"{protocol}{host_name}{path}{params}"
+
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=10)
+        data = res.json()
+
+        if data.get('status') != 200 or not data.get('data'): return None
+
+        df = pd.DataFrame(data['data'])
+        df['date'] = pd.to_datetime(df['date'])
+        df['PER'] = pd.to_numeric(df['PER'], errors='coerce')
+        df = df[df['PER'] > 0] # 濾除獲利為負的極端值
+        
+        return df[['date', 'PER']].dropna().reset_index(drop=True)
+    except Exception as e: return None
+
 def get_fallback_info(stock_id):
     info = {}
     try:
-        # 🛡️ 終極防護：將網址拆解，避免被自動轉為 Markdown 超連結
         protocol = "https://"
         host_name = "tw.stock.yahoo.com"
         url = f"{protocol}{host_name}/quote/{stock_id}"
@@ -297,7 +327,8 @@ def get_stock_data(stock_id):
     try:
         for ext in [".TW", ".TWO"]:
             ticker = yf.Ticker(f"{stock_id}{ext}")
-            hist = ticker.history(period="1y")
+            # 🚀 升級：為了畫出漂亮的本益比河流圖，我們將股價歷史資料抓取擴大為「近三年」
+            hist = ticker.history(period="3y")
             if not hist.empty: 
                 info_data = {}
                 try:
@@ -368,6 +399,14 @@ with st.sidebar:
     st.markdown("### 🔍 個股查詢")
     stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
     
+    if stock_input != st.session_state.selected_stock:
+        st.session_state.selected_stock = stock_input
+        if "quick_select" in st.session_state:
+            st.session_state.quick_select = "-- 快速切換標的 --"
+        st.session_state.show_pk = False 
+        st.session_state.ai_industry_result = None 
+        st.rerun()
+
     # --- 讀取快速選股名單 ---
     quick_stocks = []
     if os.path.exists("stocklist.txt"):
@@ -381,7 +420,12 @@ with st.sidebar:
             
     if quick_stocks:
         options = ["-- 快速切換標的 --"] + [f"{item.split(',')[0]} {item.split(',')[1]}" for item in quick_stocks]
-        selected_quick = st.selectbox("⚡ 快速選股名單", options, index=0)
+        
+        if "quick_select" not in st.session_state:
+            st.session_state.quick_select = "-- 快速切換標的 --"
+            
+        selected_quick = st.selectbox("⚡ 快速選股名單", options, key="quick_select")
+        
         if selected_quick != "-- 快速切換標的 --":
             quick_code = selected_quick.split(" ")[0]
             if quick_code != st.session_state.selected_stock:
@@ -389,13 +433,6 @@ with st.sidebar:
                 st.session_state.show_pk = False
                 st.session_state.ai_industry_result = None
                 st.rerun()
-
-    # 處理上方輸入框的手動變更
-    if stock_input != st.session_state.selected_stock:
-        st.session_state.selected_stock = stock_input
-        st.session_state.show_pk = False 
-        st.session_state.ai_industry_result = None 
-        st.rerun()
     
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
@@ -814,19 +851,91 @@ if curr_id:
             fig_rev.add_trace(go.Bar(x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
             fig_rev.add_trace(go.Scatter(x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
             
-            fig_rev.update_layout(height=400, template="plotly_dark", hovermode="x unified", margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+            fig_rev.update_layout(
+                height=400, template="plotly_dark", hovermode="x unified", 
+                margin=dict(l=10, r=10, t=50, b=10), 
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), 
+                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+            )
             fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
             fig_rev.update_yaxes(title_text="年增率 YoY (%)", secondary_y=True, showgrid=True, gridcolor='#333', zeroline=True, zerolinewidth=1, zerolinecolor='#555')
+            fig_rev.update_xaxes(type='category')
+            
             st.plotly_chart(fig_rev, use_container_width=True)
             st.markdown("---")
         else:
             st.warning("⚠️ 目前暫時無法連線至公開庫取得月營收數據。")
 
-        # 【6. 產業前景與競爭優勢評估】
+        # 🚀 【新增：6. 必備神兵：本益比河流圖 (P/E River Chart)】
+        df_per = get_pe_pb_data(curr_id)
+        if df_per is not None and not df_per.empty:
+            st.markdown("#### 🌊 必備神兵：近三年本益比河流圖 (P/E River)")
+            st.markdown("<small style='color:gray;'>*實戰價值：透過歷史估值區間，一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
+
+            hist_reset = hist.copy().reset_index()
+            if hist_reset['Date'].dt.tz is not None:
+                hist_reset['Date'] = hist_reset['Date'].dt.tz_localize(None)
+
+            hist_reset['Date_only'] = hist_reset['Date'].dt.date
+            df_per['date_only'] = df_per['date'].dt.date
+
+            merged = pd.merge(hist_reset, df_per, left_on='Date_only', right_on='date_only', how='inner')
+
+            if not merged.empty and len(merged) > 60: 
+                # 反推每日的 EPS (收盤價 / 當日本益比)
+                merged['EPS_calc'] = merged['Close'] / merged['PER']
+
+                # 透過分位數抓出過去三年的「本益比慣性通道」
+                pe_quantiles = merged['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
+
+                fig_river = go.Figure()
+
+                # 建立五條河流邊界
+                b1 = merged['EPS_calc'] * pe_quantiles[0]
+                b2 = merged['EPS_calc'] * pe_quantiles[1]
+                b3 = merged['EPS_calc'] * pe_quantiles[2]
+                b4 = merged['EPS_calc'] * pe_quantiles[3]
+                b5 = merged['EPS_calc'] * pe_quantiles[4]
+
+                # 畫出河流圖 (運用 Plotly 的 fill='tonexty' 營造帶狀區間)
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b1, line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b2, fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b3, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
+
+                # 把實際股價疊加在河流圖之上
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#ffffff', width=2.5), name='實際股價'))
+
+                # 計算目前落在哪個位階
+                current_pe = merged['PER'].iloc[-1]
+                if current_pe <= pe_quantiles[1]:
+                    pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
+                elif current_pe >= pe_quantiles[3]:
+                    pe_status, status_color = "⚠️ 處於歷史高估區間！(留意風險)", "#ff4d4d"
+                else:
+                    pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
+
+                fig_river.update_layout(
+                    height=450,
+                    template="plotly_dark",
+                    margin=dict(l=10, r=10, t=50, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    hovermode="x unified",
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+                )
+                fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#333')
+
+                st.markdown(f"<div style='background:#1e1e1e; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x)</div>", unsafe_allow_html=True)
+                st.plotly_chart(fig_river, use_container_width=True)
+                st.markdown("---")
+            else:
+                st.info("💡 該股票近期獲利不穩定或呈現虧損，系統無法繪製有效的本益比河流圖。")
+
+        # 【7. 產業前景與競爭優勢評估】
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：下方為客觀數據推導。您可點擊 AI 按鈕進行聯網深度檢索與買賣點分析。*</small>", unsafe_allow_html=True)
 
-        # 彙整畫面上所有的數據，準備打包傳給 AI 參考
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
         lo_val = s_float(info.get('targetLowPrice'))
@@ -857,24 +966,45 @@ if curr_id:
 
         current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
         
-        if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
-            if not st.session_state.api_key:
-                st.warning("請先於左側選單輸入您的 API Key。")
-            else:
-                with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
-                    st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
+        full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
+請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
+1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
+2. 公司競爭優勢 (護城河、市占率、核心技術)
+3. 具體的買賣點建議與操作策略 (請結合我提供的基本面、本益比、目標價潛在空間與技術型態，給出具體進出場評估或價位區間參考)
+
+請深度分析台股 {c_name} ({curr_id}) 的產業前景、競爭優勢及買賣點策略。
+
+【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_str}"""
+
+        col_ai1, col_ai2 = st.columns([1.2, 1])
+        with col_ai1:
+            if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
+                if not st.session_state.api_key:
+                    st.warning("請先於左側選單輸入您的 API Key。")
+                else:
+                    with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
+                        st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
+        
+        with col_ai2:
+            with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
+                st.markdown("<small style='color:gray;'>*點擊下方黑框右上角的 📋 複製圖示，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
+                st.code(full_prompt_for_copy, language="text")
         
         if st.session_state.ai_industry_result:
             st.markdown("<br>", unsafe_allow_html=True)
             with st.container(border=True):
-                st.markdown("### 🤖 AI 產業透視與實戰策略")
+                col1, col2 = st.columns([0.7, 0.3])
+                with col1:
+                    st.markdown("### 🤖 AI 產業透視與實戰策略")
+                with col2:
+                    st.markdown("<div style='text-align:right; margin-top:20px;'><small style='color:#00bfff;'>💡 往下捲動有【一鍵複製區塊】</small></div>", unsafe_allow_html=True)
+                
                 st.markdown(st.session_state.ai_industry_result)
                 
-                # 🚀 新增：一鍵複製的隱藏區塊
                 st.markdown("---")
-                with st.expander("📋 點擊展開【純文字版完整報告】 (附一鍵複製按鈕)"):
-                    st.markdown("<small style='color:gray;'>*💡 滑鼠移至下方黑色區塊，點擊「右上角的複製圖示」，即可一鍵將報告全文貼至 Gemini Advanced 等平台進行二次交叉分析。*</small>", unsafe_allow_html=True)
-                    st.code(st.session_state.ai_industry_result, language="markdown")
+                st.markdown("##### 📋 【純文字複製區】")
+                st.markdown("<small style='color:gray;'>*將游標移至下方黑框內，點擊右上角的「📋」圖示，即可將報告全文複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
+                st.code(st.session_state.ai_industry_result, language="markdown")
                     
             st.markdown("<br>", unsafe_allow_html=True)
 
@@ -925,7 +1055,7 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【7. 法人目標價】
+        # 【8. 法人目標價】
         hi = s_float(info.get('targetHighPrice'))
         me = s_float(info.get('targetMeanPrice'))
         lo = s_float(info.get('targetLowPrice'))
@@ -942,7 +1072,7 @@ if curr_id:
              st.info(f"法人最高預期：**{hi:.1f}**")
         st.markdown("---")
 
-        # 【8. 籌碼面與股權結構分析】
+        # 【9. 籌碼面與股權結構分析】
         st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
         insider_pct = s_float(info.get('heldPercentInsiders'))
         inst_pct = s_float(info.get('heldPercentInstitutions'))
@@ -994,7 +1124,7 @@ if curr_id:
         st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【9. 專業技術線圖與量化型態分析】
+        # 【10. 專業技術線圖與量化型態分析】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -1123,7 +1253,15 @@ if curr_id:
         fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
-        fig.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), hovermode="x unified")
+        
+        fig.update_layout(
+            height=650, 
+            template="plotly_dark", 
+            xaxis_rangeslider_visible=False, 
+            margin=dict(l=10, r=10, t=50, b=10), 
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), 
+            hovermode="x unified"
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確。")
