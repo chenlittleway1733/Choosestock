@@ -44,7 +44,6 @@ if 'show_pk' not in st.session_state:
 if 'ai_industry_result' not in st.session_state:
     st.session_state.ai_industry_result = None
 
-# 點擊股票按鈕時，同步將下拉選單狀態歸零，避免互相打架
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
     if "quick_select" in st.session_state:
@@ -287,6 +286,54 @@ def get_pe_pb_data(stock_id):
     except Exception as e: 
         return None
 
+# 🚀 第一重防護網：直接攔截 Yahoo 底層 JSON API，獲取最精準完整的財報數據
+def get_yahoo_finance_api_info(stock_id):
+    info = {}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+    }
+    for ext in ['.TW', '.TWO']:
+        try:
+            url = f"[https://query2.finance.yahoo.com/v10/finance/quoteSummary/](https://query2.finance.yahoo.com/v10/finance/quoteSummary/){stock_id}{ext}?modules=summaryDetail,financialData,defaultKeyStatistics"
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                result = data.get('quoteSummary', {}).get('result', [])
+                if result:
+                    res_dict = result[0]
+                    
+                    summary = res_dict.get('summaryDetail', {})
+                    info['trailingPE'] = summary.get('trailingPE', {}).get('raw')
+                    info['forwardPE'] = summary.get('forwardPE', {}).get('raw')
+                    info['priceToBook'] = summary.get('priceToBook', {}).get('raw')
+                    info['previousClose'] = summary.get('previousClose', {}).get('raw')
+                    
+                    fin = res_dict.get('financialData', {})
+                    info['grossMargins'] = fin.get('grossMargins', {}).get('raw')
+                    info['operatingMargins'] = fin.get('operatingMargins', {}).get('raw')
+                    info['returnOnEquity'] = fin.get('returnOnEquity', {}).get('raw')
+                    info['revenueGrowth'] = fin.get('revenueGrowth', {}).get('raw')
+                    info['earningsGrowth'] = fin.get('earningsGrowth', {}).get('raw')
+                    info['targetHighPrice'] = fin.get('targetHighPrice', {}).get('raw')
+                    info['targetMeanPrice'] = fin.get('targetMeanPrice', {}).get('raw')
+                    info['targetLowPrice'] = fin.get('targetLowPrice', {}).get('raw')
+                    info['numberOfAnalystOpinions'] = fin.get('numberOfAnalystOpinions', {}).get('raw')
+                    
+                    stats = res_dict.get('defaultKeyStatistics', {})
+                    info['trailingEps'] = stats.get('trailingEps', {}).get('raw')
+                    info['forwardEps'] = stats.get('forwardEps', {}).get('raw')
+                    info['pegRatio'] = stats.get('pegRatio', {}).get('raw')
+                    info['heldPercentInsiders'] = stats.get('heldPercentInsiders', {}).get('raw')
+                    info['heldPercentInstitutions'] = stats.get('heldPercentInstitutions', {}).get('raw')
+                    info['sharesOutstanding'] = stats.get('sharesOutstanding', {}).get('raw')
+                    
+                    return info
+        except Exception:
+            pass
+    return info
+
+# 🚀 第二重防護網：無敵動態正則表達式，對付 Yahoo HTML 改版
 def get_fallback_info(stock_id):
     info = {}
     try:
@@ -298,29 +345,23 @@ def get_fallback_info(stock_id):
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
         
-        # 🚀 無敵防護網：DOM-Agnostic Regex (不再怕 Yahoo 改版或亂換標籤)
+        # 放寬搜尋條件：搜尋標籤後約 200 字元內的數字，直接無視 HTML 亂碼
         def extract(label, is_percent=False):
-            pct_str = r'%' if is_percent else r''
-            # 尋找該標籤後續約 150 字元內的最先出現的數字，免疫所有的 span / div 等亂碼
-            pattern = label + r'(?:.|\n){1,150}?>\s*([-0-9.,]+)' + pct_str + r'\s*<'
+            pattern = label + r'(?:.|\n){1,200}?>\s*([-0-9.,]+)\s*%?\s*<'
             m = re.search(pattern, text)
             if m:
-                try: return float(m.group(1).replace(',', ''))
+                try: 
+                    val = float(m.group(1).replace(',', ''))
+                    return val / 100.0 if is_percent else val
                 except: pass
             return None
             
         info['trailingPE'] = extract(r'本益比')
         info['priceToBook'] = extract(r'股價淨值比')
         info['trailingEps'] = extract(r'EPS')
-        
-        gm = extract(r'毛利率', True)
-        if gm is not None: info['grossMargins'] = gm / 100.0
-        
-        om = extract(r'營業利益率', True)
-        if om is not None: info['operatingMargins'] = om / 100.0
-        
-        roe = extract(r'ROE', True)
-        if roe is not None: info['returnOnEquity'] = roe / 100.0
+        info['grossMargins'] = extract(r'毛利率', True)
+        info['operatingMargins'] = extract(r'營業利益率', True)
+        info['returnOnEquity'] = extract(r'ROE', True)
         
         sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text)
         if sec_match:
@@ -339,6 +380,8 @@ def get_stock_data(stock_id):
             hist = ticker.history(period="5y")
             if not hist.empty: 
                 info_data = {}
+                
+                # 階段 1: 嘗試原本的 yfinance
                 try:
                     info_data = ticker.info
                     if not isinstance(info_data, dict):
@@ -346,10 +389,20 @@ def get_stock_data(stock_id):
                 except:
                     pass
                     
-                if not info_data.get('trailingPE') and not info_data.get('trailingEps'):
+                # 階段 2: 啟動第一重防護網 (強大且精準的 JSON API)
+                if not info_data.get('returnOnEquity') or not info_data.get('trailingPE'):
+                    api_info = get_yahoo_finance_api_info(stock_id)
+                    for k, v in api_info.items():
+                        if v is not None:
+                            info_data[k] = v
+                
+                # 階段 3: 啟動第二重防護網 (無敵網頁爬蟲)
+                if not info_data.get('returnOnEquity') or not info_data.get('trailingPE'):
                     fallback = get_fallback_info(stock_id)
-                    info_data.update(fallback)
-                    
+                    for k, v in fallback.items():
+                        if v is not None:
+                            info_data[k] = v
+                            
                 return hist, info_data
         return None, None
     except: return None, None
@@ -716,7 +769,7 @@ if curr_id:
         earn_growth = s_float(info.get('earningsGrowth'))
         
         t_eps = s_float(info.get('trailingEps'))
-        # 🚀 數學反推機制：如果沒有 EPS 但有股價跟 PE，直接精準算出 EPS！
+        # 🚀 第三重防護網：數學反推機制。如果沒有 EPS 但有股價跟 PE，直接精準算出 EPS！
         if t_eps is None and pe_ratio is not None and pe_ratio > 0 and curr_p > 0:
             t_eps = curr_p / pe_ratio
             
