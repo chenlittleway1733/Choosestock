@@ -52,7 +52,7 @@ def change_stock(stock_code):
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
 
-# --- 🛠️ 核心防護：絕對安全的格式轉換工具 ---
+# --- 🛠️ 核心防護：安全浮點數轉換 ---
 def s_float(val, default=None):
     try:
         if val is None: return default
@@ -62,14 +62,6 @@ def s_float(val, default=None):
         return v
     except:
         return default
-
-# 🚀 這裡將百分比轉換函數拉到「全局最上方」，保證從頭到尾都不會出現 NameError 崩潰！
-def to_pct(val):
-    try:
-        if val is None or pd.isna(val): return "N/A"
-        return f"{val * 100:.2f}%"
-    except:
-        return "N/A"
 
 # --- AI 解析與連線函數 ---
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
@@ -176,26 +168,23 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         if "timeout" in str(e).lower(): return "⏳ API 連線逾時，請重試。"
         return f"連線異常: {str(e)}"
 
-# --- 🌍 動態判定今日/明日 (高精準時段與權重切換) ---
+# --- 🌍 動態判定今日/明日 ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
-        # 轉換為台灣時間 (UTC+8)
         tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
         h = tw_time.hour
         
-        # 精準時間判定與文案顯示
         if 14 <= h < 22:
             target_day = "明日"
-            time_status = "<span style='color:gray; font-size:0.9rem;'>(美股現貨未開盤，ADR為昨日死水，目前純依賴期貨跳動)</span>"
+            time_status = "<span style='color:gray; font-size:0.9rem;'>(美股現貨尚未開盤，此為昨夜收盤參考)</span>"
         elif h >= 22 or h < 5:
             target_day = "明日" if h >= 22 else "今日"
             time_status = "<span style='color:#00bfff; font-size:0.9rem;'>(美股現貨與台股夜盤 交易中)</span>"
-        else: # 5 ~ 13 (過了凌晨5點到下午兩點前)
+        else:
             target_day = "今日"
             time_status = "<span style='color:#00cc66; font-size:0.9rem;'>(美股與夜盤已收盤，為最新結算數據)</span>"
 
-        # 加上 EWT (iShares MSCI Taiwan ETF) 代表台股夜盤外資情緒
         tickers = yf.Tickers('^SOX TSM NQ=F EWT')
         
         def get_pct(ticker_obj):
@@ -214,13 +203,9 @@ def get_global_market_trend():
         nq_pct = get_pct(tickers.tickers['NQ=F'])
         ewt_pct = get_pct(tickers.tickers['EWT'])
         
-        # 🚀 動態權重分配：
-        # 下午到晚間(14~22)美股現貨沒開，TSM/EWT/SOX 都是不動的舊資料，此時 100% 聽期貨的！
-        if 14 <= h < 22:
-            score = nq_pct * 1.0
-        else:
-            # 正常交易或收盤後，綜合計算：費半30%、台積電ADR 30%、納指期貨 10%、台股夜盤ETF(EWT) 30%
-            score = sox_pct * 0.3 + tsm_pct * 0.3 + nq_pct * 0.1 + ewt_pct * 0.3
+        # 🚀 終極修復：移除下午時段的條件判斷，永遠採用 4 個指標的綜合計算！
+        # 這樣才能保證上方的「趨勢評估文字」與下方的「綠色紅色數字」完全吻合！
+        score = sox_pct * 0.3 + tsm_pct * 0.3 + nq_pct * 0.1 + ewt_pct * 0.3
         
         if score > 1.0:
             trend, color = f"🔥 極度樂觀 ({target_day}台股開盤強勢)", "#ff4d4d"
@@ -289,7 +274,6 @@ def get_fallback_info(stock_id):
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         text = res.text
         
-        # 🚀 強力模糊掃描法：找到關鍵字後，跳過所有層級的 HTML 標籤，直接抓取純數字
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
             if idx != -1:
@@ -456,7 +440,11 @@ with st.sidebar:
                         
                         p_sort = sys_peg if sys_peg is not None and not pd.isna(sys_peg) and not peg_is_neg else 999
                         p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None and not pd.isna(sys_peg) else "N/A")
-                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':to_pct(roe),'peg_str':p_str})
+                        
+                        # 在漏斗中也需要安全的百分比轉換
+                        roe_str_local = f"{roe*100:.1f}%" if roe is not None and not pd.isna(roe) else "N/A"
+                        
+                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':roe_str_local,'peg_str':p_str})
                     time.sleep(0.5); pbar.progress((i+1)/len(target_stocks))
                 pbar.empty(); results.sort(key=lambda x: (x['peg_sort'], -x['roe'] if x['roe'] else 0))
                 st.markdown("<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果</b></div>", unsafe_allow_html=True)
@@ -541,8 +529,8 @@ if curr_id:
             pb_ratio = s_float(df_per_bk['PBR'].iloc[-1])
 
         roe = s_float(info.get('returnOnEquity'))
-        gm = s_float(info.get('grossMargins'))
-        om = s_float(info.get('operatingMargins'))
+        gross_margin = s_float(info.get('grossMargins'))
+        op_margin = s_float(info.get('operatingMargins'))
         
         rev_growth = s_float(info.get('revenueGrowth'))
         if rev_growth is None and df_rev_bk is not None and not df_rev_bk.empty:
@@ -581,15 +569,18 @@ if curr_id:
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
         # ==========================================
-        # 🚀 絕對安全的預先字串排版，完全根除 ValueError
+        # 🚀 絕對安全的本地格式化工具：杜絕 NameError 與 ValueError
         # ==========================================
+        def safe_pct(val):
+            return f"{val * 100:.2f}%" if val is not None and not pd.isna(val) else "N/A"
+
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
             if t_eps and t_eps > 0 and pe_ratio:
                 cg = (active_f_eps - t_eps) / t_eps
                 peg_ratio = pe_ratio / (cg * 100) if cg > 0 else -999
-                eg_str = to_pct(cg)
+                eg_str = safe_pct(cg)
                 eg_color = "#ff4d4d" if cg > 0 else "#00cc66"
             else:
                 peg_ratio = None
@@ -600,7 +591,7 @@ if curr_id:
             active_f_eps = sys_f_eps
             forward_pe = sys_forward_pe
             peg_ratio = sys_peg_ratio
-            eg_str = to_pct(earn_growth)
+            eg_str = safe_pct(earn_growth)
             eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
             eps_source_text = f"海外系統或反推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
@@ -609,11 +600,11 @@ if curr_id:
         active_f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
         f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{active_f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {active_f_eps_str}"
             
-        rg_str = to_pct(rev_growth)
+        rg_str = safe_pct(rev_growth)
         rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
-        gm_str = to_pct(gross_margin)
-        om_str = to_pct(op_margin)
-        roe_str = to_pct(roe)
+        gm_str = safe_pct(gross_margin)
+        om_str = safe_pct(op_margin)
+        roe_str = safe_pct(roe)
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe is not None and roe >= 0.15 else ""
 
         fund_html = f"""
@@ -690,7 +681,7 @@ if curr_id:
         # 【6. 產業前景與 AI 報告】
         if st.button("🤖 啟動 AI 深度報告 (含一鍵複製)", use_container_width=True):
             if st.session_state.api_key:
-                ctx = f"現價:{curr_p}, P/E:{pe_ratio}, ROE:{to_pct(roe)}, 毛利:{to_pct(gross_margin)}, 營收YoY:{to_pct(rev_growth)}, 預估EPS:{active_f_eps}"
+                ctx = f"現價:{curr_p}, P/E:{pe_ratio}, ROE:{safe_pct(roe)}, 毛利:{safe_pct(gross_margin)}, 營收YoY:{safe_pct(rev_growth)}, 預估EPS:{active_f_eps}"
                 st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, ctx, st.session_state.get('selected_model', 'gemini-2.5-flash'))
         if st.session_state.ai_industry_result:
             with st.container(border=True):
