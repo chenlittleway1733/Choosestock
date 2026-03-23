@@ -413,32 +413,49 @@ with st.sidebar:
         st.session_state.ai_industry_result = None 
         st.rerun()
 
-    # --- 讀取快速選股名單 ---
-    quick_stocks = []
+    # --- 🚀 升級版讀取快速選股名單 (支援分類大標題格式) ---
+    options = ["-- 快速切換標的 --"]
     if os.path.exists("stocklist.txt"):
         try:
             with open("stocklist.txt", "r", encoding="utf-8") as f:
                 for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # 辨識邏輯：包含逗號的是股票標的，沒有逗號的是分類大標題
                     if "," in line:
-                        quick_stocks.append(line.strip())
+                        parts = line.split(",")
+                        if len(parts) >= 2:
+                            # 股票標的：內縮並加上橘色小菱形圖示
+                            options.append(f"　🔸 {parts[0].strip()} {parts[1].strip()}")
+                    else:
+                        # 分類大標題：加上標籤圖示
+                        options.append(f"🏷️ {line}")
         except Exception as e:
             pass
             
-    if quick_stocks:
-        options = ["-- 快速切換標的 --"] + [f"{item.split(',')[0]} {item.split(',')[1]}" for item in quick_stocks]
-        
+    if len(options) > 1:
         if "quick_select" not in st.session_state:
             st.session_state.quick_select = "-- 快速切換標的 --"
             
         selected_quick = st.selectbox("⚡ 快速選股名單", options, key="quick_select")
         
         if selected_quick != "-- 快速切換標的 --":
-            quick_code = selected_quick.split(" ")[0]
-            if quick_code != st.session_state.selected_stock:
-                st.session_state.selected_stock = quick_code
-                st.session_state.show_pk = False
-                st.session_state.ai_industry_result = None
+            if selected_quick.startswith("🏷️"):
+                # 🚀 防呆機制：如果使用者點到的是大標題，強制彈回預設狀態，防止卡住
+                st.session_state.quick_select = "-- 快速切換標的 --"
                 st.rerun()
+            else:
+                # 取得股票代號 (過濾掉前方的空白與圖示)
+                clean_str = selected_quick.replace("　🔸 ", "").strip()
+                quick_code = clean_str.split(" ")[0].strip()
+                
+                if quick_code != st.session_state.selected_stock:
+                    st.session_state.selected_stock = quick_code
+                    st.session_state.show_pk = False
+                    st.session_state.ai_industry_result = None
+                    st.rerun()
     
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
@@ -1089,7 +1106,7 @@ if curr_id:
                 # 反推每日的 EPS (收盤價 / 當日本益比)
                 merged['EPS_calc'] = merged['Close'] / merged['PER']
 
-                # 🚀 關鍵修正：將 EPS 取 60 日移動平均，讓「階梯狀」變成平滑優美的「河流」
+                # 將 EPS 取 60 日移動平均，讓「階梯狀」變成平滑優美的「河流」
                 merged['EPS_smoothed'] = merged['EPS_calc'].rolling(window=60, min_periods=1).mean()
 
                 # 透過分位數抓出過去五年的「本益比慣性通道」
