@@ -333,13 +333,11 @@ def get_yahoo_finance_api_info(stock_id):
             pass
     return info
 
-# 🚀 第二重備援防護網：無敵 DOM-Agnostic 暴力破解網頁爬蟲 (完全無視 Yahoo 網頁改版)
 def get_fallback_info(stock_id):
     info = {}
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     domain = "tw.stock.yahoo.com"
     
-    # 1. 抓取主要報價頁面
     try:
         url1 = f"https://{domain}/quote/{stock_id}"
         res = requests.get(url1, headers=headers, timeout=5)
@@ -349,10 +347,8 @@ def get_fallback_info(stock_id):
             def extract_main(label):
                 idx = text.find(label)
                 if idx != -1:
-                    # 擷取標籤後方 150 個字元，並將 HTML 標籤強制清除為純文字
                     chunk = text[idx:idx+150]
                     clean_chunk = re.sub(r'<[^>]+>', ' ', chunk).replace(label, '')
-                    # 抓取裡面出現的第一個數字
                     m = re.search(r'([-0-9.,]+)', clean_chunk)
                     if m:
                         try: return float(m.group(1).replace(',', ''))
@@ -367,7 +363,6 @@ def get_fallback_info(stock_id):
             if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
     except: pass
 
-    # 2. 抓取財務比率專屬頁面 (專抓 ROE 與毛利率等 %)
     try:
         url2 = f"https://{domain}/quote/{stock_id}/financial-ratio"
         res_ratio = requests.get(url2, headers=headers, timeout=5)
@@ -377,10 +372,8 @@ def get_fallback_info(stock_id):
             def extract_pct(label):
                 idx = text2.find(label)
                 if idx != -1:
-                    # 擷取標籤後方 150 個字元，強制清空 HTML 標籤
                     chunk = text2[idx:idx+150]
                     clean_chunk = re.sub(r'<[^>]+>', ' ', chunk).replace(label, '')
-                    # 抓出帶有 % 的數字
                     m = re.search(r'([-0-9.,]+)\s*%', clean_chunk)
                     if m:
                         try: return float(m.group(1).replace(',', '')) / 100.0
@@ -397,14 +390,15 @@ def get_fallback_info(stock_id):
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     stock_id = str(stock_id).strip()
-    try:
-        for ext in [".TW", ".TWO"]:
+    
+    # 🚀 終極修正：將 try 包在迴圈「內」，確保「上市(.TW)」失敗時，一定會換「上櫃(.TWO)」繼續尋找！
+    for ext in [".TW", ".TWO"]:
+        try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
             hist = ticker.history(period="5y")
             
             if not hist.empty: 
                 info_data = {}
-                
                 try:
                     info_data = ticker.info
                     if not isinstance(info_data, dict):
@@ -412,14 +406,12 @@ def get_stock_data(stock_id):
                 except:
                     pass
                 
-                # 如果基礎 yfinance 沒給資料，啟動第一重 JSON API 防護網
                 if not info_data.get('returnOnEquity') or not info_data.get('trailingPE'):
                     api_info = get_yahoo_finance_api_info(stock_id)
                     for k, v in api_info.items():
                         if v is not None:
                             info_data[k] = v
                             
-                # 🚀 終極備援：如果 JSON API 也被擋，啟動第二重「無視網頁改版」的純文字掃描爬蟲
                 if not info_data.get('returnOnEquity') or not info_data.get('trailingPE'):
                     fallback = get_fallback_info(stock_id)
                     for k, v in fallback.items():
@@ -427,8 +419,11 @@ def get_stock_data(stock_id):
                             info_data[k] = v
                             
                 return hist, info_data
-        return None, None
-    except: return None, None
+        except Exception as e:
+            # 當 yfinance 因為找不到上市公司(如3131.TW)而崩潰時，此處會攔截錯誤並 "continue"，讓迴圈順利進入 ".TWO"
+            continue 
+            
+    return None, None
 
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
@@ -567,7 +562,6 @@ with st.sidebar:
                         roe = s_float(info.get('returnOnEquity'))
                         pe = s_float(info.get('trailingPE'))
                         
-                        # 代理運算：若缺乏獲利成長率，改用營收成長率代理計算 PEG
                         eg = s_float(info.get('earningsGrowth'))
                         if eg is None:
                             rev = s_float(info.get('revenueGrowth'))
@@ -776,7 +770,6 @@ if curr_id:
         # 【3. 財務基本面與獲利預估微調】
         st.markdown("#### 💼 財務基本面與獲利基準微調")
         
-        # 🚀 提早讀取備援營收與本益比 (供防護網計算使用)
         df_rev_backup = get_monthly_revenue(curr_id)
         df_per_backup = get_pe_pb_data(curr_id)
 
@@ -793,18 +786,17 @@ if curr_id:
         if rev_growth is None and df_rev_backup is not None and not df_rev_backup.empty:
             rev_growth = s_float(df_rev_backup['YoY'].iloc[-1]) / 100.0
             
-        # 🚀 數學代理防護網：用已知數據填補未知空缺
         earn_growth = s_float(info.get('earningsGrowth'))
         if earn_growth is None and rev_growth is not None:
-            earn_growth = rev_growth # 用營收年增率來代理獲利年增率
+            earn_growth = rev_growth
             
         t_eps = s_float(info.get('trailingEps'))
         if t_eps is None and pe_ratio is not None and pe_ratio > 0 and curr_p > 0:
-            t_eps = curr_p / pe_ratio # 股價 ÷ 本益比 = 精準還原 EPS
+            t_eps = curr_p / pe_ratio 
             
         sys_f_eps = s_float(info.get('forwardEps'))
         if sys_f_eps is None and t_eps is not None and earn_growth is not None:
-            sys_f_eps = t_eps * (1 + earn_growth) # 用當前EPS與成長率反推明年EPS
+            sys_f_eps = t_eps * (1 + earn_growth) 
             
         sys_forward_pe = s_float(info.get('forwardPE'))
         if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0:
@@ -1177,75 +1169,6 @@ if curr_id:
             </div>
         </div>
         """, unsafe_allow_html=True)
-        st.markdown("---")
-
-        # 【7. 法人目標價】
-        hi = s_float(info.get('targetHighPrice'))
-        me = s_float(info.get('targetMeanPrice'))
-        lo = s_float(info.get('targetLowPrice'))
-        
-        if hi is not None and me is not None and lo is not None:
-            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-            v1, v2, v3 = st.columns(3)
-            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi:.1f}</b></div>", unsafe_allow_html=True)
-            upside = ((me / curr_p) - 1) * 100 if curr_p else 0
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
-            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo:.1f}</b></div>", unsafe_allow_html=True)
-        elif hi is not None:
-             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-             st.info(f"法人最高預期：**{hi:.1f}**")
-        st.markdown("---")
-
-        # 【8. 籌碼面與股權結構分析】
-        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
-        insider_pct = s_float(info.get('heldPercentInsiders'))
-        inst_pct = s_float(info.get('heldPercentInstitutions'))
-        shares_out = s_float(info.get('sharesOutstanding'))
-        share_capital = shares_out * 10 if shares_out is not None else None
-
-        if share_capital is not None:
-            if share_capital >= 10_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
-            elif share_capital <= 3_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
-            else:
-                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
-        else:
-            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
-
-        inst_str = f"{inst_pct * 100:.2f}%" if inst_pct is not None else "N/A"
-        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
-        
-        insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
-        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
-
-        chip_html = f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
-                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
-                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
-                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
-                </div>
-                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
-            </div>
-        </div>
-        """
-        st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
         # 🚀 【9. 必備神兵：本益比河流圖 (P/E River Chart)】
