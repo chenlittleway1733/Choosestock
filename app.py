@@ -165,6 +165,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
     except: pass
     return []
 
+# 🚀 升級版：解開 Markdown 封印，回歸原生高質感排版
 def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰"
     api_key = api_key.strip()
@@ -232,7 +233,7 @@ def get_monthly_revenue(stock_id):
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
         
-        # 強制排除「當月」的未結算或錯誤資料
+        # 🚀 修正：強制排除「當月」的未結算或錯誤資料
         current_month_start = pd.to_datetime(f"{today.year}-{today.month:02d}-01")
         df = df[df['date'] < current_month_start]
 
@@ -241,7 +242,7 @@ def get_monthly_revenue(stock_id):
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
         df['YoY'] = df['revenue'].pct_change(periods=12) * 100
         
-        # 將月份格式強制改為 YYYY/MM 格式
+        # 🚀 修正：將月份格式強制改為 YYYY/MM 格式
         df['Month'] = df['date'].dt.strftime('%Y/%m')
         df['Revenue'] = df['revenue'] / 100000000 
 
@@ -369,16 +370,6 @@ with st.sidebar:
     st.markdown("### 🔍 個股查詢")
     stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
     
-    # 🚀 完美修正區塊：把手動輸入的判定移到最上面，就不會跟 Selectbox 打架了！
-    if stock_input != st.session_state.selected_stock:
-        st.session_state.selected_stock = stock_input
-        # 當有手動輸入時，強制將下拉選單狀態歸零
-        if "quick_select" in st.session_state:
-            st.session_state.quick_select = "-- 快速切換標的 --"
-        st.session_state.show_pk = False 
-        st.session_state.ai_industry_result = None 
-        st.rerun()
-
     # --- 讀取快速選股名單 ---
     quick_stocks = []
     if os.path.exists("stocklist.txt"):
@@ -406,6 +397,14 @@ with st.sidebar:
                 st.session_state.show_pk = False
                 st.session_state.ai_industry_result = None
                 st.rerun()
+
+    # 🚀 修正：處理上方輸入框的手動變更，並且重置下拉選單避免衝突
+    if stock_input != st.session_state.selected_stock:
+        st.session_state.selected_stock = stock_input
+        st.session_state.quick_select = "-- 快速切換標的 --"
+        st.session_state.show_pk = False 
+        st.session_state.ai_industry_result = None 
+        st.rerun()
     
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
@@ -824,6 +823,7 @@ if curr_id:
             fig_rev.add_trace(go.Bar(x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
             fig_rev.add_trace(go.Scatter(x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
             
+            # 🚀 修正：將圖例移至左上方、增加 margin 避免擋住工具列，並強制 X 軸使用類別字串格式 (YYYY/MM)
             fig_rev.update_layout(
                 height=400, template="plotly_dark", hovermode="x unified", 
                 margin=dict(l=10, r=10, t=50, b=10), 
@@ -873,6 +873,7 @@ if curr_id:
 
         current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
         
+        # 🚀 新增：一鍵打包提示詞模組 (給外部 AI 使用)
         full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
 請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
 1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
@@ -900,19 +901,8 @@ if curr_id:
         if st.session_state.ai_industry_result:
             st.markdown("<br>", unsafe_allow_html=True)
             with st.container(border=True):
-                col1, col2 = st.columns([0.7, 0.3])
-                with col1:
-                    st.markdown("### 🤖 AI 產業透視與實戰策略")
-                with col2:
-                    st.markdown("<div style='text-align:right; margin-top:20px;'><small style='color:#00bfff;'>💡 往下捲動有【一鍵複製區塊】</small></div>", unsafe_allow_html=True)
-                
+                st.markdown("### 🤖 AI 產業透視與實戰策略")
                 st.markdown(st.session_state.ai_industry_result)
-                
-                st.markdown("---")
-                st.markdown("##### 📋 【純文字複製區】")
-                st.markdown("<small style='color:gray;'>*將游標移至下方黑框內，點擊右上角的「📋」圖示，即可將報告全文複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
-                st.code(st.session_state.ai_industry_result, language="markdown")
-                    
             st.markdown("<br>", unsafe_allow_html=True)
 
         hot_industries = ['Semiconductor', 'Software', 'Hardware', 'Electronic', 'IT Services', 'Communication', 'Technology']
@@ -1161,6 +1151,7 @@ if curr_id:
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
         
+        # 🚀 修正：將 K 線圖的圖例也移到左上角，並加大上方空間 (t=50) 避免跟右邊工具列疊字
         fig.update_layout(
             height=650, 
             template="plotly_dark", 
