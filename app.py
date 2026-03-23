@@ -236,7 +236,6 @@ def get_monthly_revenue(stock_id):
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
         
-        # 強制排除「當月」的未結算或錯誤資料
         current_month_start = pd.to_datetime(f"{today.year}-{today.month:02d}-01")
         df = df[df['date'] < current_month_start]
 
@@ -245,7 +244,6 @@ def get_monthly_revenue(stock_id):
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
         df['YoY'] = df['revenue'].pct_change(periods=12) * 100
         
-        # 將月份格式強制改為 YYYY/MM 格式
         df['Month'] = df['date'].dt.strftime('%Y/%m')
         df['Revenue'] = df['revenue'] / 100000000 
 
@@ -257,7 +255,6 @@ def get_monthly_revenue(stock_id):
         return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
     except Exception as e: return None
 
-# 🚀 升級：將歷史本益比數據擴大為「近五年」，涵蓋完整多空循環
 @st.cache_data(ttl=43200)
 def get_pe_pb_data(stock_id):
     try:
@@ -275,17 +272,17 @@ def get_pe_pb_data(stock_id):
         res = requests.get(url, headers=headers, timeout=10)
         
         if res.status_code != 200:
-            return None # 捕捉連線阻擋
+            return None
             
         data = res.json()
 
         if data.get('status') != 200 or not data.get('data'): 
-            return pd.DataFrame() # 有連線但無資料回傳空表
+            return pd.DataFrame()
 
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
         df['PER'] = pd.to_numeric(df['PER'], errors='coerce')
-        df = df[df['PER'] > 0] # 濾除獲利為負的極端值
+        df = df[df['PER'] > 0] 
         
         return df[['date', 'PER']].dropna().reset_index(drop=True)
     except Exception as e: 
@@ -336,7 +333,6 @@ def get_stock_data(stock_id):
     try:
         for ext in [".TW", ".TWO"]:
             ticker = yf.Ticker(f"{stock_id}{ext}")
-            # 🚀 升級：配合河流圖將股價歷史資料抓取擴大為「近五年」
             hist = ticker.history(period="5y")
             if not hist.empty: 
                 info_data = {}
@@ -416,7 +412,7 @@ with st.sidebar:
         st.session_state.ai_industry_result = None 
         st.rerun()
 
-    # --- 🚀 讀取快速選股名單，並建立分類字典庫 ---
+    # --- 讀取快速選股名單，並建立分類字典庫 ---
     options = ["-- 快速切換標的 --"]
     categories = {}
     current_cat = "未分類"
@@ -465,7 +461,7 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # --- 🚀 新增：策略漏斗掃描器 ---
+    # --- 🎯 策略漏斗掃描器 ---
     st.markdown("### 🎯 策略漏斗掃描器")
     st.caption("尋找目前標的所屬族群中的「高 ROE + 低 PEG」潛力股。")
     
@@ -473,7 +469,6 @@ with st.sidebar:
         st.session_state.run_screener = True
         
     if st.session_state.get('run_screener'):
-        # 尋找目前股票所屬的族群
         target_cat = None
         target_stocks = []
         for cat, stocks in categories.items():
@@ -505,7 +500,6 @@ with st.sidebar:
                             'peg_str': f"{peg:.2f}" if peg is not None else "N/A"
                         })
                         
-                # 排序：PEG 由低到高，若 PEG 相同則比 ROE 誰高
                 results.sort(key=lambda x: (x['peg'], -x['roe']))
                 
                 st.markdown(f"<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果排序</b></div>", unsafe_allow_html=True)
@@ -514,7 +508,10 @@ with st.sidebar:
                 for res in results:
                     is_good = res['peg'] < 1.5 and res['roe'] > 0.15
                     icon = "🔥" if is_good else "🔸"
-                    btn_label = f"{icon} {res['name']} ({res['code']}) | PEG: {res['peg_str']} | ROE: {res['roe_str']}"
+                    
+                    # 🚀 關鍵修正：加入 \n 強制斷行，讓 PEG 和 ROE 在按鈕內顯示為整齊的第二行
+                    btn_label = f"{icon} {res['name']} ({res['code']})\nPEG: {res['peg_str']} | ROE: {res['roe_str']}"
+                    
                     st.button(btn_label, key=f"scr_{res['code']}", on_click=change_stock, args=(res['code'],), use_container_width=True)
         else:
             st.warning("⚠️ 目前的股票不在快速選股分類名單中，請先從上方下拉選單挑選！")
