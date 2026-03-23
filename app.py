@@ -254,12 +254,12 @@ def get_monthly_revenue(stock_id):
         return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
     except Exception as e: return None
 
-# 🚀 新增：抓取近三年歷史本益比數據 (供河流圖使用)
+# 🚀 升級：將歷史本益比數據擴大為「近五年」，涵蓋完整多空循環
 @st.cache_data(ttl=43200)
 def get_pe_pb_data(stock_id):
     try:
         today = datetime.date.today()
-        start_year = today.year - 3
+        start_year = today.year - 5
         start_str = f"{start_year}-{today.month:02d}-01"
 
         protocol = "https://"
@@ -333,8 +333,8 @@ def get_stock_data(stock_id):
     try:
         for ext in [".TW", ".TWO"]:
             ticker = yf.Ticker(f"{stock_id}{ext}")
-            # 🚀 升級：為了畫出漂亮的本益比河流圖，我們將股價歷史資料抓取擴大為「近三年」
-            hist = ticker.history(period="3y")
+            # 🚀 升級：配合河流圖將股價歷史資料抓取擴大為「近五年」
+            hist = ticker.history(period="5y")
             if not hist.empty: 
                 info_data = {}
                 try:
@@ -1064,11 +1064,11 @@ if curr_id:
         st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 【移至最下方：9. 必備神兵：本益比河流圖 (P/E River Chart)】
-        st.markdown("### 🌊 必備神兵：近三年本益比河流圖 (P/E River)")
+        # 🚀 【9. 必備神兵：本益比河流圖 (P/E River Chart)】
+        st.markdown("### 🌊 必備神兵：近五年本益比河流圖 (P/E River)")
         st.markdown("<small style='color:gray;'>*實戰價值：透過歷史估值區間，一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
         
-        with st.spinner("抓取近三年每日歷史本益比數據中..."):
+        with st.spinner("抓取近五年每日歷史本益比數據中..."):
             df_per = get_pe_pb_data(curr_id)
             
         if df_per is None:
@@ -1089,24 +1089,27 @@ if curr_id:
                 # 反推每日的 EPS (收盤價 / 當日本益比)
                 merged['EPS_calc'] = merged['Close'] / merged['PER']
 
-                # 透過分位數抓出過去三年的「本益比慣性通道」
+                # 🚀 關鍵修正：將 EPS 取 60 日移動平均，讓「階梯狀」變成平滑優美的「河流」
+                merged['EPS_smoothed'] = merged['EPS_calc'].rolling(window=60, min_periods=1).mean()
+
+                # 透過分位數抓出過去五年的「本益比慣性通道」
                 pe_quantiles = merged['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
 
                 fig_river = go.Figure()
 
-                # 建立五條河流邊界
-                b1 = merged['EPS_calc'] * pe_quantiles[0]
-                b2 = merged['EPS_calc'] * pe_quantiles[1]
-                b3 = merged['EPS_calc'] * pe_quantiles[2]
-                b4 = merged['EPS_calc'] * pe_quantiles[3]
-                b5 = merged['EPS_calc'] * pe_quantiles[4]
+                # 建立五條河流邊界 (使用平滑後的 EPS)
+                b1 = merged['EPS_smoothed'] * pe_quantiles[0]
+                b2 = merged['EPS_smoothed'] * pe_quantiles[1]
+                b3 = merged['EPS_smoothed'] * pe_quantiles[2]
+                b4 = merged['EPS_smoothed'] * pe_quantiles[3]
+                b5 = merged['EPS_smoothed'] * pe_quantiles[4]
 
                 # 畫出河流圖 (運用 Plotly 的 fill='tonexty' 營造帶狀區間)
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b1, line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b2, fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b3, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b1, mode='lines', line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b2, mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b3, mode='lines', fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
 
                 # 把實際股價疊加在河流圖之上
                 fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#ffffff', width=2.5), name='實際股價'))
