@@ -66,6 +66,7 @@ def change_stock(stock_code):
     st.session_state.quick_select = "-- 快速切換標的 --"
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
+    st.session_state.run_screener = False # 🚀 修正：點擊按鈕換股時關閉掃描
 
 # ==========================================
 # 3. 外部 API 與模型模組
@@ -229,7 +230,8 @@ def get_fallback_info(stock_id):
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
             if idx != -1:
-                match = re.search(r'>(?:\s*|&nbsp;)*([-0-9]{1,3}(?:\.[0-9]+)?)\s*%?\s*<', text[idx:idx+200])
+                chunk = text[idx:idx+200]
+                match = re.search(r'>(?:\s*|&nbsp;)*([-0-9]{1,3}(?:\.[0-9]+)?)\s*%?\s*<', chunk)
                 if match:
                     try:
                         val = float(match.group(1).replace(',', ''))
@@ -267,8 +269,10 @@ def get_stock_data(stock_id):
             
     if hist is None or hist.empty:
         try:
-            start_str = f"{(datetime.date.today() - datetime.timedelta(days=1825)).isoformat()}"
-            res = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}", headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            today = datetime.date.today()
+            start_str = f"{today.year - 5}-{today.month:02d}-{today.day:02d}"
+            url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
+            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             data = res.json()
             if data.get('status') == 200 and data.get('data'):
                 df = pd.DataFrame(data['data'])
@@ -288,7 +292,6 @@ def get_chinese_name(stock_id):
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-        # 🚀 修復中文名：完美相容 Yahoo 網頁的空白變化
         match = re.search(r'<title>(.*?)(?:\(| \()', res.text)
         if match: return match.group(1).strip()
     except: pass
@@ -337,12 +340,18 @@ with st.sidebar:
         if not selected_quick.startswith("🏷️"):
             q_code = selected_quick.replace("　🔸 ", "").split(" ")[0].strip()
             if q_code != st.session_state.selected_stock:
-                st.session_state.selected_stock = q_code; st.rerun()
+                st.session_state.selected_stock = q_code
+                st.session_state.run_screener = False # 🚀 修正：下拉選單換股時關閉掃描
+                st.rerun()
         else:
-            st.session_state.quick_select = "-- 快速切換標的 --"; st.rerun()
+            st.session_state.quick_select = "-- 快速切換標的 --"
+            st.session_state.run_screener = False
+            st.rerun()
 
     if stock_input != st.session_state.selected_stock:
-        st.session_state.selected_stock = stock_input; st.rerun()
+        st.session_state.selected_stock = stock_input
+        st.session_state.run_screener = False # 🚀 修正：手動輸入換股時關閉掃描
+        st.rerun()
 
     st.markdown("---")
     st.markdown("### 🎯 策略漏斗掃描器")
@@ -470,11 +479,10 @@ if curr_id:
         with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
             st.write(translate_to_zh(info.get('longBusinessSummary', '暫無簡介。')))
 
-        # 🚀 完整還原 12 宮格詳細即時報價
+        # --- ⚡ 即時報價 ---
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
-        
         curr_p = s_float(today_data.get('Close'), 0)
         open_p = s_float(today_data.get('Open'), 0)
         high_p = s_float(today_data.get('High'), 0)
@@ -527,7 +535,8 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # --- 🌍 國際連動與動態時間趨勢推估 (包含點位與百分比) ---
+        # --- 🌍 國際連動與動態時間趨勢推估 ---
+        st.markdown("<br>", unsafe_allow_html=True)
         trend_data = get_global_market_trend()
         if trend_data:
             target_day_text = trend_data.get('target_day', '明日')
@@ -705,6 +714,24 @@ if curr_id:
         st.markdown(val_html, unsafe_allow_html=True)
         st.markdown("---")
 
+        # 🚀 補回：法人預估目標價
+        hi_val = s_float(info.get('targetHighPrice'))
+        me_val = s_float(info.get('targetMeanPrice'))
+        lo_val = s_float(info.get('targetLowPrice'))
+
+        if hi_val is not None and me_val is not None and lo_val is not None:
+            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+            v1, v2, v3 = st.columns(3)
+            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi_val:.1f}</b></div>", unsafe_allow_html=True)
+            upside = ((me_val / curr_p) - 1) * 100 if curr_p else 0
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
+            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo_val:.1f}</b></div>", unsafe_allow_html=True)
+            st.markdown("---")
+        elif hi_val is not None:
+             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+             st.info(f"法人最高預期：**{hi_val:.1f}**")
+             st.markdown("---")
+
         # [4] 產業 PK (側邊欄觸發)
         if st.session_state.show_pk:
             st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
@@ -762,8 +789,32 @@ if curr_id:
         # [5] 產業前景與 AI 報告
         if st.button("🤖 啟動 AI 深度報告 (含一鍵複製)", use_container_width=True):
             if st.session_state.api_key:
-                ctx = f"現價:{curr_p}, P/E:{pe_ratio}, ROE:{roe_str}, 毛利:{gm_str}, 營收YoY:{rg_str}, 預估EPS:{active_f_eps}"
-                st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, ctx, st.session_state.get('selected_model', 'gemini-2.5-flash'))
+                hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
+                me_str = f"{me_val:.1f}" if me_val else "無資料"
+                lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
+                
+                # 🚀 強化版 Context：讓 AI 同時評估法人目標價
+                context_str = f"""
+                【即時盤面與估值】
+                - 最新收盤價: {curr_p} 元
+                - 歷史本益比 (Trailing P/E): {pe_str}
+                - 前瞻本益比 (Forward P/E): {fpe_str_val}
+                - 股價淨值比 (P/B): {pb_str_val}
+                - 本益成長比 (PEG): {peg_str_val}
+                
+                【財務基本面動能】
+                - 預估 EPS: {active_f_eps} 元
+                - 營收年增率 (YoY): {rg_str}
+                - 毛利率: {gm_str}
+                - 營業利益率: {om_str}
+                - 股東權益報酬率 (ROE): {roe_str}
+                
+                【法人預估目標價】
+                - 最高目標價: {hi_str}
+                - 平均目標價: {me_str}
+                - 最低保底價: {lo_str}
+                """
+                st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, st.session_state.get('selected_model', 'gemini-2.5-flash'))
         if st.session_state.ai_industry_result:
             with st.container(border=True):
                 st.markdown("### 🤖 AI 產業透視與實戰策略")
@@ -820,7 +871,7 @@ if curr_id:
                 st.plotly_chart(fig_river, use_container_width=True)
         st.markdown("---")
 
-        # 🚀 【7. 專業技術線圖與 KD 指標 (徹底修復 Plotly 崩潰問題)】
+        # [7] 專業技術線圖與 KD 指標
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         plot_df = hist.tail(120).copy()
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -891,9 +942,7 @@ if curr_id:
         </div>
         """, unsafe_allow_html=True)
         
-        # 🚀 徹底修復 ValueError：明確宣告雙 Y 軸設定，讓成交量能正確顯示在右側軸
         fig_k = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
-        
         fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
