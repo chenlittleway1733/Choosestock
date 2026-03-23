@@ -11,6 +11,7 @@ import json
 import time
 import datetime
 import os
+import math
 
 # 設定網頁標題與寬度
 st.set_page_config(page_title="way系統", layout="wide")
@@ -51,14 +52,18 @@ def change_stock(stock_code):
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
 
-# --- 🛠️ 核心防護：安全浮點數轉換 ---
+# --- 🛠️ 核心防護：絕對安全的浮點數轉換 (消滅 NaN 引發的 ValueError) ---
 def s_float(val, default=None):
     try:
-        return float(val)
+        if val is None: return default
+        v = float(val)
+        if math.isnan(v) or math.isinf(v):
+            return default
+        return v
     except:
         return default
 
-# --- AI 相關函數 ---
+# --- AI 解析與連線函數 ---
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
     api_key = api_key.strip()
@@ -163,20 +168,35 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         if "timeout" in str(e).lower(): return "⏳ API 連線逾時，請重試。"
         return f"連線異常: {str(e)}"
 
-# --- 新增：國際連動與明日趨勢推估模組 ---
-@st.cache_data(ttl=900) # 每 15 分鐘更新一次
+# --- 🌍 動態判定今日/明日 (精準時間控制) ---
+@st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
-        # 同時抓取費半、台積電ADR、納斯達克期貨
+        # 轉換為台灣時間 (UTC+8)
+        tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        h = tw_time.hour
+        
+        # 精準時間判定與文案顯示
+        if 14 <= h < 22:
+            target_day = "明日"
+            time_status = "<span style='color:gray; font-size:0.9rem;'>(美股尚未開盤，此為昨夜收盤參考)</span>"
+        elif h >= 22:
+            target_day = "明日"
+            time_status = "<span style='color:#00bfff; font-size:0.9rem;'>(美股 / 夜盤交易中)</span>"
+        else: # 0 ~ 13 (過了零點到下午兩點前)
+            target_day = "今日"
+            time_status = "<span style='color:#00cc66; font-size:0.9rem;'>(美股 / 夜盤最新收盤)</span>"
+
         tickers = yf.Tickers('^SOX TSM NQ=F')
         
         def get_pct(ticker_obj):
             try:
                 hist = ticker_obj.history(period='5d')
                 if len(hist) >= 2:
-                    c = hist['Close'].iloc[-1]
-                    p = hist['Close'].iloc[-2]
-                    return (c - p) / p * 100
+                    c = float(hist['Close'].iloc[-1])
+                    p = float(hist['Close'].iloc[-2])
+                    if not math.isnan(c) and not math.isnan(p) and p != 0:
+                        return (c - p) / p * 100
             except: pass
             return 0.0
 
@@ -184,21 +204,21 @@ def get_global_market_trend():
         tsm_pct = get_pct(tickers.tickers['TSM'])
         nq_pct = get_pct(tickers.tickers['NQ=F'])
         
-        # 量化評分：費半權重 50%、台積電 ADR 30%、納指期貨 20%
         score = sox_pct * 0.5 + tsm_pct * 0.3 + nq_pct * 0.2
         
         if score > 1.0:
-            trend, color = "🔥 極度樂觀 (美股科技巨頭與夜盤期貨大漲，明日台股開盤強勢)", "#ff4d4d"
+            trend, color = f"🔥 極度樂觀 ({target_day}台股開盤強勢)", "#ff4d4d"
         elif score > 0.1:
-            trend, color = "📈 偏多看待 (國際股市氣氛良好，有利台股表現)", "#ff4d4d"
+            trend, color = f"📈 偏多看待 (有利{target_day}台股表現)", "#ff4d4d"
         elif score > -0.8:
-            trend, color = "↔️ 震盪整理 (國際盤勢膠著，台股可能平盤震盪)", "#FFD700"
+            trend, color = f"↔️ 震盪整理 ({target_day}台股可能平盤震盪)", "#FFD700"
         else:
-            trend, color = "❄️ 悲觀警戒 (美股半導體與期貨走弱，明日台股面臨回檔壓力)", "#00cc66"
+            trend, color = f"❄️ 悲觀警戒 ({target_day}台股面臨回檔壓力)", "#00cc66"
             
         return {
             "sox": sox_pct, "tsm": tsm_pct, "nq": nq_pct,
-            "trend": trend, "color": color
+            "trend": trend, "color": color, 
+            "target_day": target_day, "time_status": time_status
         }
     except:
         return None
@@ -253,6 +273,7 @@ def get_fallback_info(stock_id):
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         text = res.text
         
+        # 🚀 強力模糊掃描法：找到關鍵字後，跳過所有層級的 HTML 標籤，直接抓取純數字
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
             if idx != -1:
@@ -415,14 +436,13 @@ with st.sidebar:
                         
                         sys_peg = s_float(inf.get('pegRatio'))
                         peg_is_neg = (eg is not None and eg <= 0)
-                        if (sys_peg is None or pd.isna(sys_peg)) and pe and eg and eg > 0: sys_peg = pe / (eg * 100)
+                        if sys_peg is None and pe and eg and eg > 0: sys_peg = pe / (eg * 100)
                         
-                        p_sort = sys_peg if sys_peg is not None and not pd.isna(sys_peg) and not peg_is_neg else 999
-                        p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None and not pd.isna(sys_peg) else "N/A")
+                        p_sort = sys_peg if sys_peg is not None and not peg_is_neg else 999
+                        p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None else "N/A")
                         results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':f"{roe*100:.1f}%" if roe else "N/A",'peg_str':p_str})
                     time.sleep(0.5); pbar.progress((i+1)/len(target_stocks))
-                pbar.empty()
-                results.sort(key=lambda x: (x['peg_sort'], -x['roe'] if x['roe'] else 0))
+                pbar.empty(); results.sort(key=lambda x: (x['peg_sort'], -x['roe'] if x['roe'] else 0))
                 st.markdown("<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果</b></div>", unsafe_allow_html=True)
                 for res in results:
                     icon = "🔥" if res['peg_sort'] < 1.5 and res['roe'] and res['roe'] > 0.15 else "🔸"
@@ -469,11 +489,14 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # --- 🌍 新增：國際連動與明日趨勢推估 ---
+        # --- 🌍 國際連動與動態時間趨勢推估 ---
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("#### 🌍 國際連動與明日趨勢推估 (基於美股與夜盤)")
         trend_data = get_global_market_trend()
         if trend_data:
+            target_day_text = trend_data.get('target_day', '明日')
+            time_status_text = trend_data.get('time_status', '')
+            st.markdown(f"#### 🌍 國際連動與{target_day_text}趨勢推估 {time_status_text}", unsafe_allow_html=True)
+            
             def c_color(v): return "#ff4d4d" if v > 0 else "#00cc66" if v < 0 else "#fff"
             trend_html = f"""
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {trend_data['color']}; margin-bottom: 20px; border-top:1px solid #333; border-right:1px solid #333; border-bottom:1px solid #333;'>
@@ -483,7 +506,6 @@ if curr_id:
                     <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>台積電 ADR (TSM)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["tsm"])};'>{trend_data["tsm"]:+.2f}%</b></div>
                     <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>納斯達克期貨 (NQ=F)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["nq"])};'>{trend_data["nq"]:+.2f}%</b></div>
                 </div>
-                <div style='color:gray; font-size:0.8rem; margin-top:8px;'>*註：由系統即時抓取美股指數與期貨換算，作為台股次日開盤氣氛之量化參考。</div>
             </div>
             """
             st.markdown(trend_html, unsafe_allow_html=True)
@@ -527,7 +549,7 @@ if curr_id:
         if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0: sys_forward_pe = curr_p / sys_f_eps
             
         sys_peg_ratio = s_float(info.get('pegRatio'))
-        if (sys_peg_ratio is None or pd.isna(sys_peg_ratio)) and pe_ratio is not None and calc_earn_growth is not None and calc_earn_growth > 0:
+        if sys_peg_ratio is None and pe_ratio is not None and calc_earn_growth is not None and calc_earn_growth > 0:
             sys_peg_ratio = pe_ratio / (calc_earn_growth * 100)
         if peg_is_negative: sys_peg_ratio = -999
 
@@ -541,71 +563,109 @@ if curr_id:
             default_eps = st.session_state.ai_fetched_eps.get(curr_id, sys_f_eps if sys_f_eps else (t_eps if t_eps else 1.0))
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
+        # ==========================================
+        # 🚀 終極除錯區：絕對安全的預先字串排版，完全根除 ValueError
+        # ==========================================
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
             if t_eps and t_eps > 0 and pe_ratio:
                 cg = (active_f_eps - t_eps) / t_eps
                 peg_ratio = pe_ratio / (cg * 100) if cg > 0 else -999
-                eg_str, eg_color = f"{cg * 100:.2f}%", ("#ff4d4d" if cg > 0 else "#00cc66")
+                eg_str = f"{cg * 100:.2f}%"
+                eg_color = "#ff4d4d" if cg > 0 else "#00cc66"
             else:
-                peg_ratio, eg_str, eg_color = None, "N/A", "gray"
+                peg_ratio = None
+                eg_str = "N/A"
+                eg_color = "gray"
             eps_source_text = f"自訂法人共識 ({active_f_eps:.2f}元)"
         else:
-            active_f_eps, forward_pe, peg_ratio = sys_f_eps, sys_forward_pe, sys_peg_ratio
-            if peg_ratio is not None and pd.isna(peg_ratio): peg_ratio = None
+            active_f_eps = sys_f_eps
+            forward_pe = sys_forward_pe
+            peg_ratio = sys_peg_ratio
             eg_str = f"{earn_growth * 100:.2f}%" if earn_growth is not None else "N/A"
             eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
             eps_source_text = f"海外系統或反推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
         def to_pct(val): return f"{val * 100:.2f}%" if val is not None else "N/A"
+        
         pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
-        f_eps_display = f"{t_eps:.2f if t_eps else 'N/A'} / <span style='color:#00bfff;'>{active_f_eps:.2f if active_f_eps else 'N/A'}</span>" if use_custom_eps else f"{t_eps:.2f if t_eps else 'N/A'} / {active_f_eps:.2f if active_f_eps else 'N/A'}"
+        t_eps_str = f"{t_eps:.2f}" if t_eps is not None else "N/A"
+        active_f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
+        f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{active_f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {active_f_eps_str}"
+            
+        rg_str = to_pct(rev_growth)
         rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
+        gm_str = to_pct(gross_margin)
+        om_str = to_pct(op_margin)
+        roe_str = to_pct(roe)
+        roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe is not None and roe >= 0.15 else ""
 
         fund_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>歷史本益比 (P/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{pe_str}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>EPS (目前 / 預估)</div><div style='font-size:1.3rem; font-weight:bold; color:#FFD700;'>{f_eps_display}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收年增率 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{to_pct(rev_growth)}</div></div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收年增率 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>預估獲利成長 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{eg_color};'>{eg_str}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>毛利率 / 營益率</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{to_pct(gross_margin)} / {to_pct(op_margin)}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>ROE (權益報酬率)</div><div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{to_pct(roe)}</div></div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>毛利率 / 營益率</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{gm_str} / {om_str}</div></div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>ROE (權益報酬率)</div><div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{roe_str}{roe_eval}</div></div>
         </div>
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
-        pe_color, pe_eval = ("#ff4d4d", "高成長溢價") if pe_ratio and pe_ratio > 25 else ("#00cc66", "相對便宜") if pe_ratio and pe_ratio < 15 else ("#FFD700", "合理區間") if pe_ratio else ("gray", "數據不足")
-        pb_eval = ("#ff4d4d", "偏高溢價") if pb_ratio and pb_ratio > 3 else ("#00cc66", "具資產保護") if pb_ratio and pb_ratio < 1.5 else ("#FFD700", "合理區間") if pb_ratio else ("gray", "數據不足")
-        peg_eval = ("gray", "分母為負，無意義") if peg_ratio == -999 else (("#ff4d4d", "透支未來成長") if peg_ratio and peg_ratio > 2 else ("#00cc66", "低估 (成長性支撐)") if peg_ratio and peg_ratio <= 1 else ("#FFD700", "合理區間") if peg_ratio else ("gray", "衰退或無數據"))
-        fpe_eval = ("#ff4d4d", "高成長溢價") if forward_pe and forward_pe > 25 else ("#00cc66", "相對便宜") if forward_pe and forward_pe < 15 else ("#FFD700", "合理區間") if forward_pe else ("gray", "數據不足")
+        if pe_ratio is None: pe_color, pe_text = "gray", "數據不足"
+        elif pe_ratio > 25: pe_color, pe_text = "#ff4d4d", "高成長溢價"
+        elif pe_ratio < 15: pe_color, pe_text = "#00cc66", "相對便宜"
+        else: pe_color, pe_text = "#FFD700", "合理區間"
+
+        if pb_ratio is None: pb_color, pb_text = "gray", "數據不足"
+        elif pb_ratio > 3: pb_color, pb_text = "#ff4d4d", "偏高溢價"
+        elif pb_ratio < 1.5: pb_color, pb_text = "#00cc66", "具資產保護"
+        else: pb_color, pb_text = "#FFD700", "合理區間"
+
+        if peg_ratio == -999: peg_color, peg_text, peg_str_val = "gray", "分母為負，無意義", "N/A"
+        elif peg_ratio is None: peg_color, peg_text, peg_str_val = "gray", "衰退或無數據", "N/A"
+        else: 
+            peg_str_val = f"{peg_ratio:.2f}"
+            if peg_ratio > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
+            elif peg_ratio <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
+            else: peg_color, peg_text = "#FFD700", "合理區間"
+
+        if forward_pe is None: fpe_color, fpe_text, fpe_str_val = "gray", "數據不足", "N/A"
+        else:
+            fpe_str_val = f"{forward_pe:.1f}x"
+            if forward_pe > 25: fpe_color, fpe_text = "#ff4d4d", "高成長期望"
+            elif forward_pe < 15: fpe_color, fpe_text = "#00cc66", "相對便宜"
+            else: fpe_color, fpe_text = "#FFD700", "合理區間"
+
+        pb_str_val = f"{pb_ratio:.2f}x" if pb_ratio is not None else "N/A"
 
         val_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 歷史本益比 (Trailing P/E)</div><div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_eval}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 歷史本益比 (Trailing P/E)</div><div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_text}</div>
                 </div>
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pe_str}</div>
             </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fpe_eval[0]};'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fpe_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div><div style='background:{fpe_eval[0]}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_eval[1]}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div><div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_text}</div>
                 </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{f"{forward_pe:.1f}x" if forward_pe else "N/A"}</div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{fpe_str_val}</div>
                 <div style='color:#ffd700; font-size:0.85rem; font-weight:bold;'>基準：{eps_source_text}</div>
             </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_eval[0]};'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 本益成長比 (PEG)</div><div style='background:{peg_eval[0]}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_eval[1]}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 本益成長比 (PEG)</div><div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_text}</div>
                 </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{'N/A' if peg_ratio == -999 else (f'{peg_ratio:.2f}' if peg_ratio else 'N/A')}</div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{peg_str_val}</div>
             </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_eval[0]};'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div><div style='background:{pb_eval[0]}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_eval[1]}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div><div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_text}</div>
                 </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{f"{pb_ratio:.2f}x" if pb_ratio else "N/A"}</div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str_val}</div>
             </div>
         </div>
         """
@@ -643,7 +703,6 @@ if curr_id:
             if not merged.empty and len(merged) > 60: 
                 merged['EPS_calc'] = merged['Close'] / merged['PER']
                 
-                # 🚀 終極修正：移除所有的 .rolling(60) 平滑化，回歸最敏銳精確的原始 EPS！
                 pe_quantiles = merged['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
 
                 fig_river = go.Figure()
@@ -665,7 +724,6 @@ if curr_id:
                 current_pe = merged['PER'].iloc[-1]
                 current_price = merged['Close'].iloc[-1]
                 
-                # 因為不平滑，目前的狀態將與圖片顯示 100% 同步！
                 if current_price <= b2.iloc[-1]:
                     pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
                 elif current_price >= b5.iloc[-1]:
