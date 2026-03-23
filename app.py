@@ -44,8 +44,11 @@ if 'show_pk' not in st.session_state:
 if 'ai_industry_result' not in st.session_state:
     st.session_state.ai_industry_result = None
 
+# 🚀 修正：點擊股票按鈕時，同步將下拉選單狀態歸零，避免互相打架
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
+    if "quick_select" in st.session_state:
+        st.session_state.quick_select = "-- 快速切換標的 --"
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
 
@@ -413,8 +416,12 @@ with st.sidebar:
         st.session_state.ai_industry_result = None 
         st.rerun()
 
-    # --- 🚀 升級版讀取快速選股名單 (支援分類大標題格式) ---
+    # --- 🚀 讀取快速選股名單，並建立分類字典庫 ---
     options = ["-- 快速切換標的 --"]
+    categories = {}
+    current_cat = "未分類"
+    categories[current_cat] = []
+    
     if os.path.exists("stocklist.txt"):
         try:
             with open("stocklist.txt", "r", encoding="utf-8") as f:
@@ -423,15 +430,16 @@ with st.sidebar:
                     if not line:
                         continue
                     
-                    # 辨識邏輯：包含逗號的是股票標的，沒有逗號的是分類大標題
                     if "," in line:
                         parts = line.split(",")
                         if len(parts) >= 2:
-                            # 股票標的：內縮並加上橘色小菱形圖示
-                            options.append(f"　🔸 {parts[0].strip()} {parts[1].strip()}")
+                            code, name = parts[0].strip(), parts[1].strip()
+                            options.append(f"　🔸 {code} {name}")
+                            categories[current_cat].append((code, name))
                     else:
-                        # 分類大標題：加上標籤圖示
+                        current_cat = line
                         options.append(f"🏷️ {line}")
+                        categories[current_cat] = []
         except Exception as e:
             pass
             
@@ -443,11 +451,9 @@ with st.sidebar:
         
         if selected_quick != "-- 快速切換標的 --":
             if selected_quick.startswith("🏷️"):
-                # 🚀 防呆機制：如果使用者點到的是大標題，強制彈回預設狀態，防止卡住
                 st.session_state.quick_select = "-- 快速切換標的 --"
                 st.rerun()
             else:
-                # 取得股票代號 (過濾掉前方的空白與圖示)
                 clean_str = selected_quick.replace("　🔸 ", "").strip()
                 quick_code = clean_str.split(" ")[0].strip()
                 
@@ -456,7 +462,63 @@ with st.sidebar:
                     st.session_state.show_pk = False
                     st.session_state.ai_industry_result = None
                     st.rerun()
+
+    st.markdown("---")
     
+    # --- 🚀 新增：策略漏斗掃描器 ---
+    st.markdown("### 🎯 策略漏斗掃描器")
+    st.caption("尋找目前標的所屬族群中的「高 ROE + 低 PEG」潛力股。")
+    
+    if st.button("🔍 掃描同族群潛力股", use_container_width=True):
+        st.session_state.run_screener = True
+        
+    if st.session_state.get('run_screener'):
+        # 尋找目前股票所屬的族群
+        target_cat = None
+        target_stocks = []
+        for cat, stocks in categories.items():
+            for code, name in stocks:
+                if code == st.session_state.selected_stock:
+                    target_cat = cat
+                    target_stocks = stocks
+                    break
+            if target_cat: break
+            
+        if target_cat and target_stocks:
+            with st.spinner(f"正在掃描 {target_cat} 族群財報..."):
+                results = []
+                for c, n in target_stocks:
+                    _, info = get_stock_data(c)
+                    if info:
+                        roe = s_float(info.get('returnOnEquity'))
+                        pe = s_float(info.get('trailingPE'))
+                        eg = s_float(info.get('earningsGrowth'))
+                        sys_peg = s_float(info.get('pegRatio'))
+                        peg = sys_peg if sys_peg is not None else (pe / (eg * 100) if pe and eg and eg > 0 else None)
+                        
+                        results.append({
+                            'code': c,
+                            'name': n,
+                            'roe': roe if roe is not None else -999,
+                            'peg': peg if peg is not None else 999,
+                            'roe_str': f"{roe*100:.1f}%" if roe is not None else "N/A",
+                            'peg_str': f"{peg:.2f}" if peg is not None else "N/A"
+                        })
+                        
+                # 排序：PEG 由低到高，若 PEG 相同則比 ROE 誰高
+                results.sort(key=lambda x: (x['peg'], -x['roe']))
+                
+                st.markdown(f"<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果排序</b></div>", unsafe_allow_html=True)
+                st.markdown("<small style='color:gray;'>*點擊下方按鈕可直接切換標的*</small>", unsafe_allow_html=True)
+                
+                for res in results:
+                    is_good = res['peg'] < 1.5 and res['roe'] > 0.15
+                    icon = "🔥" if is_good else "🔸"
+                    btn_label = f"{icon} {res['name']} ({res['code']}) | PEG: {res['peg_str']} | ROE: {res['roe_str']}"
+                    st.button(btn_label, key=f"scr_{res['code']}", on_click=change_stock, args=(res['code'],), use_container_width=True)
+        else:
+            st.warning("⚠️ 目前的股票不在快速選股分類名單中，請先從上方下拉選單挑選！")
+
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
     if st.button("🔍 掃描籌碼增持名單", use_container_width=True):
