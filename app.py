@@ -286,143 +286,101 @@ def get_pe_pb_data(stock_id):
     except Exception as e: 
         return None
 
-def get_yahoo_finance_api_info(stock_id):
-    info = {}
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-    }
-    domain = "query2.finance.yahoo.com"
-    for ext in ['.TW', '.TWO']:
-        try:
-            url = f"https://{domain}/v10/finance/quoteSummary/{stock_id}{ext}?modules=summaryDetail,financialData,defaultKeyStatistics"
-            res = requests.get(url, headers=headers, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                result = data.get('quoteSummary', {}).get('result', [])
-                if result:
-                    res_dict = result[0]
-                    
-                    summary = res_dict.get('summaryDetail', {})
-                    info['trailingPE'] = summary.get('trailingPE', {}).get('raw')
-                    info['forwardPE'] = summary.get('forwardPE', {}).get('raw')
-                    info['priceToBook'] = summary.get('priceToBook', {}).get('raw')
-                    info['previousClose'] = summary.get('previousClose', {}).get('raw')
-                    
-                    fin = res_dict.get('financialData', {})
-                    info['grossMargins'] = fin.get('grossMargins', {}).get('raw')
-                    info['operatingMargins'] = fin.get('operatingMargins', {}).get('raw')
-                    info['returnOnEquity'] = fin.get('returnOnEquity', {}).get('raw')
-                    info['revenueGrowth'] = fin.get('revenueGrowth', {}).get('raw')
-                    info['earningsGrowth'] = fin.get('earningsGrowth', {}).get('raw')
-                    info['targetHighPrice'] = fin.get('targetHighPrice', {}).get('raw')
-                    info['targetMeanPrice'] = fin.get('targetMeanPrice', {}).get('raw')
-                    info['targetLowPrice'] = fin.get('targetLowPrice', {}).get('raw')
-                    info['numberOfAnalystOpinions'] = fin.get('numberOfAnalystOpinions', {}).get('raw')
-                    
-                    stats = res_dict.get('defaultKeyStatistics', {})
-                    info['trailingEps'] = stats.get('trailingEps', {}).get('raw')
-                    info['forwardEps'] = stats.get('forwardEps', {}).get('raw')
-                    info['pegRatio'] = stats.get('pegRatio', {}).get('raw')
-                    info['heldPercentInsiders'] = stats.get('heldPercentInsiders', {}).get('raw')
-                    info['heldPercentInstitutions'] = stats.get('heldPercentInstitutions', {}).get('raw')
-                    info['sharesOutstanding'] = stats.get('sharesOutstanding', {}).get('raw')
-                    
-                    return info
-        except Exception:
-            pass
-    return info
-
+# 🚀 終極無敵防護網：無死角純文字掃描 (免疫 Yahoo HTML 標籤大改版)
 def get_fallback_info(stock_id):
     info = {}
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     domain = "tw.stock.yahoo.com"
     
+    # 1. 抓取主要報價頁面
     try:
         url1 = f"https://{domain}/quote/{stock_id}"
-        res = requests.get(url1, headers=headers, timeout=5)
-        if res.status_code == 200:
-            text = res.text
+        res1 = requests.get(url1, headers=headers, timeout=5)
+        if res1.status_code == 200:
+            # 關鍵突破：將網頁中所有 < > 標籤全部剝除，只留下純文字，徹底無視改版
+            clean_text = re.sub(r'<[^>]+>', ' ', res1.text)
             
-            def extract_main(label):
-                idx = text.find(label)
-                if idx != -1:
-                    chunk = text[idx:idx+150]
-                    clean_chunk = re.sub(r'<[^>]+>', ' ', chunk).replace(label, '')
-                    m = re.search(r'([-0-9.,]+)', clean_chunk)
-                    if m:
-                        try: return float(m.group(1).replace(',', ''))
-                        except: pass
+            def ext(label, is_pct=False):
+                pct_str = r'\s*%' if is_pct else r''
+                # 搜尋邏輯：找尋標籤字眼，中間允許夾雜空白，後面緊接數字
+                pattern = rf'{label}\s*([-0-9.,]+)' + pct_str
+                m = re.search(pattern, clean_text)
+                if m:
+                    try:
+                        val = float(m.group(1).replace(',', ''))
+                        return val / 100.0 if is_pct else val
+                    except: pass
                 return None
             
-            info['trailingPE'] = extract_main('本益比')
-            info['priceToBook'] = extract_main('股價淨值比')
-            info['trailingEps'] = extract_main('EPS')
+            info['trailingPE'] = ext('本益比')
+            info['priceToBook'] = ext('股價淨值比')
+            info['trailingEps'] = ext('EPS')
+            info['grossMargins'] = ext('毛利率', True)
+            info['operatingMargins'] = ext('營業利益率', True)
+            info['returnOnEquity'] = ext('ROE', True)
             
-            sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text)
+            sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', res1.text)
             if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
     except: pass
 
-    try:
-        url2 = f"https://{domain}/quote/{stock_id}/financial-ratio"
-        res_ratio = requests.get(url2, headers=headers, timeout=5)
-        if res_ratio.status_code == 200:
-            text2 = res_ratio.text
-            
-            def extract_pct(label):
-                idx = text2.find(label)
-                if idx != -1:
-                    chunk = text2[idx:idx+150]
-                    clean_chunk = re.sub(r'<[^>]+>', ' ', chunk).replace(label, '')
-                    m = re.search(r'([-0-9.,]+)\s*%', clean_chunk)
+    # 2. 如果首頁抓不到毛利跟 ROE，自動跳轉去「財務比率」專屬頁面再抓一次
+    if info.get('returnOnEquity') is None or info.get('grossMargins') is None:
+        try:
+            url2 = f"https://{domain}/quote/{stock_id}/financial-ratio"
+            res2 = requests.get(url2, headers=headers, timeout=5)
+            if res2.status_code == 200:
+                clean_text2 = re.sub(r'<[^>]+>', ' ', res2.text)
+                def ext2(label):
+                    pattern = rf'{label}\s*([-0-9.,]+)\s*%'
+                    m = re.search(pattern, clean_text2)
                     if m:
                         try: return float(m.group(1).replace(',', '')) / 100.0
                         except: pass
-                return None
-                
-            info['grossMargins'] = extract_pct('毛利率')
-            info['operatingMargins'] = extract_pct('營業利益率')
-            info['returnOnEquity'] = extract_pct('ROE')
-    except: pass
+                    return None
+                    
+                gm = ext2('毛利率')
+                if gm is not None: info['grossMargins'] = gm
+                om = ext2('營業利益率')
+                if om is not None: info['operatingMargins'] = om
+                roe = ext2('ROE')
+                if roe is not None: info['returnOnEquity'] = roe
+        except: pass
     
     return info
 
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     stock_id = str(stock_id).strip()
+    hist = None
+    info_data = {}
     
-    # 🚀 終極修正：將 try 包在迴圈「內」，確保「上市(.TW)」失敗時，一定會換「上櫃(.TWO)」繼續尋找！
+    # 🚀 使用最原始穩定的 yf.Ticker，並將 Try 包在迴圈內，上市(.TW)失敗自動換上櫃(.TWO)
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
-            hist = ticker.history(period="5y")
-            
-            if not hist.empty: 
-                info_data = {}
+            temp_hist = ticker.history(period="5y")
+            if not temp_hist.empty: 
+                hist = temp_hist
                 try:
                     info_data = ticker.info
                     if not isinstance(info_data, dict):
                         info_data = {}
                 except:
                     pass
-                
-                if not info_data.get('returnOnEquity') or not info_data.get('trailingPE'):
-                    api_info = get_yahoo_finance_api_info(stock_id)
-                    for k, v in api_info.items():
-                        if v is not None:
-                            info_data[k] = v
-                            
-                if not info_data.get('returnOnEquity') or not info_data.get('trailingPE'):
-                    fallback = get_fallback_info(stock_id)
-                    for k, v in fallback.items():
-                        if v is not None:
-                            info_data[k] = v
-                            
-                return hist, info_data
-        except Exception as e:
-            # 當 yfinance 因為找不到上市公司(如3131.TW)而崩潰時，此處會攔截錯誤並 "continue"，讓迴圈順利進入 ".TWO"
-            continue 
+                break # 成功找到歷史數據就跳出迴圈
+        except:
+            continue
             
+    # 如果成功找到股價歷史，但發現 Yahoo 伺服器把財報數據偷偷藏起來了
+    if hist is not None and not hist.empty:
+        if not info_data.get('returnOnEquity') or not info_data.get('trailingPE'):
+            # 啟動無敵純文字掃描爬蟲
+            fallback = get_fallback_info(stock_id)
+            for k, v in fallback.items():
+                if v is not None:
+                    info_data[k] = v
+        return hist, info_data
+        
     return None, None
 
 @st.cache_data(ttl=86400) 
@@ -562,6 +520,7 @@ with st.sidebar:
                         roe = s_float(info.get('returnOnEquity'))
                         pe = s_float(info.get('trailingPE'))
                         
+                        # 代理運算：若缺乏獲利成長率，改用營收成長率代理計算 PEG
                         eg = s_float(info.get('earningsGrowth'))
                         if eg is None:
                             rev = s_float(info.get('revenueGrowth'))
@@ -587,6 +546,7 @@ with st.sidebar:
                 for res in results:
                     is_good = res['peg'] < 1.5 and res['roe'] > 0.15
                     icon = "🔥" if is_good else "🔸"
+                    # 🚀 使用強制換行，讓按鈕維持整齊的雙行顯示
                     btn_label = f"{icon} {res['name']} ({res['code']})\nPEG: {res['peg_str']} | ROE: {res['roe_str']}"
                     st.button(btn_label, key=f"scr_{res['code']}", on_click=change_stock, args=(res['code'],), use_container_width=True)
         else:
@@ -770,6 +730,7 @@ if curr_id:
         # 【3. 財務基本面與獲利預估微調】
         st.markdown("#### 💼 財務基本面與獲利基準微調")
         
+        # 🚀 提早讀取備援營收與本益比 (供數學代理防護網計算使用)
         df_rev_backup = get_monthly_revenue(curr_id)
         df_per_backup = get_pe_pb_data(curr_id)
 
@@ -786,17 +747,18 @@ if curr_id:
         if rev_growth is None and df_rev_backup is not None and not df_rev_backup.empty:
             rev_growth = s_float(df_rev_backup['YoY'].iloc[-1]) / 100.0
             
+        # 🚀 數學代理防護網：用已知數據精準還原未知空缺
         earn_growth = s_float(info.get('earningsGrowth'))
         if earn_growth is None and rev_growth is not None:
-            earn_growth = rev_growth
+            earn_growth = rev_growth # 用營收成長代理獲利成長
             
         t_eps = s_float(info.get('trailingEps'))
         if t_eps is None and pe_ratio is not None and pe_ratio > 0 and curr_p > 0:
-            t_eps = curr_p / pe_ratio 
+            t_eps = curr_p / pe_ratio # 股價 ÷ 本益比 = 精準還原 EPS
             
         sys_f_eps = s_float(info.get('forwardEps'))
         if sys_f_eps is None and t_eps is not None and earn_growth is not None:
-            sys_f_eps = t_eps * (1 + earn_growth) 
+            sys_f_eps = t_eps * (1 + earn_growth) # 用當前EPS與成長率反推明年EPS
             
         sys_forward_pe = s_float(info.get('forwardPE'))
         if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0:
