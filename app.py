@@ -168,7 +168,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         if "timeout" in str(e).lower(): return "⏳ API 連線逾時，請重試。"
         return f"連線異常: {str(e)}"
 
-# --- 🌍 動態判定今日/明日 (精準時間控制) ---
+# --- 🌍 動態判定今日/明日 (高精準時段與權重切換) ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -179,15 +179,16 @@ def get_global_market_trend():
         # 精準時間判定與文案顯示
         if 14 <= h < 22:
             target_day = "明日"
-            time_status = "<span style='color:gray; font-size:0.9rem;'>(美股尚未開盤，此為昨夜收盤參考)</span>"
-        elif h >= 22:
-            target_day = "明日"
-            time_status = "<span style='color:#00bfff; font-size:0.9rem;'>(美股 / 夜盤交易中)</span>"
-        else: # 0 ~ 13 (過了零點到下午兩點前)
+            time_status = "<span style='color:gray; font-size:0.9rem;'>(美股現貨未開盤，ADR為昨日死水，目前純依賴期貨跳動)</span>"
+        elif h >= 22 or h < 5:
+            target_day = "明日" if h >= 22 else "今日"
+            time_status = "<span style='color:#00bfff; font-size:0.9rem;'>(美股現貨與台指夜盤 交易中)</span>"
+        else: # 5 ~ 13 (過了凌晨5點到下午兩點前)
             target_day = "今日"
-            time_status = "<span style='color:#00cc66; font-size:0.9rem;'>(美股 / 夜盤最新收盤)</span>"
+            time_status = "<span style='color:#00cc66; font-size:0.9rem;'>(美股與夜盤已收盤，為最新結算數據)</span>"
 
-        tickers = yf.Tickers('^SOX TSM NQ=F')
+        # 加上 EWT (iShares MSCI Taiwan ETF) 代表台股外資情緒
+        tickers = yf.Tickers('^SOX TSM NQ=F EWT')
         
         def get_pct(ticker_obj):
             try:
@@ -203,8 +204,15 @@ def get_global_market_trend():
         sox_pct = get_pct(tickers.tickers['^SOX'])
         tsm_pct = get_pct(tickers.tickers['TSM'])
         nq_pct = get_pct(tickers.tickers['NQ=F'])
+        ewt_pct = get_pct(tickers.tickers['EWT'])
         
-        score = sox_pct * 0.5 + tsm_pct * 0.3 + nq_pct * 0.2
+        # 🚀 動態權重分配：
+        # 下午到晚間(14~22)美股現貨沒開，TSM/EWT/SOX 都是不動的舊資料，此時 100% 看期貨臉色！
+        if 14 <= h < 22:
+            score = nq_pct * 1.0
+        else:
+            # 正常交易或收盤後，綜合計算：費半30%、台積電ADR 30%、納指期貨 10%、台股外資情緒(EWT) 30%
+            score = sox_pct * 0.3 + tsm_pct * 0.3 + nq_pct * 0.1 + ewt_pct * 0.3
         
         if score > 1.0:
             trend, color = f"🔥 極度樂觀 ({target_day}台股開盤強勢)", "#ff4d4d"
@@ -216,7 +224,7 @@ def get_global_market_trend():
             trend, color = f"❄️ 悲觀警戒 ({target_day}台股面臨回檔壓力)", "#00cc66"
             
         return {
-            "sox": sox_pct, "tsm": tsm_pct, "nq": nq_pct,
+            "sox": sox_pct, "tsm": tsm_pct, "nq": nq_pct, "ewt": ewt_pct,
             "trend": trend, "color": color, 
             "target_day": target_day, "time_status": time_status
         }
@@ -436,10 +444,10 @@ with st.sidebar:
                         
                         sys_peg = s_float(inf.get('pegRatio'))
                         peg_is_neg = (eg is not None and eg <= 0)
-                        if sys_peg is None and pe and eg and eg > 0: sys_peg = pe / (eg * 100)
+                        if (sys_peg is None or pd.isna(sys_peg)) and pe and eg and eg > 0: sys_peg = pe / (eg * 100)
                         
-                        p_sort = sys_peg if sys_peg is not None and not peg_is_neg else 999
-                        p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None else "N/A")
+                        p_sort = sys_peg if sys_peg is not None and not pd.isna(sys_peg) and not peg_is_neg else 999
+                        p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None and not pd.isna(sys_peg) else "N/A")
                         results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':f"{roe*100:.1f}%" if roe else "N/A",'peg_str':p_str})
                     time.sleep(0.5); pbar.progress((i+1)/len(target_stocks))
                 pbar.empty(); results.sort(key=lambda x: (x['peg_sort'], -x['roe'] if x['roe'] else 0))
@@ -489,6 +497,9 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
+        # 🚀 提前定義百分比轉換工具，徹底消滅 NameError
+        def to_pct(val): return f"{val * 100:.2f}%" if val is not None and not pd.isna(val) else "N/A"
+
         # --- 🌍 國際連動與動態時間趨勢推估 ---
         st.markdown("<br>", unsafe_allow_html=True)
         trend_data = get_global_market_trend()
@@ -504,7 +515,8 @@ if curr_id:
                 <div style='display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;'>
                     <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>費城半導體 (^SOX)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["sox"])};'>{trend_data["sox"]:+.2f}%</b></div>
                     <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>台積電 ADR (TSM)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["tsm"])};'>{trend_data["tsm"]:+.2f}%</b></div>
-                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>納斯達克期貨 (NQ=F)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["nq"])};'>{trend_data["nq"]:+.2f}%</b></div>
+                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>納斯達期貨 (NQ=F)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["nq"])};'>{trend_data["nq"]:+.2f}%</b></div>
+                    <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>台股 ETF (EWT)</span><br><b style='font-size:1.1rem; color:{c_color(trend_data["ewt"])};'>{trend_data["ewt"]:+.2f}%</b></div>
                 </div>
             </div>
             """
@@ -549,7 +561,7 @@ if curr_id:
         if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0: sys_forward_pe = curr_p / sys_f_eps
             
         sys_peg_ratio = s_float(info.get('pegRatio'))
-        if sys_peg_ratio is None and pe_ratio is not None and calc_earn_growth is not None and calc_earn_growth > 0:
+        if (sys_peg_ratio is None or pd.isna(sys_peg_ratio)) and pe_ratio is not None and calc_earn_growth is not None and calc_earn_growth > 0:
             sys_peg_ratio = pe_ratio / (calc_earn_growth * 100)
         if peg_is_negative: sys_peg_ratio = -999
 
@@ -564,7 +576,7 @@ if curr_id:
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
         # ==========================================
-        # 🚀 終極除錯區：絕對安全的預先字串排版，完全根除 ValueError
+        # 🚀 終極安全字串預處理：絕不在 HTML 內寫邏輯，杜絕報錯
         # ==========================================
         if use_custom_eps:
             active_f_eps = custom_eps
