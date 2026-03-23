@@ -270,9 +270,14 @@ def get_pe_pb_data(stock_id):
 
         headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(url, headers=headers, timeout=10)
+        
+        if res.status_code != 200:
+            return None # 捕捉連線阻擋
+            
         data = res.json()
 
-        if data.get('status') != 200 or not data.get('data'): return None
+        if data.get('status') != 200 or not data.get('data'): 
+            return pd.DataFrame() # 有連線但無資料回傳空表
 
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
@@ -280,7 +285,8 @@ def get_pe_pb_data(stock_id):
         df = df[df['PER'] > 0] # 濾除獲利為負的極端值
         
         return df[['date', 'PER']].dropna().reset_index(drop=True)
-    except Exception as e: return None
+    except Exception as e: 
+        return None
 
 def get_fallback_info(stock_id):
     info = {}
@@ -866,73 +872,7 @@ if curr_id:
         else:
             st.warning("⚠️ 目前暫時無法連線至公開庫取得月營收數據。")
 
-        # 🚀 【新增：6. 必備神兵：本益比河流圖 (P/E River Chart)】
-        df_per = get_pe_pb_data(curr_id)
-        if df_per is not None and not df_per.empty:
-            st.markdown("#### 🌊 必備神兵：近三年本益比河流圖 (P/E River)")
-            st.markdown("<small style='color:gray;'>*實戰價值：透過歷史估值區間，一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
-
-            hist_reset = hist.copy().reset_index()
-            if hist_reset['Date'].dt.tz is not None:
-                hist_reset['Date'] = hist_reset['Date'].dt.tz_localize(None)
-
-            hist_reset['Date_only'] = hist_reset['Date'].dt.date
-            df_per['date_only'] = df_per['date'].dt.date
-
-            merged = pd.merge(hist_reset, df_per, left_on='Date_only', right_on='date_only', how='inner')
-
-            if not merged.empty and len(merged) > 60: 
-                # 反推每日的 EPS (收盤價 / 當日本益比)
-                merged['EPS_calc'] = merged['Close'] / merged['PER']
-
-                # 透過分位數抓出過去三年的「本益比慣性通道」
-                pe_quantiles = merged['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
-
-                fig_river = go.Figure()
-
-                # 建立五條河流邊界
-                b1 = merged['EPS_calc'] * pe_quantiles[0]
-                b2 = merged['EPS_calc'] * pe_quantiles[1]
-                b3 = merged['EPS_calc'] * pe_quantiles[2]
-                b4 = merged['EPS_calc'] * pe_quantiles[3]
-                b5 = merged['EPS_calc'] * pe_quantiles[4]
-
-                # 畫出河流圖 (運用 Plotly 的 fill='tonexty' 營造帶狀區間)
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b1, line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b2, fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b3, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
-
-                # 把實際股價疊加在河流圖之上
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#ffffff', width=2.5), name='實際股價'))
-
-                # 計算目前落在哪個位階
-                current_pe = merged['PER'].iloc[-1]
-                if current_pe <= pe_quantiles[1]:
-                    pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
-                elif current_pe >= pe_quantiles[3]:
-                    pe_status, status_color = "⚠️ 處於歷史高估區間！(留意風險)", "#ff4d4d"
-                else:
-                    pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
-
-                fig_river.update_layout(
-                    height=450,
-                    template="plotly_dark",
-                    margin=dict(l=10, r=10, t=50, b=10),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                    hovermode="x unified",
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
-                )
-                fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#333')
-
-                st.markdown(f"<div style='background:#1e1e1e; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x)</div>", unsafe_allow_html=True)
-                st.plotly_chart(fig_river, use_container_width=True)
-                st.markdown("---")
-            else:
-                st.info("💡 該股票近期獲利不穩定或呈現虧損，系統無法繪製有效的本益比河流圖。")
-
-        # 【7. 產業前景與競爭優勢評估】
+        # 【6. 產業前景與競爭優勢評估】
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：下方為客觀數據推導。您可點擊 AI 按鈕進行聯網深度檢索與買賣點分析。*</small>", unsafe_allow_html=True)
 
@@ -1055,7 +995,7 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【8. 法人目標價】
+        # 【7. 法人目標價】
         hi = s_float(info.get('targetHighPrice'))
         me = s_float(info.get('targetMeanPrice'))
         lo = s_float(info.get('targetLowPrice'))
@@ -1072,7 +1012,7 @@ if curr_id:
              st.info(f"法人最高預期：**{hi:.1f}**")
         st.markdown("---")
 
-        # 【9. 籌碼面與股權結構分析】
+        # 【8. 籌碼面與股權結構分析】
         st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
         insider_pct = s_float(info.get('heldPercentInsiders'))
         inst_pct = s_float(info.get('heldPercentInstitutions'))
@@ -1122,6 +1062,78 @@ if curr_id:
         </div>
         """
         st.markdown(chip_html, unsafe_allow_html=True)
+        st.markdown("---")
+
+        # 🚀 【移至最下方：9. 必備神兵：本益比河流圖 (P/E River Chart)】
+        st.markdown("### 🌊 必備神兵：近三年本益比河流圖 (P/E River)")
+        st.markdown("<small style='color:gray;'>*實戰價值：透過歷史估值區間，一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
+        
+        with st.spinner("抓取近三年每日歷史本益比數據中..."):
+            df_per = get_pe_pb_data(curr_id)
+            
+        if df_per is None:
+            st.warning("⚠️ 目前公開資料庫 (FinMind) 連線忙碌或遭遇免費 API 呼叫限制，導致無法抓取資料，請稍候重整網頁再試。")
+        elif df_per.empty:
+            st.info("💡 該股票近期獲利為負或缺乏有效的本益比數據，系統無法為其繪製河流圖。")
+        else:
+            hist_reset = hist.copy().reset_index()
+            if hist_reset['Date'].dt.tz is not None:
+                hist_reset['Date'] = hist_reset['Date'].dt.tz_localize(None)
+
+            hist_reset['Date_only'] = hist_reset['Date'].dt.date
+            df_per['date_only'] = df_per['date'].dt.date
+
+            merged = pd.merge(hist_reset, df_per, left_on='Date_only', right_on='date_only', how='inner')
+
+            if not merged.empty and len(merged) > 60: 
+                # 反推每日的 EPS (收盤價 / 當日本益比)
+                merged['EPS_calc'] = merged['Close'] / merged['PER']
+
+                # 透過分位數抓出過去三年的「本益比慣性通道」
+                pe_quantiles = merged['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
+
+                fig_river = go.Figure()
+
+                # 建立五條河流邊界
+                b1 = merged['EPS_calc'] * pe_quantiles[0]
+                b2 = merged['EPS_calc'] * pe_quantiles[1]
+                b3 = merged['EPS_calc'] * pe_quantiles[2]
+                b4 = merged['EPS_calc'] * pe_quantiles[3]
+                b5 = merged['EPS_calc'] * pe_quantiles[4]
+
+                # 畫出河流圖 (運用 Plotly 的 fill='tonexty' 營造帶狀區間)
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b1, line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b2, fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b3, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
+
+                # 把實際股價疊加在河流圖之上
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#ffffff', width=2.5), name='實際股價'))
+
+                # 計算目前落在哪個位階
+                current_pe = merged['PER'].iloc[-1]
+                if current_pe <= pe_quantiles[1]:
+                    pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
+                elif current_pe >= pe_quantiles[3]:
+                    pe_status, status_color = "⚠️ 處於歷史高估區間！(留意風險)", "#ff4d4d"
+                else:
+                    pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
+
+                fig_river.update_layout(
+                    height=450,
+                    template="plotly_dark",
+                    margin=dict(l=10, r=10, t=50, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    hovermode="x unified",
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+                )
+                fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#333')
+
+                st.markdown(f"<div style='background:#1e1e1e; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x)</div>", unsafe_allow_html=True)
+                st.plotly_chart(fig_river, use_container_width=True)
+            else:
+                st.info("💡 該股票資料筆數不足以計算有效的本益比通道。")
         st.markdown("---")
 
         # 【10. 專業技術線圖與量化型態分析】
