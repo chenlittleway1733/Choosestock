@@ -46,6 +46,8 @@ if 'ai_industry_result' not in st.session_state:
 
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
+    if "quick_select" in st.session_state:
+        st.session_state.quick_select = "-- 快速切換標的 --"
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
 
@@ -232,7 +234,6 @@ def get_monthly_revenue(stock_id):
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
         
-        # 強制排除「當月」的未結算或錯誤資料
         current_month_start = pd.to_datetime(f"{today.year}-{today.month:02d}-01")
         df = df[df['date'] < current_month_start]
 
@@ -241,7 +242,6 @@ def get_monthly_revenue(stock_id):
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
         df['YoY'] = df['revenue'].pct_change(periods=12) * 100
         
-        # 將月份格式強制改為 YYYY/MM 格式
         df['Month'] = df['date'].dt.strftime('%Y/%m')
         df['Revenue'] = df['revenue'] / 100000000 
 
@@ -253,37 +253,72 @@ def get_monthly_revenue(stock_id):
         return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
     except Exception as e: return None
 
+@st.cache_data(ttl=43200)
+def get_pe_pb_data(stock_id):
+    try:
+        today = datetime.date.today()
+        start_year = today.year - 5
+        start_str = f"{start_year}-{today.month:02d}-01"
+
+        protocol = "https://"
+        host_name = "api.finmindtrade.com"
+        path = "/api/v4/data"
+        params = f"?dataset=TaiwanStockPER&data_id={stock_id}&start_date={start_str}"
+        url = f"{protocol}{host_name}{path}{params}"
+
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=10)
+        
+        if res.status_code != 200:
+            return None
+            
+        data = res.json()
+
+        if data.get('status') != 200 or not data.get('data'): 
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data['data'])
+        df['date'] = pd.to_datetime(df['date'])
+        df['PER'] = pd.to_numeric(df['PER'], errors='coerce')
+        df = df[df['PER'] > 0] 
+        
+        return df[['date', 'PER']].dropna().reset_index(drop=True)
+    except Exception as e: 
+        return None
+
+# 🛡️ 徹底還原您早上版的穩定爬蟲邏輯 (僅加上世芯KY的毛利率防呆字眼)
 def get_fallback_info(stock_id):
     info = {}
     try:
         protocol = "https://"
         host_name = "tw.stock.yahoo.com"
         url = f"{protocol}{host_name}/quote/{stock_id}"
-        
+
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
-        
+
         def extract(pattern):
             m = re.search(pattern, text)
             if m:
                 try: return float(m.group(1).replace(',', ''))
                 except: return None
             return None
-            
+
         info['trailingPE'] = extract(r'本益比</span><span[^>]*>([0-9.,]+)</span>')
         info['priceToBook'] = extract(r'股價淨值比</span><span[^>]*>([0-9.,]+)</span>')
         info['trailingEps'] = extract(r'EPS</span><span[^>]*>([0-9.,-]+)</span>')
-        
-        gm = extract(r'毛利率</span><span[^>]*>([0-9.,-]+)%</span>')
+
+        # 加入 KY 股字眼相容
+        gm = extract(r'(?:毛利率|營業毛利率)</span><span[^>]*>([0-9.,-]+)%</span>')
         if gm is not None: info['grossMargins'] = gm / 100.0
-        
-        om = extract(r'營業利益率</span><span[^>]*>([0-9.,-]+)%</span>')
+
+        om = extract(r'(?:營業利益率|營益率)</span><span[^>]*>([0-9.,-]+)%</span>')
         if om is not None: info['operatingMargins'] = om / 100.0
-        
-        roe = extract(r'ROE</span><span[^>]*>([0-9.,-]+)%</span>')
+
+        roe = extract(r'(?:ROE|權益報酬率|股東權益報酬率)</span><span[^>]*>([0-9.,-]+)%</span>')
         if roe is not None: info['returnOnEquity'] = roe / 100.0
-        
+
         sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text)
         if sec_match:
             info['sector'] = urllib.parse.unquote(sec_match.group(1))
@@ -292,14 +327,15 @@ def get_fallback_info(stock_id):
         pass
     return info
 
+# 🛡️ 徹底還原您早上版的穩定資料獲取邏輯
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     stock_id = str(stock_id).strip()
     try:
         for ext in [".TW", ".TWO"]:
             ticker = yf.Ticker(f"{stock_id}{ext}")
-            hist = ticker.history(period="1y")
-            if not hist.empty: 
+            hist = ticker.history(period="5y") # 配合河流圖，抓五年資料
+            if not hist.empty:
                 info_data = {}
                 try:
                     info_data = ticker.info
@@ -307,11 +343,11 @@ def get_stock_data(stock_id):
                         info_data = {}
                 except:
                     pass
-                    
+
                 if not info_data.get('trailingPE') and not info_data.get('trailingEps'):
                     fallback = get_fallback_info(stock_id)
                     info_data.update(fallback)
-                    
+
                 return hist, info_data
         return None, None
     except: return None, None
@@ -369,44 +405,127 @@ with st.sidebar:
     st.markdown("### 🔍 個股查詢")
     stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
     
-    # 🚀 完美修正區塊：把手動輸入的判定移到最上面，就不會跟 Selectbox 打架了！
     if stock_input != st.session_state.selected_stock:
         st.session_state.selected_stock = stock_input
-        # 當有手動輸入時，強制將下拉選單狀態歸零
         if "quick_select" in st.session_state:
             st.session_state.quick_select = "-- 快速切換標的 --"
         st.session_state.show_pk = False 
         st.session_state.ai_industry_result = None 
         st.rerun()
 
-    # --- 讀取快速選股名單 ---
-    quick_stocks = []
+    # --- 讀取快速選股名單，並建立分類字典庫 ---
+    options = ["-- 快速切換標的 --"]
+    categories = {}
+    current_cat = "未分類"
+    categories[current_cat] = []
+    
     if os.path.exists("stocklist.txt"):
         try:
             with open("stocklist.txt", "r", encoding="utf-8") as f:
                 for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
                     if "," in line:
-                        quick_stocks.append(line.strip())
+                        parts = line.split(",")
+                        if len(parts) >= 2:
+                            code, name = parts[0].strip(), parts[1].strip()
+                            options.append(f"　🔸 {code} {name}")
+                            categories[current_cat].append((code, name))
+                    else:
+                        current_cat = line
+                        options.append(f"🏷️ {line}")
+                        categories[current_cat] = []
         except Exception as e:
             pass
             
-    if quick_stocks:
-        options = ["-- 快速切換標的 --"] + [f"{item.split(',')[0]} {item.split(',')[1]}" for item in quick_stocks]
-        
-        # 使用 key 讓 Streamlit 自動管理狀態
+    if len(options) > 1:
         if "quick_select" not in st.session_state:
             st.session_state.quick_select = "-- 快速切換標的 --"
             
         selected_quick = st.selectbox("⚡ 快速選股名單", options, key="quick_select")
         
         if selected_quick != "-- 快速切換標的 --":
-            quick_code = selected_quick.split(" ")[0]
-            if quick_code != st.session_state.selected_stock:
-                st.session_state.selected_stock = quick_code
-                st.session_state.show_pk = False
-                st.session_state.ai_industry_result = None
+            if selected_quick.startswith("🏷️"):
+                st.session_state.quick_select = "-- 快速切換標的 --"
                 st.rerun()
+            else:
+                clean_str = selected_quick.replace("　🔸 ", "").strip()
+                quick_code = clean_str.split(" ")[0].strip()
+                
+                if quick_code != st.session_state.selected_stock:
+                    st.session_state.selected_stock = quick_code
+                    st.session_state.show_pk = False
+                    st.session_state.ai_industry_result = None
+                    st.rerun()
+
+    st.markdown("---")
     
+    # --- 🎯 策略漏斗掃描器 ---
+    st.markdown("### 🎯 策略漏斗掃描器")
+    st.caption("尋找目前標的所屬族群中的「高 ROE + 低 PEG」潛力股。")
+    
+    if st.button("🔍 掃描同族群潛力股", use_container_width=True):
+        st.session_state.run_screener = True
+        
+    if st.session_state.get('run_screener'):
+        target_cat = None
+        target_stocks = []
+        for cat, stocks in categories.items():
+            for code, name in stocks:
+                if code == st.session_state.selected_stock:
+                    target_cat = cat
+                    target_stocks = stocks
+                    break
+            if target_cat: break
+            
+        if target_cat and target_stocks:
+            with st.spinner(f"正在掃描 {target_cat} 族群財報..."):
+                results = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                for i, (c, n) in enumerate(target_stocks):
+                    status_text.text(f"⏳ 深度解析中: {n} ({c})...")
+                    _, info = get_stock_data(c)
+                    
+                    if info:
+                        roe = s_float(info.get('returnOnEquity'))
+                        pe = s_float(info.get('trailingPE'))
+                        eg = s_float(info.get('earningsGrowth'))
+                            
+                        sys_peg = s_float(info.get('pegRatio'))
+                        peg = sys_peg if sys_peg is not None else (pe / (eg * 100) if pe and eg and eg > 0 else None)
+                        
+                        results.append({
+                            'code': c,
+                            'name': n,
+                            'roe': roe if roe is not None else -999,
+                            'peg': peg if peg is not None else 999,
+                            'roe_str': f"{roe*100:.1f}%" if roe is not None else "N/A",
+                            'peg_str': f"{peg:.2f}" if peg is not None else "N/A"
+                        })
+                    
+                    time.sleep(0.5)
+                    progress_bar.progress((i + 1) / len(target_stocks))
+                        
+                status_text.empty()
+                progress_bar.empty()
+                
+                results.sort(key=lambda x: (x['peg'], -x['roe']))
+                
+                st.markdown(f"<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果排序</b></div>", unsafe_allow_html=True)
+                st.markdown("<small style='color:gray;'>*點擊下方按鈕可直接切換標的*</small>", unsafe_allow_html=True)
+                
+                for res in results:
+                    is_good = res['peg'] < 1.5 and res['roe'] > 0.15
+                    icon = "🔥" if is_good else "🔸"
+                    btn_label = f"{icon} {res['name']} ({res['code']})\nPEG: {res['peg_str']} | ROE: {res['roe_str']}"
+                    st.button(btn_label, key=f"scr_{res['code']}", on_click=change_stock, args=(res['code'],), use_container_width=True)
+        else:
+            st.warning("⚠️ 目前的股票不在快速選股分類名單中，請先從上方下拉選單挑選！")
+
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
     if st.button("🔍 掃描籌碼增持名單", use_container_width=True):
@@ -584,6 +703,7 @@ if curr_id:
 
         # 【3. 財務基本面與獲利預估微調】
         st.markdown("#### 💼 財務基本面與獲利基準微調")
+        
         pb_ratio = s_float(info.get('priceToBook'))
         pe_ratio = s_float(info.get('trailingPE'))
         roe = s_float(info.get('returnOnEquity'))
@@ -634,12 +754,12 @@ if curr_id:
             eps_source_text = f"自訂法人共識 ({active_f_eps:.2f}元)"
         else:
             active_f_eps = sys_f_eps
-            forward_pe = curr_p / sys_f_eps if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0 and curr_p else sys_forward_pe
-            peg_ratio = pe_ratio / (earn_growth * 100) if sys_peg_ratio is None and pe_ratio is not None and earn_growth is not None and earn_growth > 0 else sys_peg_ratio
+            forward_pe = sys_forward_pe
+            peg_ratio = sys_peg_ratio
             eg_str = f"{earn_growth * 100:.2f}%" if earn_growth is not None else "N/A"
             eg_color = "#ff4d4d" if earn_growth is not None and earn_growth > 0 else ("#00cc66" if earn_growth is not None and earn_growth < 0 else "#fff")
             eg_label = "獲利年增率 (YoY)"
-            eps_source_text = f"海外系統外推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
+            eps_source_text = f"海外系統或反推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
         def to_pct(val): return f"{val * 100:.2f}%" if val is not None else "N/A"
 
@@ -825,13 +945,12 @@ if curr_id:
             fig_rev.add_trace(go.Scatter(x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
             
             fig_rev.update_layout(
-                height=400, template="plotly_dark", hovermode="x unified", 
+                height=400, hovermode="x unified", 
                 margin=dict(l=10, r=10, t=50, b=10), 
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), 
-                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
             )
             fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
-            fig_rev.update_yaxes(title_text="年增率 YoY (%)", secondary_y=True, showgrid=True, gridcolor='#333', zeroline=True, zerolinewidth=1, zerolinecolor='#555')
+            fig_rev.update_yaxes(title_text="年增率 YoY (%)", secondary_y=True, showgrid=True, gridcolor='#e0e0e0', zeroline=True, zerolinewidth=1, zerolinecolor='#ccc')
             fig_rev.update_xaxes(type='category')
             
             st.plotly_chart(fig_rev, use_container_width=True)
@@ -962,76 +1081,77 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【7. 法人目標價】
-        hi = s_float(info.get('targetHighPrice'))
-        me = s_float(info.get('targetMeanPrice'))
-        lo = s_float(info.get('targetLowPrice'))
+        # 🚀 【9. 必備神兵：本益比河流圖 (P/E River Chart)】
+        st.markdown("### 🌊 必備神兵：近五年本益比河流圖 (P/E River)")
+        st.markdown("<small style='color:gray;'>*實戰價值：透過歷史估值區間，一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
         
-        if hi is not None and me is not None and lo is not None:
-            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-            v1, v2, v3 = st.columns(3)
-            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi:.1f}</b></div>", unsafe_allow_html=True)
-            upside = ((me / curr_p) - 1) * 100 if curr_p else 0
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
-            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo:.1f}</b></div>", unsafe_allow_html=True)
-        elif hi is not None:
-             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-             st.info(f"法人最高預期：**{hi:.1f}**")
-        st.markdown("---")
-
-        # 【8. 籌碼面與股權結構分析】
-        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
-        insider_pct = s_float(info.get('heldPercentInsiders'))
-        inst_pct = s_float(info.get('heldPercentInstitutions'))
-        shares_out = s_float(info.get('sharesOutstanding'))
-        share_capital = shares_out * 10 if shares_out is not None else None
-
-        if share_capital is not None:
-            if share_capital >= 10_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
-            elif share_capital <= 3_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
-            else:
-                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
+        with st.spinner("抓取近五年每日歷史本益比數據中..."):
+            df_per = get_pe_pb_data(curr_id)
+            
+        if df_per is None:
+            st.warning("⚠️ 目前公開資料庫 (FinMind) 連線忙碌或遭遇免費 API 呼叫限制，導致無法抓取資料，請稍候重整網頁再試。")
+        elif df_per.empty:
+            st.info("💡 該股票近期獲利為負或缺乏有效的本益比數據，系統無法為其繪製河流圖。")
         else:
-            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
+            hist_reset = hist.copy().reset_index()
+            if hist_reset['Date'].dt.tz is not None:
+                hist_reset['Date'] = hist_reset['Date'].dt.tz_localize(None)
 
-        inst_str = f"{inst_pct * 100:.2f}%" if inst_pct is not None else "N/A"
-        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
-        
-        insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
-        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
+            hist_reset['Date_only'] = hist_reset['Date'].dt.date
+            df_per['date_only'] = df_per['date'].dt.date
 
-        chip_html = f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
-                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
-                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
-                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
-                </div>
-                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
-            </div>
-        </div>
-        """
-        st.markdown(chip_html, unsafe_allow_html=True)
+            merged = pd.merge(hist_reset, df_per, left_on='Date_only', right_on='date_only', how='inner')
+
+            if not merged.empty and len(merged) > 60: 
+                merged['EPS_calc'] = merged['Close'] / merged['PER']
+                merged['EPS_smoothed'] = merged['EPS_calc'].rolling(window=60, min_periods=1).mean()
+
+                pe_quantiles = merged['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
+
+                fig_river = go.Figure()
+
+                b1 = merged['EPS_smoothed'] * pe_quantiles[0]
+                b2 = merged['EPS_smoothed'] * pe_quantiles[1]
+                b3 = merged['EPS_smoothed'] * pe_quantiles[2]
+                b4 = merged['EPS_smoothed'] * pe_quantiles[3]
+                b5 = merged['EPS_smoothed'] * pe_quantiles[4]
+
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b1, mode='lines', line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b2, mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b3, mode='lines', fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
+
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#0033cc', width=3), name='實際股價'))
+
+                current_pe = merged['PER'].iloc[-1]
+                
+                rerating_warn = ""
+                if current_pe >= pe_quantiles[4] * 0.95:
+                     rerating_warn = "<br><br><span style='color:#ff8c00; font-size:0.95rem;'>⚠️ <b>系統智能偵測：可能發生「估值重評 (Re-rating)」</b><br>此股票目前本益比已突破或逼近五年歷史極高點（如設備廠轉型 AI 供應鏈）。此時歷史河流圖的參考價值降低，請務必配合「未來 EPS 爆發力」與「右方 AI 深度推演」來評估其實際價值，切勿單看歷史估值放空！</span>"
+                
+                if current_pe <= pe_quantiles[1]:
+                    pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
+                elif current_pe >= pe_quantiles[3]:
+                    pe_status, status_color = "⚠️ 處於歷史高估區間！(留意風險)", "#ff4d4d"
+                else:
+                    pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
+
+                fig_river.update_layout(
+                    height=450,
+                    margin=dict(l=10, r=10, t=50, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    hovermode="x unified"
+                )
+                fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#e0e0e0')
+
+                st.markdown(f"<div style='background:#f8f9fa; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px; color:#333;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x){rerating_warn}</div>", unsafe_allow_html=True)
+                st.plotly_chart(fig_river, use_container_width=True)
+            else:
+                st.info("💡 該股票資料筆數不足以計算有效的本益比通道。")
         st.markdown("---")
 
-        # 【9. 專業技術線圖與量化型態分析】
+        # 【10. 專業技術線圖與量化型態分析】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -1155,15 +1275,14 @@ if curr_id:
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
 
-        fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
+        fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#ccc', secondary_y=False, row=1, col=1)
         max_vol = plot_df['Volume'].max() / 1000 if not plot_df['Volume'].empty else 100
         fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
-        fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
-        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
+        fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#ccc', row=2, col=1)
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#e0e0e0', mirror=True, showline=True, linecolor='#ccc')
         
         fig.update_layout(
             height=650, 
-            template="plotly_dark", 
             xaxis_rangeslider_visible=False, 
             margin=dict(l=10, r=10, t=50, b=10), 
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), 
