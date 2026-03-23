@@ -52,7 +52,9 @@ def change_stock(stock_code):
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
 
-# --- 🛠️ 核心防護：絕對安全的浮點數轉換 ---
+# ==========================================
+# 🚀 核心防護：全局安全的格式轉換工具 (徹底杜絕 NameError 崩潰)
+# ==========================================
 def s_float(val, default=None):
     try:
         if val is None: return default
@@ -62,6 +64,13 @@ def s_float(val, default=None):
         return v
     except:
         return default
+
+def to_pct(val):
+    try:
+        if val is None or pd.isna(val): return "N/A"
+        return f"{val * 100:.2f}%"
+    except:
+        return "N/A"
 
 # --- AI 解析與連線函數 ---
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
@@ -168,7 +177,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         if "timeout" in str(e).lower(): return "⏳ API 連線逾時，請重試。"
         return f"連線異常: {str(e)}"
 
-# --- 🌍 動態判定今日/明日 ---
+# --- 🌍 動態判定今日/明日 (支援點位與百分比雙重顯示) ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -442,9 +451,7 @@ with st.sidebar:
                         p_sort = sys_peg if sys_peg is not None and not pd.isna(sys_peg) and not peg_is_neg else 999
                         p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None and not pd.isna(sys_peg) else "N/A")
                         
-                        roe_str_local = f"{roe*100:.1f}%" if roe is not None and not pd.isna(roe) else "N/A"
-                        
-                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':roe_str_local,'peg_str':p_str})
+                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':to_pct(roe),'peg_str':p_str})
                     time.sleep(0.5); pbar.progress((i+1)/len(target_stocks))
                 pbar.empty(); results.sort(key=lambda x: (x['peg_sort'], -x['roe'] if x['roe'] else 0))
                 st.markdown("<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果</b></div>", unsafe_allow_html=True)
@@ -452,7 +459,6 @@ with st.sidebar:
                     icon = "🔥" if res['peg_sort'] < 1.5 and res['roe'] and res['roe'] > 0.15 else "🔸"
                     st.button(f"{icon} {res['name']} ({res['code']})\nPEG: {res['peg_str']} | ROE: {res['roe_str']}", key=f"s_{res['code']}", on_click=change_stock, args=(res['code'],), use_container_width=True)
 
-    # 🚀 滿血回歸：籌碼追蹤、AI推演、同業PK 全部還原！
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
     if st.button("🔍 掃描籌碼增持名單", use_container_width=True):
@@ -493,7 +499,6 @@ with st.sidebar:
 # ==========================================
 st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
-# 🚀 處理 AI 議題結果顯示區塊
 if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
         model_to_use = st.session_state.get('selected_model', 'gemini-2.5-flash')
@@ -564,7 +569,7 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # --- 🌍 國際連動與動態時間趨勢推估 ---
+        # --- 🌍 國際連動與動態時間趨勢推估 (包含點位與百分比) ---
         st.markdown("<br>", unsafe_allow_html=True)
         trend_data = get_global_market_trend()
         if trend_data:
@@ -639,19 +644,13 @@ if curr_id:
             default_eps = st.session_state.ai_fetched_eps.get(curr_id, sys_f_eps if sys_f_eps else (t_eps if t_eps else 1.0))
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
-        # ==========================================
-        # 🚀 絕對安全的本地格式化工具：保證在此刻定義，絕不引發 NameError
-        # ==========================================
-        def safe_pct(val):
-            return f"{val * 100:.2f}%" if val is not None and not pd.isna(val) else "N/A"
-
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
             if t_eps and t_eps > 0 and pe_ratio:
                 cg = (active_f_eps - t_eps) / t_eps
                 peg_ratio = pe_ratio / (cg * 100) if cg > 0 else -999
-                eg_str = safe_pct(cg)
+                eg_str = to_pct(cg)
                 eg_color = "#ff4d4d" if cg > 0 else "#00cc66"
             else:
                 peg_ratio = None
@@ -662,7 +661,7 @@ if curr_id:
             active_f_eps = sys_f_eps
             forward_pe = sys_forward_pe
             peg_ratio = sys_peg_ratio
-            eg_str = safe_pct(earn_growth)
+            eg_str = to_pct(earn_growth)
             eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
             eps_source_text = f"海外系統或反推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
@@ -671,11 +670,11 @@ if curr_id:
         active_f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
         f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{active_f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {active_f_eps_str}"
             
-        rg_str = safe_pct(rev_growth)
+        rg_str = to_pct(rev_growth)
         rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
-        gm_str = safe_pct(gross_margin)
-        om_str = safe_pct(op_margin)
-        roe_str = safe_pct(roe)
+        gm_str = to_pct(gross_margin)
+        om_str = to_pct(op_margin)
+        roe_str = to_pct(roe)
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe is not None and roe >= 0.15 else ""
 
         fund_html = f"""
@@ -749,7 +748,7 @@ if curr_id:
         st.markdown(val_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 產業 PK 與比較 (側邊欄觸發)
+        # 🚀 產業 PK 與比較
         if st.session_state.show_pk:
             st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
             st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
@@ -836,9 +835,9 @@ if curr_id:
             st.markdown("---")
 
         # 【6. 產業前景與 AI 報告】
-        if st.button("🤖 啟動 AI 深度報告 (含一鍵複製)", use_container_width=True):
+        if st.button("🤖 啟 পণ্ডিত動 AI 深度報告 (含一鍵複製)", use_container_width=True):
             if st.session_state.api_key:
-                ctx = f"現價:{curr_p}, P/E:{pe_ratio}, ROE:{safe_pct(roe)}, 毛利:{safe_pct(gross_margin)}, 營收YoY:{safe_pct(rev_growth)}, 預估EPS:{active_f_eps}"
+                ctx = f"現價:{curr_p}, P/E:{pe_ratio}, ROE:{to_pct(roe)}, 毛利:{to_pct(gross_margin)}, 營收YoY:{to_pct(rev_growth)}, 預估EPS:{active_f_eps}"
                 st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, ctx, st.session_state.get('selected_model', 'gemini-2.5-flash'))
         if st.session_state.ai_industry_result:
             with st.container(border=True):
