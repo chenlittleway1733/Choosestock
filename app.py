@@ -13,14 +13,10 @@ import datetime
 import os
 import math
 
-# ==========================================
-# 0. 網頁基本設定
-# ==========================================
-st.set_page_config(page_title="台股聯網 AI 投資戰情室", layout="wide")
+# 設定網頁標題與寬度
+st.set_page_config(page_title="way系統", layout="wide")
 
-# ==========================================
-# 1. 全局常數與安全轉換工具 (鎖死在最頂端，保證絕不報錯)
-# ==========================================
+# --- 產業對照表 ---
 SECTOR_MAP = {
     "Technology": "科技產業", "Semiconductors": "半導體業", "Consumer Electronics": "消費性電子",
     "Electronic Components": "電子零組件", "Computer Hardware": "電腦及週邊設備",
@@ -31,59 +27,52 @@ SECTOR_MAP = {
     "Basic Materials": "原物料/塑化", "Energy": "能源產業", "Utilities": "公用事業"
 }
 
+# --- 初始化 Session State ---
+if 'selected_stock' not in st.session_state:
+    st.session_state.selected_stock = "2330"
+if 'topic_results' not in st.session_state:
+    st.session_state.topic_results = None
+if 'show_whale' not in st.session_state:
+    st.session_state.show_whale = False
+if 'ai_error' not in st.session_state:
+    st.session_state.ai_error = None
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = ""
+if 'ai_fetched_eps' not in st.session_state:
+    st.session_state.ai_fetched_eps = {}
+if 'show_pk' not in st.session_state:
+    st.session_state.show_pk = False
+if 'ai_industry_result' not in st.session_state:
+    st.session_state.ai_industry_result = None
+
+def change_stock(stock_code):
+    st.session_state.selected_stock = stock_code
+    if "quick_select" in st.session_state:
+        st.session_state.quick_select = "-- 快速切換標的 --"
+    st.session_state.show_pk = False
+    st.session_state.ai_industry_result = None
+
+# --- 🛠️ 核心防護：安全的浮點數轉換 ---
 def s_float(val, default=None):
-    """安全的浮點數轉換，消滅 NaN 與 Inf 毒藥"""
     try:
         if val is None: return default
         v = float(val)
-        if math.isnan(v) or math.isinf(v): return default
+        if math.isnan(v) or math.isinf(v):
+            return default
         return v
     except:
         return default
 
-def to_pct(val):
-    """安全的百分比轉換，保證印出漂亮的 % 或是 N/A"""
-    try:
-        if val is None or pd.isna(val): return "N/A"
-        return f"{val * 100:.2f}%"
-    except:
-        return "N/A"
-
-# ==========================================
-# 2. Session State 初始化
-# ==========================================
-if 'selected_stock' not in st.session_state: st.session_state.selected_stock = "2330"
-if 'topic_results' not in st.session_state: st.session_state.topic_results = None
-if 'show_whale' not in st.session_state: st.session_state.show_whale = False
-if 'api_key' not in st.session_state: st.session_state.api_key = ""
-if 'ai_fetched_eps' not in st.session_state: st.session_state.ai_fetched_eps = {}
-if 'show_pk' not in st.session_state: st.session_state.show_pk = False
-if 'ai_industry_result' not in st.session_state: st.session_state.ai_industry_result = None
-if 'run_screener' not in st.session_state: st.session_state.run_screener = False
-if 'quick_select' not in st.session_state: st.session_state.quick_select = "-- 快速切換標的 --"
-
-def change_stock(stock_code):
-    st.session_state.selected_stock = stock_code
-    st.session_state.quick_select = "-- 快速切換標的 --"
-    st.session_state.show_pk = False
-    st.session_state.ai_industry_result = None
-
-# ==========================================
-# 3. 外部 API 與資料抓取引擎
-# ==========================================
+# --- AI 解析與連線函數 ---
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
     api_key = api_key.strip()
+    headers = {"Content-Type": "application/json"}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
-    payload = {
-        "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"google_search": {}}],
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
+    payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
     try:
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         if response.status_code == 200:
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
@@ -95,7 +84,8 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
             links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
             return json.loads(clean_json), list(set(links))
         return f"API 錯誤: {response.status_code}", []
-    except Exception as e: return f"連線異常: {str(e)}", []
+    except Exception as e:
+        return f"連線異常: {str(e)}", []
 
 def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
@@ -134,6 +124,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         return f"AI 分析連線失敗"
     except Exception as e: return f"連線異常: {str(e)}"
 
+# --- 🌍 動態判定今日/明日 (高精準時段與權重切換) ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -158,7 +149,8 @@ def get_global_market_trend():
                 if len(hist) >= 2:
                     c = float(hist['Close'].iloc[-1])
                     p = float(hist['Close'].iloc[-2])
-                    if not math.isnan(c) and not math.isnan(p) and p != 0: return c, (c - p) / p * 100
+                    if not math.isnan(c) and not math.isnan(p) and p != 0:
+                        return c, (c - p) / p * 100
             except: pass
             return 0.0, 0.0
 
@@ -169,18 +161,27 @@ def get_global_market_trend():
         
         score = sox_pct * 0.3 + tsm_pct * 0.3 + nq_pct * 0.1 + ewt_pct * 0.3
         
-        if score > 1.0: trend, color = f"🔥 極度樂觀 ({target_day}台股開盤強勢)", "#ff4d4d"
-        elif score > 0.1: trend, color = f"📈 偏多看待 (有利{target_day}台股表現)", "#ff4d4d"
-        elif score > -0.8: trend, color = f"↔️ 震盪整理 ({target_day}台股可能平盤震盪)", "#FFD700"
-        else: trend, color = f"❄️ 悲觀警戒 ({target_day}台股面臨回檔壓力)", "#00cc66"
+        if score > 1.0:
+            trend, color = f"🔥 極度樂觀 ({target_day}台股開盤強勢)", "#ff4d4d"
+        elif score > 0.1:
+            trend, color = f"📈 偏多看待 (有利{target_day}台股表現)", "#ff4d4d"
+        elif score > -0.8:
+            trend, color = f"↔️ 震盪整理 ({target_day}台股可能平盤震盪)", "#FFD700"
+        else:
+            trend, color = f"❄️ 悲觀警戒 ({target_day}台股面臨回檔壓力)", "#00cc66"
             
         return {
-            "sox_p": sox_price, "sox": sox_pct, "tsm_p": tsm_price, "tsm": tsm_pct, 
-            "nq_p": nq_price, "nq": nq_pct, "ewt_p": ewt_price, "ewt": ewt_pct,
-            "trend": trend, "color": color, "target_day": target_day, "time_status": time_status
+            "sox_p": sox_price, "sox": sox_pct, 
+            "tsm_p": tsm_price, "tsm": tsm_pct, 
+            "nq_p": nq_price, "nq": nq_pct, 
+            "ewt_p": ewt_price, "ewt": ewt_pct,
+            "trend": trend, "color": color, 
+            "target_day": target_day, "time_status": time_status
         }
-    except: return None
+    except:
+        return None
 
+# --- 數據獲取引擎 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
     try:
@@ -226,18 +227,22 @@ def get_pe_pb_data(stock_id):
 def get_fallback_info(stock_id):
     info = {}
     try:
-        res = requests.get(f"https://tw.stock.yahoo.com/quote/{stock_id}", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         text = res.text
+        
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
             if idx != -1:
-                match = re.search(r'>(?:\s*|&nbsp;)*([-0-9]{1,3}(?:\.[0-9]+)?)\s*%?\s*<', text[idx:idx+200])
+                chunk = text[idx:idx+200]
+                match = re.search(r'>(?:\s*|&nbsp;)*([-0-9]{1,3}(?:\.[0-9]+)?)\s*%?\s*<', chunk)
                 if match:
                     try:
                         val = float(match.group(1).replace(',', ''))
                         return val / 100.0 if is_pct else val
                     except: pass
             return None
+
         info['trailingPE'] = fuzzy_ext('本益比')
         info['priceToBook'] = fuzzy_ext('股價淨值比')
         info['trailingEps'] = fuzzy_ext('EPS')
@@ -254,6 +259,7 @@ def get_stock_data(stock_id):
     stock_id = str(stock_id).strip()
     hist = None
     info_data = {}
+    
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
@@ -267,8 +273,10 @@ def get_stock_data(stock_id):
             
     if hist is None or hist.empty:
         try:
-            start_str = f"{(datetime.date.today() - datetime.timedelta(days=1825)).isoformat()}"
-            res = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}", headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            today = datetime.date.today()
+            start_str = f"{today.year - 5}-{today.month:02d}-{today.day:02d}"
+            url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
+            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             data = res.json()
             if data.get('status') == 200 and data.get('data'):
                 df = pd.DataFrame(data['data'])
@@ -279,29 +287,48 @@ def get_stock_data(stock_id):
         except: pass
 
     if hist is not None and not hist.empty:
-        if not info_data.get('returnOnEquity'): info_data.update(get_fallback_info(stock_id))
+        if not info_data.get('returnOnEquity'):
+            fallback = get_fallback_info(stock_id)
+            info_data.update(fallback)
         return hist, info_data
     return None, None
 
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
     try:
-        res = requests.get(f"https://tw.stock.yahoo.com/quote/{stock_id}", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         match = re.search(r'<title>(.*?)\(', res.text)
         if match: return match.group(1).strip()
     except: pass
     return None
 
+@st.cache_data(ttl=1800)
+def get_stock_news(query):
+    try:
+        encoded_q = urllib.parse.quote(f"{query} 股票")
+        url = f"https://news.google.com/rss/search?q={encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        res = requests.get(url, timeout=5)
+        root = ET.fromstring(res.text)
+        news = []
+        for item in root.findall('.//item')[:6]:
+            t = item.find('title').text
+            news.append({"title": t, "link": item.find('link').text, "sentiment": "🟢" if any(x in t for x in ["漲","成長","買超"]) else ("🔴" if any(x in t for x in ["跌","賣超","警訊"]) else "⚪")})
+        return news
+    except: return []
+
 @st.cache_data(ttl=86400)
 def translate_to_zh(text):
     if not text or text == '暫無簡介。': return text
     try:
-        res = requests.get("https://translate.googleapis.com/translate_a/single", params={"client": "gtx", "sl": "en", "tl": "zh-TW", "dt": "t", "q": text}, timeout=5)
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {"client": "gtx", "sl": "en", "tl": "zh-TW", "dt": "t", "q": text}
+        res = requests.get(url, params=params, timeout=5)
         return "".join([item[0] for item in res.json()[0]])
     except: return text + "\n\n(⚠️ 翻譯服務暫時忙碌中)"
 
 # ==========================================
-# 4. 側邊欄 UI 與策略漏斗
+# 4. 側邊欄：功能選單與策略漏斗
 # ==========================================
 with st.sidebar:
     st.markdown("### 🔍 個股查詢")
@@ -342,9 +369,10 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 🎯 策略漏斗掃描器")
-    if st.button("🔍 掃描同族群潛力股", use_container_width=True): st.session_state.run_screener = True
+    if st.button("🔍 掃描同族群潛力股", use_container_width=True):
+        st.session_state.run_screener = True
         
-    if st.session_state.run_screener:
+    if st.session_state.get('run_screener'):
         target_cat = None; target_stocks = []
         for cat, stocks in categories.items():
             for code, name in stocks:
@@ -369,7 +397,11 @@ with st.sidebar:
                         
                         p_sort = sys_peg if sys_peg is not None and not pd.isna(sys_peg) and not peg_is_neg else 999
                         p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None and not pd.isna(sys_peg) else "N/A")
-                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':to_pct(roe),'peg_str':p_str})
+                        
+                        # 🚀 暴力防呆：直接寫死，不呼叫外部函數
+                        roe_str_local = f"{roe*100:.2f}%" if roe is not None and not pd.isna(roe) else "N/A"
+                        
+                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':roe_str_local,'peg_str':p_str})
                     time.sleep(0.5); pbar.progress((i+1)/len(target_stocks))
                 pbar.empty(); results.sort(key=lambda x: (x['peg_sort'], -x['roe'] if x['roe'] else 0))
                 st.markdown("<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果</b></div>", unsafe_allow_html=True)
@@ -410,14 +442,14 @@ with st.sidebar:
         st.cache_data.clear(); st.rerun()
 
 # ==========================================
-# 5. 主畫面 UI 渲染
+# 5. 主畫面開始
 # ==========================================
 st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
-# --- 處理 AI 議題結果 ---
 if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
-        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, st.session_state.get('selected_model', 'gemini-2.5-flash'))
+        model_to_use = st.session_state.get('selected_model', 'gemini-2.5-flash')
+        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, model_to_use)
         if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
             st.session_state.show_whale = False
@@ -453,7 +485,6 @@ if st.session_state.show_whale:
         with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
-# --- 個股戰情室核心 ---
 curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
@@ -467,7 +498,7 @@ if curr_id:
         with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
             st.write(translate_to_zh(info.get('longBusinessSummary', '暫無簡介。')))
 
-        # [1] 即時報價
+        # --- ⚡ 即時報價 ---
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
@@ -485,12 +516,14 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # [2] 國際連動與時間推估
+        # --- 🌍 國際連動與動態時間趨勢推估 (包含點位與百分比) ---
         st.markdown("<br>", unsafe_allow_html=True)
         trend_data = get_global_market_trend()
         if trend_data:
             target_day_text = trend_data.get('target_day', '明日')
-            st.markdown(f"#### 🌍 國際連動與{target_day_text}趨勢推估 {trend_data.get('time_status', '')}", unsafe_allow_html=True)
+            time_status_text = trend_data.get('time_status', '')
+            st.markdown(f"#### 🌍 國際連動與{target_day_text}趨勢推估 {time_status_text}", unsafe_allow_html=True)
+            
             def c_color(v): return "#ff4d4d" if v > 0 else "#00cc66" if v < 0 else "#fff"
             trend_html = f"""
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {trend_data['color']}; margin-bottom: 20px; border-top:1px solid #333; border-right:1px solid #333; border-bottom:1px solid #333;'>
@@ -505,7 +538,7 @@ if curr_id:
             """
             st.markdown(trend_html, unsafe_allow_html=True)
 
-        # [3] 財務基本面與獲利基準微調
+        # --- 💼 財務基本面與獲利基準微調 ---
         st.markdown("#### 💼 財務基本面與獲利基準微調")
         df_rev_bk = get_monthly_revenue(curr_id)
         df_per_bk = get_pe_pb_data(curr_id)
@@ -519,11 +552,12 @@ if curr_id:
             pb_ratio = s_float(df_per_bk['PBR'].iloc[-1])
 
         roe = s_float(info.get('returnOnEquity'))
-        gm = s_float(info.get('grossMargins'))
-        om = s_float(info.get('operatingMargins'))
+        gross_margin = s_float(info.get('grossMargins'))
+        op_margin = s_float(info.get('operatingMargins'))
         
         rev_growth = s_float(info.get('revenueGrowth'))
-        if rev_growth is None and df_rev_bk is not None and not df_rev_bk.empty: rev_growth = s_float(df_rev_bk['YoY'].iloc[-1]) / 100.0
+        if rev_growth is None and df_rev_bk is not None and not df_rev_bk.empty:
+            rev_growth = s_float(df_rev_bk['YoY'].iloc[-1]) / 100.0
             
         earn_growth = s_float(info.get('earningsGrowth'))
         if earn_growth is None and rev_growth is not None: earn_growth = rev_growth 
@@ -557,14 +591,14 @@ if curr_id:
             default_eps = st.session_state.ai_fetched_eps.get(curr_id, sys_f_eps if sys_f_eps else (t_eps if t_eps else 1.0))
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
-        # 防彈格式化區塊
+        # 🚀 暴力安全防線：不再依賴任何外部函數，直接行內格式化！
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
             if t_eps and t_eps > 0 and pe_ratio:
                 cg = (active_f_eps - t_eps) / t_eps
                 peg_ratio = pe_ratio / (cg * 100) if cg > 0 else -999
-                eg_str = to_pct(cg)
+                eg_str = f"{cg * 100:.2f}%" if cg is not None else "N/A"
                 eg_color = "#ff4d4d" if cg > 0 else "#00cc66"
             else:
                 peg_ratio = None
@@ -575,7 +609,7 @@ if curr_id:
             active_f_eps = sys_f_eps
             forward_pe = sys_forward_pe
             peg_ratio = sys_peg_ratio
-            eg_str = to_pct(earn_growth)
+            eg_str = f"{earn_growth * 100:.2f}%" if earn_growth is not None and not pd.isna(earn_growth) else "N/A"
             eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
             eps_source_text = f"海外系統或反推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
@@ -584,11 +618,12 @@ if curr_id:
         active_f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
         f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{active_f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {active_f_eps_str}"
             
-        rg_str = to_pct(rev_growth)
+        rg_str = f"{rev_growth * 100:.2f}%" if rev_growth is not None and not pd.isna(rev_growth) else "N/A"
         rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
-        gm_str = to_pct(gross_margin)
-        om_str = to_pct(op_margin)
-        roe_str = to_pct(roe)
+        
+        gm_str = f"{gross_margin * 100:.2f}%" if gross_margin is not None and not pd.isna(gross_margin) else "N/A"
+        om_str = f"{op_margin * 100:.2f}%" if op_margin is not None and not pd.isna(op_margin) else "N/A"
+        roe_str = f"{roe * 100:.2f}%" if roe is not None and not pd.isna(roe) else "N/A"
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe is not None and roe >= 0.15 else ""
 
         fund_html = f"""
@@ -678,9 +713,14 @@ if curr_id:
                             pe_val = s_float(p_info.get("trailingPE"))
                             pe_fmt = f"{pe_val:.2f}x" if pe_val is not None else "N/A"
                             
-                            gm_fmt = to_pct(s_float(p_info.get('grossMargins')))
-                            om_fmt = to_pct(s_float(p_info.get('operatingMargins')))
-                            roe_fmt = to_pct(s_float(p_info.get('returnOnEquity')))
+                            gm_val = s_float(p_info.get('grossMargins'))
+                            gm_fmt = f"{gm_val*100:.2f}%" if gm_val is not None else "N/A"
+                            
+                            om_val = s_float(p_info.get('operatingMargins'))
+                            om_fmt = f"{om_val*100:.2f}%" if om_val is not None else "N/A"
+                            
+                            roe_val = s_float(p_info.get('returnOnEquity'))
+                            roe_fmt = f"{roe_val*100:.2f}%" if roe_val is not None else "N/A"
                             
                             prev_close_val = s_float(p_info.get("previousClose"))
                             prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
@@ -719,7 +759,7 @@ if curr_id:
         # [5] 產業前景與 AI 報告
         if st.button("🤖 啟動 AI 深度報告 (含一鍵複製)", use_container_width=True):
             if st.session_state.api_key:
-                ctx = f"現價:{curr_p}, P/E:{pe_ratio}, ROE:{to_pct(roe)}, 毛利:{to_pct(gross_margin)}, 營收YoY:{to_pct(rev_growth)}, 預估EPS:{active_f_eps}"
+                ctx = f"現價:{curr_p}, P/E:{pe_ratio}, ROE:{roe_str}, 毛利:{gm_str}, 營收YoY:{rg_str}, 預估EPS:{active_f_eps}"
                 st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, ctx, st.session_state.get('selected_model', 'gemini-2.5-flash'))
         if st.session_state.ai_industry_result:
             with st.container(border=True):
