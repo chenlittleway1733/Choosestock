@@ -587,8 +587,6 @@ if curr_id:
             eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
             eps_source_text = f"海外系統或反推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
-        def to_pct(val): return f"{val * 100:.2f}%" if val is not None else "N/A"
-        
         pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
         t_eps_str = f"{t_eps:.2f}" if t_eps is not None else "N/A"
         active_f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
