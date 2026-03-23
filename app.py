@@ -168,7 +168,6 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
     except: pass
     return []
 
-# 🚀 升級版：解開 Markdown 封印，回歸原生高質感排版
 def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰"
     api_key = api_key.strip()
@@ -299,24 +298,28 @@ def get_fallback_info(stock_id):
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
         
-        def extract(pattern):
+        # 🚀 無敵防護網：DOM-Agnostic Regex (不再怕 Yahoo 改版或亂換標籤)
+        def extract(label, is_percent=False):
+            pct_str = r'%' if is_percent else r''
+            # 尋找該標籤後續約 150 字元內的最先出現的數字，免疫所有的 span / div 等亂碼
+            pattern = label + r'(?:.|\n){1,150}?>\s*([-0-9.,]+)' + pct_str + r'\s*<'
             m = re.search(pattern, text)
             if m:
                 try: return float(m.group(1).replace(',', ''))
-                except: return None
+                except: pass
             return None
             
-        info['trailingPE'] = extract(r'本益比</span><span[^>]*>([0-9.,]+)</span>')
-        info['priceToBook'] = extract(r'股價淨值比</span><span[^>]*>([0-9.,]+)</span>')
-        info['trailingEps'] = extract(r'EPS</span><span[^>]*>([0-9.,-]+)</span>')
+        info['trailingPE'] = extract(r'本益比')
+        info['priceToBook'] = extract(r'股價淨值比')
+        info['trailingEps'] = extract(r'EPS')
         
-        gm = extract(r'毛利率</span><span[^>]*>([0-9.,-]+)%</span>')
+        gm = extract(r'毛利率', True)
         if gm is not None: info['grossMargins'] = gm / 100.0
         
-        om = extract(r'營業利益率</span><span[^>]*>([0-9.,-]+)%</span>')
+        om = extract(r'營業利益率', True)
         if om is not None: info['operatingMargins'] = om / 100.0
         
-        roe = extract(r'ROE</span><span[^>]*>([0-9.,-]+)%</span>')
+        roe = extract(r'ROE', True)
         if roe is not None: info['returnOnEquity'] = roe / 100.0
         
         sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text)
@@ -692,14 +695,31 @@ if curr_id:
 
         # 【3. 財務基本面與獲利預估微調】
         st.markdown("#### 💼 財務基本面與獲利基準微調")
+        
+        # 🚀 終極防護網：提早抓取備援資料 (若 Yahoo 爬蟲被擋，直接用 FinMind 頂上)
+        df_rev_backup = get_monthly_revenue(curr_id)
+        df_per_backup = get_pe_pb_data(curr_id)
+
         pb_ratio = s_float(info.get('priceToBook'))
         pe_ratio = s_float(info.get('trailingPE'))
+        if pe_ratio is None and df_per_backup is not None and not df_per_backup.empty:
+            pe_ratio = s_float(df_per_backup['PER'].iloc[-1])
+            
         roe = s_float(info.get('returnOnEquity'))
         gross_margin = s_float(info.get('grossMargins'))
         op_margin = s_float(info.get('operatingMargins'))
+        
         rev_growth = s_float(info.get('revenueGrowth'))
+        if rev_growth is None and df_rev_backup is not None and not df_rev_backup.empty:
+            rev_growth = s_float(df_rev_backup['YoY'].iloc[-1]) / 100.0
+            
         earn_growth = s_float(info.get('earningsGrowth'))
+        
         t_eps = s_float(info.get('trailingEps'))
+        # 🚀 數學反推機制：如果沒有 EPS 但有股價跟 PE，直接精準算出 EPS！
+        if t_eps is None and pe_ratio is not None and pe_ratio > 0 and curr_p > 0:
+            t_eps = curr_p / pe_ratio
+            
         sys_f_eps = s_float(info.get('forwardEps'))
         sys_peg_ratio = s_float(info.get('pegRatio'))
         sys_forward_pe = s_float(info.get('forwardPE'))
@@ -923,7 +943,7 @@ if curr_id:
             st.markdown("---")
 
         # 【5. 月營收與 YoY 圖表】
-        df_rev = get_monthly_revenue(curr_id)
+        df_rev = df_rev_backup
         if df_rev is not None and not df_rev.empty:
             st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
             st.markdown("<small style='color:gray;'>*數據來源：自動抓取最新公告之每月營收與年增率 (YoY)*</small>", unsafe_allow_html=True)
@@ -932,7 +952,6 @@ if curr_id:
             fig_rev.add_trace(go.Bar(x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
             fig_rev.add_trace(go.Scatter(x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
             
-            # 🚀 修正：移除 template="plotly_dark" 讓圖表自動適應您的淺色模式
             fig_rev.update_layout(
                 height=400, hovermode="x unified", 
                 margin=dict(l=10, r=10, t=50, b=10), 
@@ -1070,81 +1089,12 @@ if curr_id:
         """, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 【7. 法人目標價】
-        hi = s_float(info.get('targetHighPrice'))
-        me = s_float(info.get('targetMeanPrice'))
-        lo = s_float(info.get('targetLowPrice'))
-        
-        if hi is not None and me is not None and lo is not None:
-            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-            v1, v2, v3 = st.columns(3)
-            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi:.1f}</b></div>", unsafe_allow_html=True)
-            upside = ((me / curr_p) - 1) * 100 if curr_p else 0
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
-            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo:.1f}</b></div>", unsafe_allow_html=True)
-        elif hi is not None:
-             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-             st.info(f"法人最高預期：**{hi:.1f}**")
-        st.markdown("---")
-
-        # 【8. 籌碼面與股權結構分析】
-        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
-        insider_pct = s_float(info.get('heldPercentInsiders'))
-        inst_pct = s_float(info.get('heldPercentInstitutions'))
-        shares_out = s_float(info.get('sharesOutstanding'))
-        share_capital = shares_out * 10 if shares_out is not None else None
-
-        if share_capital is not None:
-            if share_capital >= 10_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
-            elif share_capital <= 3_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
-            else:
-                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
-        else:
-            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
-
-        inst_str = f"{inst_pct * 100:.2f}%" if inst_pct is not None else "N/A"
-        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
-        
-        insider_str = f"{insider_pct * 100:.2f}%" if insider_pct is not None else "N/A"
-        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
-
-        chip_html = f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
-                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
-                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
-                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
-                </div>
-                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
-            </div>
-        </div>
-        """
-        st.markdown(chip_html, unsafe_allow_html=True)
-        st.markdown("---")
-
         # 🚀 【9. 必備神兵：本益比河流圖 (P/E River Chart)】
         st.markdown("### 🌊 必備神兵：近五年本益比河流圖 (P/E River)")
         st.markdown("<small style='color:gray;'>*實戰價值：透過歷史估值區間，一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
         
         with st.spinner("抓取近五年每日歷史本益比數據中..."):
-            df_per = get_pe_pb_data(curr_id)
+            df_per = df_per_backup
             
         if df_per is None:
             st.warning("⚠️ 目前公開資料庫 (FinMind) 連線忙碌或遭遇免費 API 呼叫限制，導致無法抓取資料，請稍候重整網頁再試。")
@@ -1180,12 +1130,10 @@ if curr_id:
                 fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
                 fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
 
-                # 🚀 修正 1：把原本會隱形的白色股價線，改成在淺色/深色背景都極度搶眼的「深邃藍」並加粗
                 fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#0033cc', width=3), name='實際股價'))
 
                 current_pe = merged['PER'].iloc[-1]
                 
-                # 🚀 修正 2：加入「估值重評 (Re-rating)」智能警告機制
                 rerating_warn = ""
                 if current_pe >= pe_quantiles[4] * 0.95:
                      rerating_warn = "<br><br><span style='color:#ff8c00; font-size:0.95rem;'>⚠️ <b>系統智能偵測：可能發生「估值重評 (Re-rating)」</b><br>此股票目前本益比已突破或逼近五年歷史極高點（如設備廠轉型 AI 供應鏈）。此時歷史河流圖的參考價值降低，請務必配合「未來 EPS 爆發力」與「右方 AI 深度推演」來評估其實際價值，切勿單看歷史估值放空！</span>"
@@ -1197,7 +1145,6 @@ if curr_id:
                 else:
                     pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
 
-                # 🚀 修正 3：全面移除 template="plotly_dark"，讓圖表自動適應您的「淺色模式 (Light Mode)」
                 fig_river.update_layout(
                     height=450,
                     margin=dict(l=10, r=10, t=50, b=10),
@@ -1342,7 +1289,6 @@ if curr_id:
         fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#ccc', row=2, col=1)
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#e0e0e0', mirror=True, showline=True, linecolor='#ccc')
         
-        # 🚀 修正：移除 K 線圖的 template="plotly_dark"，自動適應淺色模式
         fig.update_layout(
             height=650, 
             xaxis_rangeslider_visible=False, 
