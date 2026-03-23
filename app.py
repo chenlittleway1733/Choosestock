@@ -287,6 +287,7 @@ def get_pe_pb_data(stock_id):
     except Exception as e: 
         return None
 
+# 🛡️ 徹底還原您早上版的穩定爬蟲邏輯 (包含 KY 股字眼相容)
 def get_fallback_info(stock_id):
     info = {}
     try:
@@ -309,7 +310,7 @@ def get_fallback_info(stock_id):
         info['priceToBook'] = extract(r'股價淨值比</span><span[^>]*>([0-9.,]+)</span>')
         info['trailingEps'] = extract(r'EPS</span><span[^>]*>([0-9.,-]+)</span>')
 
-        # 完美加入 KY 股字眼相容，確保世芯等股票能抓到
+        # 加入 KY 股與改版容錯字眼
         gm = extract(r'(?:毛利率|營業毛利率)</span><span[^>]*>([0-9.,-]+)%</span>')
         if gm is not None: info['grossMargins'] = gm / 100.0
 
@@ -327,53 +328,34 @@ def get_fallback_info(stock_id):
         pass
     return info
 
+# 🛡️ 徹底還原早上版的資料獲取邏輯，並確保例外處理在迴圈內部！
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     stock_id = str(stock_id).strip()
-    hist = None
-    info_data = {}
-
+    
+    # 關鍵修正：將 Try 包在迴圈內，讓 .TW (上市) 失敗時，能無縫接軌尋找 .TWO (上櫃)
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
-            temp_hist = ticker.history(period="5y") 
-            if not temp_hist.empty:
-                hist = temp_hist
+            hist = ticker.history(period="5y") 
+            if not hist.empty:
+                info_data = {}
                 try:
                     info_data = ticker.info
                     if not isinstance(info_data, dict):
                         info_data = {}
                 except:
                     pass
-                break # 成功找到就跳出迴圈
+
+                # 若沒抓到 EPS 或 本益比，呼叫備援 HTML 爬蟲
+                if not info_data.get('trailingPE') or not info_data.get('trailingEps') or not info_data.get('returnOnEquity'):
+                    fallback = get_fallback_info(stock_id)
+                    info_data.update(fallback)
+
+                return hist, info_data
         except:
-            continue
+            continue # 當發生例外時繼續尋找下一個市場代號
             
-    # 🚀 終極歷史股價備援：如果 Yahoo 完全擋掉(如信驊偶發性失效)，改用 FinMind 抓歷史股價！
-    if hist is None or hist.empty:
-        try:
-            today = datetime.date.today()
-            start_year = today.year - 5
-            start_str = f"{start_year}-{today.month:02d}-{today.day:02d}"
-            url = f"[https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=](https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=){stock_id}&start_date={start_str}"
-            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            data = res.json()
-            if data.get('status') == 200 and data.get('data'):
-                df = pd.DataFrame(data['data'])
-                df['Date'] = pd.to_datetime(df['date'])
-                df.rename(columns={'open': 'Open', 'max': 'High', 'min': 'Low', 'close': 'Close', 'Trading_Volume': 'Volume'}, inplace=True)
-                df.set_index('Date', inplace=True)
-                hist = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-        except:
-            pass
-
-    if hist is not None and not hist.empty:
-        if not info_data.get('trailingPE') or not info_data.get('trailingEps'):
-            fallback = get_fallback_info(stock_id)
-            info_data.update(fallback)
-
-        return hist, info_data
-        
     return None, None
 
 @st.cache_data(ttl=86400) 
@@ -526,9 +508,10 @@ with st.sidebar:
                             
                         sys_peg = s_float(info.get('pegRatio'))
                         
-                        # 🚀 加入分母為負防呆機制
+                        # 🚀 負數分母防呆機制
                         peg_is_negative = (eg is not None and eg <= 0)
                         
+                        # 代理運算：當系統沒給 PEG，嘗試強制計算
                         if (sys_peg is None or pd.isna(sys_peg)) and pe is not None and eg is not None and eg > 0:
                             sys_peg = pe / (eg * 100)
                             
@@ -550,7 +533,7 @@ with st.sidebar:
                             'peg_str': peg_str
                         })
                     
-                    time.sleep(0.5)
+                    time.sleep(0.8) # 確保緩衝時間，防範 Yahoo 防火牆封鎖
                     progress_bar.progress((i + 1) / len(target_stocks))
                         
                 status_text.empty()
@@ -749,52 +732,65 @@ if curr_id:
         
         # 取得系統抓到的原始數值
         pe_ratio = s_float(info.get('trailingPE'))
-        roe = s_float(info.get('returnOnEquity'))
-        gross_margin = s_float(info.get('grossMargins'))
-        op_margin = s_float(info.get('operatingMargins'))
-        earn_growth = s_float(info.get('earningsGrowth'))
-        t_eps = s_float(info.get('trailingEps'))
-        sys_f_eps = s_float(info.get('forwardEps'))
-        sys_forward_pe = s_float(info.get('forwardPE'))
-        sys_peg_ratio = s_float(info.get('pegRatio'))
         pb_ratio = s_float(info.get('priceToBook'))
         
-        # 🚀 引入備援庫，執行「強制數學推估修復」
+        # 🚀 引入備援庫進行精準還原
         df_rev_backup = get_monthly_revenue(curr_id)
         df_per_backup = get_pe_pb_data(curr_id)
         
-        if pe_ratio is None and df_per_backup is not None and not df_per_backup.empty:
-            pe_ratio = s_float(df_per_backup['PER'].iloc[-1])
-            
-        if pb_ratio is None and df_per_backup is not None and not df_per_backup.empty and 'PBR' in df_per_backup.columns:
-            pb_ratio = s_float(df_per_backup['PBR'].iloc[-1])
+        if df_per_backup is not None and not df_per_backup.empty:
+            last_per_row = df_per_backup.iloc[-1]
+            # 只有當 FinMind 資料是近期（30天內）的才相信它，避免抓到去年虧損前的異常數字！
+            if (pd.Timestamp.today() - last_per_row['date']).days < 30:
+                if pe_ratio is None: pe_ratio = s_float(last_per_row['PER'])
+                if pb_ratio is None and 'PBR' in df_per_backup.columns: pb_ratio = s_float(last_per_row['PBR'])
 
-        # 防呆過濾異常值
-        if pe_ratio is not None and (pe_ratio < 0 or pe_ratio > 1000): pe_ratio = None
-        if pb_ratio is not None and (pb_ratio < 0 or pb_ratio > 500): pb_ratio = None
+        # 防呆過濾極端異常值
+        if pe_ratio is not None and (pe_ratio <= 0 or pe_ratio > 1000): pe_ratio = None
+        if pb_ratio is not None and (pb_ratio <= 0 or pb_ratio > 500): pb_ratio = None
 
+        roe = s_float(info.get('returnOnEquity'))
+        gross_margin = s_float(info.get('grossMargins'))
+        op_margin = s_float(info.get('operatingMargins'))
+        
         rev_growth = s_float(info.get('revenueGrowth'))
         if rev_growth is None and df_rev_backup is not None and not df_rev_backup.empty:
             rev_growth = s_float(df_rev_backup['YoY'].iloc[-1]) / 100.0
             
+        earn_growth = s_float(info.get('earningsGrowth'))
         if earn_growth is None and rev_growth is not None:
             earn_growth = rev_growth # 營收成長率代理獲利成長率
+            
+        # 避免極端成長率 (如 1519%) 導致推估失真
+        calc_earn_growth = earn_growth
+        if calc_earn_growth is not None and (calc_earn_growth > 5 or calc_earn_growth < -1):
+            calc_earn_growth = None
             
         # 🚀 負數分母判定
         peg_is_negative = (earn_growth is not None and earn_growth <= 0)
             
-        if t_eps is None and pe_ratio is not None and pe_ratio > 0 and curr_p > 0:
-            t_eps = curr_p / pe_ratio # 股價 ÷ 本益比 = 精準還原 EPS
+        t_eps = s_float(info.get('trailingEps'))
+        if t_eps is not None and (t_eps > 500 or t_eps < -500): t_eps = None 
+        
+        # 精準 EPS 反推
+        if t_eps is None and pe_ratio is not None and curr_p > 0:
+            t_eps = curr_p / pe_ratio 
             
-        if sys_f_eps is None and t_eps is not None and earn_growth is not None:
-            sys_f_eps = t_eps * (1 + earn_growth) # 用當前 EPS 乘上成長率反推預估 EPS
+        sys_f_eps = s_float(info.get('forwardEps'))
+        if sys_f_eps is not None and (sys_f_eps > 500 or sys_f_eps < -500): sys_f_eps = None
             
+        if sys_f_eps is None and t_eps is not None and calc_earn_growth is not None:
+            sys_f_eps = t_eps * (1 + calc_earn_growth) 
+            
+        sys_forward_pe = s_float(info.get('forwardPE'))
         if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0:
             sys_forward_pe = curr_p / sys_f_eps
             
-        # 🚀 終極 PEG 修復：當系統沒給 PEG，或是給了 nan，強制自己用數學運算！
-        if (sys_peg_ratio is None or pd.isna(sys_peg_ratio)) and pe_ratio is not None and earn_growth is not None and earn_growth > 0:
-            sys_peg_ratio = pe_ratio / (earn_growth * 100)
+        sys_peg_ratio = s_float(info.get('pegRatio'))
+        
+        # 強制自己用數學運算 PEG
+        if (sys_peg_ratio is None or pd.isna(sys_peg_ratio)) and pe_ratio is not None and calc_earn_growth is not None and calc_earn_growth > 0:
+            sys_peg_ratio = pe_ratio / (calc_earn_growth * 100)
             
         if peg_is_negative:
             sys_peg_ratio = -999
@@ -893,7 +889,8 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
-        pe_color, pe_eval = ("#ff4d4d", "偏高 / 高成長溢價") if pe_ratio and pe_ratio > 25 else ("#00cc66", "相對便宜") if pe_ratio and pe_ratio < 15 else ("#FFD700", "合理區間") if pe_ratio else ("gray", "數據不足")
+        # 若虧損或無本益比資料，正確顯示數據不足
+        pe_color, pe_eval = ("#ff4d4d", "偏高 / 高成長溢價") if pe_ratio and pe_ratio > 25 else ("#00cc66", "相對便宜") if pe_ratio and pe_ratio < 15 else ("#FFD700", "合理區間") if pe_ratio else ("gray", "數據不足 (或虧損)")
         pb_str = f"{pb_ratio:.2f}x" if pb_ratio is not None else "N/A"
         pb_color, pb_eval = ("#ff4d4d", "偏高溢價") if pb_ratio and pb_ratio > 3 else ("#00cc66", "具資產保護") if pb_ratio and pb_ratio < 1.5 else ("#FFD700", "合理區間") if pb_ratio else ("gray", "數據不足")
         
@@ -1014,7 +1011,7 @@ if curr_id:
                         table_html += "<tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>前瞻 P/E</th><th>預估 EPS (今/明)</th><th>目標價 (潛在空間)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
                         for d in compare_data:
                             row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" 
-                            table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'>?"
+                            table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'>"
                             table_html += f"<td style='padding:12px; color:#ffffff;'><b>{d['代號']}</b></td>"
                             table_html += f"<td>{d['股價']}</td>"
                             table_html += f"<td>{d['前瞻 P/E']}</td>"
@@ -1196,7 +1193,12 @@ if curr_id:
             hist_reset['Date_only'] = hist_reset['Date'].dt.date
             df_per['date_only'] = df_per['date'].dt.date
 
+            # 🚀 消除河流圖心電圖亂跳 Bug：強制去除同日期的重複數據！
+            hist_reset = hist_reset.drop_duplicates(subset=['Date_only'], keep='last')
+            df_per = df_per.drop_duplicates(subset=['date_only'], keep='last')
+
             merged = pd.merge(hist_reset, df_per, left_on='Date_only', right_on='date_only', how='inner')
+            merged = merged.sort_values('Date_only')
 
             if not merged.empty and len(merged) > 60: 
                 merged['EPS_calc'] = merged['Close'] / merged['PER']
