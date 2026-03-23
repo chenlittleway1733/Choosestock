@@ -13,7 +13,9 @@ import datetime
 import os
 import math
 
-# 設定網頁標題與寬度
+# ==========================================
+# 0. 網頁基本設定
+# ==========================================
 st.set_page_config(page_title="way系統", layout="wide")
 
 # --- 產業對照表 ---
@@ -27,43 +29,47 @@ SECTOR_MAP = {
     "Basic Materials": "原物料/塑化", "Energy": "能源產業", "Utilities": "公用事業"
 }
 
-# --- 初始化 Session State ---
-if 'selected_stock' not in st.session_state:
-    st.session_state.selected_stock = "2330"
-if 'topic_results' not in st.session_state:
-    st.session_state.topic_results = None
-if 'show_whale' not in st.session_state:
-    st.session_state.show_whale = False
-if 'ai_error' not in st.session_state:
-    st.session_state.ai_error = None
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = ""
-if 'ai_fetched_eps' not in st.session_state:
-    st.session_state.ai_fetched_eps = {}
-if 'show_pk' not in st.session_state:
-    st.session_state.show_pk = False
-if 'ai_industry_result' not in st.session_state:
-    st.session_state.ai_industry_result = None
-
-def change_stock(stock_code):
-    st.session_state.selected_stock = stock_code
-    if "quick_select" in st.session_state:
-        st.session_state.quick_select = "-- 快速切換標的 --"
-    st.session_state.show_pk = False
-    st.session_state.ai_industry_result = None
-
-# --- 🛠️ 核心防護：安全的浮點數轉換 ---
+# ==========================================
+# 1. 全局安全轉換函數 (徹底根除 NameError 與 ValueError)
+# ==========================================
 def s_float(val, default=None):
     try:
         if val is None: return default
         v = float(val)
-        if math.isnan(v) or math.isinf(v):
-            return default
+        if math.isnan(v) or math.isinf(v): return default
         return v
     except:
         return default
 
-# --- AI 解析與連線函數 ---
+def to_pct(val):
+    try:
+        if val is None or pd.isna(val): return "N/A"
+        return f"{val * 100:.2f}%"
+    except:
+        return "N/A"
+
+# ==========================================
+# 2. Session State 初始化
+# ==========================================
+if 'selected_stock' not in st.session_state: st.session_state.selected_stock = "2330"
+if 'topic_results' not in st.session_state: st.session_state.topic_results = None
+if 'show_whale' not in st.session_state: st.session_state.show_whale = False
+if 'api_key' not in st.session_state: st.session_state.api_key = ""
+if 'ai_fetched_eps' not in st.session_state: st.session_state.ai_fetched_eps = {}
+if 'show_pk' not in st.session_state: st.session_state.show_pk = False
+if 'ai_industry_result' not in st.session_state: st.session_state.ai_industry_result = None
+if 'run_screener' not in st.session_state: st.session_state.run_screener = False
+if 'quick_select' not in st.session_state: st.session_state.quick_select = "-- 快速切換標的 --"
+
+def change_stock(stock_code):
+    st.session_state.selected_stock = stock_code
+    st.session_state.quick_select = "-- 快速切換標的 --"
+    st.session_state.show_pk = False
+    st.session_state.ai_industry_result = None
+
+# ==========================================
+# 3. 外部 API 與模型模組
+# ==========================================
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
     api_key = api_key.strip()
@@ -84,8 +90,7 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
             links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
             return json.loads(clean_json), list(set(links))
         return f"API 錯誤: {response.status_code}", []
-    except Exception as e:
-        return f"連線異常: {str(e)}", []
+    except Exception as e: return f"連線異常: {str(e)}", []
 
 def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
@@ -124,7 +129,6 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         return f"AI 分析連線失敗"
     except Exception as e: return f"連線異常: {str(e)}"
 
-# --- 🌍 動態判定今日/明日 (高精準時段與權重切換) ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -161,27 +165,18 @@ def get_global_market_trend():
         
         score = sox_pct * 0.3 + tsm_pct * 0.3 + nq_pct * 0.1 + ewt_pct * 0.3
         
-        if score > 1.0:
-            trend, color = f"🔥 極度樂觀 ({target_day}台股開盤強勢)", "#ff4d4d"
-        elif score > 0.1:
-            trend, color = f"📈 偏多看待 (有利{target_day}台股表現)", "#ff4d4d"
-        elif score > -0.8:
-            trend, color = f"↔️ 震盪整理 ({target_day}台股可能平盤震盪)", "#FFD700"
-        else:
-            trend, color = f"❄️ 悲觀警戒 ({target_day}台股面臨回檔壓力)", "#00cc66"
+        if score > 1.0: trend, color = f"🔥 極度樂觀 ({target_day}台股開盤強勢)", "#ff4d4d"
+        elif score > 0.1: trend, color = f"📈 偏多看待 (有利{target_day}台股表現)", "#ff4d4d"
+        elif score > -0.8: trend, color = f"↔️ 震盪整理 ({target_day}台股可能平盤震盪)", "#FFD700"
+        else: trend, color = f"❄️ 悲觀警戒 ({target_day}台股面臨回檔壓力)", "#00cc66"
             
         return {
-            "sox_p": sox_price, "sox": sox_pct, 
-            "tsm_p": tsm_price, "tsm": tsm_pct, 
-            "nq_p": nq_price, "nq": nq_pct, 
-            "ewt_p": ewt_price, "ewt": ewt_pct,
-            "trend": trend, "color": color, 
-            "target_day": target_day, "time_status": time_status
+            "sox_p": sox_price, "sox": sox_pct, "tsm_p": tsm_price, "tsm": tsm_pct, 
+            "nq_p": nq_price, "nq": nq_pct, "ewt_p": ewt_price, "ewt": ewt_pct,
+            "trend": trend, "color": color, "target_day": target_day, "time_status": time_status
         }
-    except:
-        return None
+    except: return None
 
-# --- 數據獲取引擎 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
     try:
@@ -196,7 +191,7 @@ def get_monthly_revenue(stock_id):
             df = df[df['date'] < pd.to_datetime(f"{today.year}-{today.month:02d}-01")].sort_values('date').reset_index(drop=True)
             df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
             df['YoY'] = df['revenue'].pct_change(periods=12) * 100
-            df['Month'] = df['date'].dt.strftime('%Y-%m')
+            df['Month'] = df['date'].dt.strftime('%Y/%m')
             df['Revenue'] = df['revenue'] / 100000000 
             final_df = df.dropna(subset=['YoY']).tail(12).copy()
             if not final_df.empty:
@@ -234,8 +229,7 @@ def get_fallback_info(stock_id):
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
             if idx != -1:
-                chunk = text[idx:idx+200]
-                match = re.search(r'>(?:\s*|&nbsp;)*([-0-9]{1,3}(?:\.[0-9]+)?)\s*%?\s*<', chunk)
+                match = re.search(r'>(?:\s*|&nbsp;)*([-0-9]{1,3}(?:\.[0-9]+)?)\s*%?\s*<', text[idx:idx+200])
                 if match:
                     try:
                         val = float(match.group(1).replace(',', ''))
@@ -273,10 +267,8 @@ def get_stock_data(stock_id):
             
     if hist is None or hist.empty:
         try:
-            today = datetime.date.today()
-            start_str = f"{today.year - 5}-{today.month:02d}-{today.day:02d}"
-            url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
-            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            start_str = f"{(datetime.date.today() - datetime.timedelta(days=1825)).isoformat()}"
+            res = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}", headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             data = res.json()
             if data.get('status') == 200 and data.get('data'):
                 df = pd.DataFrame(data['data'])
@@ -287,9 +279,7 @@ def get_stock_data(stock_id):
         except: pass
 
     if hist is not None and not hist.empty:
-        if not info_data.get('returnOnEquity'):
-            fallback = get_fallback_info(stock_id)
-            info_data.update(fallback)
+        if not info_data.get('returnOnEquity'): info_data.update(get_fallback_info(stock_id))
         return hist, info_data
     return None, None
 
@@ -298,24 +288,11 @@ def get_chinese_name(stock_id):
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-        match = re.search(r'<title>(.*?)\(', res.text)
+        # 🚀 修復中文名：完美相容 Yahoo 網頁的空白變化
+        match = re.search(r'<title>(.*?)(?:\(| \()', res.text)
         if match: return match.group(1).strip()
     except: pass
     return None
-
-@st.cache_data(ttl=1800)
-def get_stock_news(query):
-    try:
-        encoded_q = urllib.parse.quote(f"{query} 股票")
-        url = f"https://news.google.com/rss/search?q={encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-        res = requests.get(url, timeout=5)
-        root = ET.fromstring(res.text)
-        news = []
-        for item in root.findall('.//item')[:6]:
-            t = item.find('title').text
-            news.append({"title": t, "link": item.find('link').text, "sentiment": "🟢" if any(x in t for x in ["漲","成長","買超"]) else ("🔴" if any(x in t for x in ["跌","賣超","警訊"]) else "⚪")})
-        return news
-    except: return []
 
 @st.cache_data(ttl=86400)
 def translate_to_zh(text):
@@ -397,11 +374,7 @@ with st.sidebar:
                         
                         p_sort = sys_peg if sys_peg is not None and not pd.isna(sys_peg) and not peg_is_neg else 999
                         p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None and not pd.isna(sys_peg) else "N/A")
-                        
-                        # 🚀 暴力防呆：直接寫死，不呼叫外部函數
-                        roe_str_local = f"{roe*100:.2f}%" if roe is not None and not pd.isna(roe) else "N/A"
-                        
-                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':roe_str_local,'peg_str':p_str})
+                        results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':to_pct(roe),'peg_str':p_str})
                     time.sleep(0.5); pbar.progress((i+1)/len(target_stocks))
                 pbar.empty(); results.sort(key=lambda x: (x['peg_sort'], -x['roe'] if x['roe'] else 0))
                 st.markdown("<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果</b></div>", unsafe_allow_html=True)
@@ -448,8 +421,7 @@ st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
 if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
-        model_to_use = st.session_state.get('selected_model', 'gemini-2.5-flash')
-        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, model_to_use)
+        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, st.session_state.get('selected_model', 'gemini-2.5-flash'))
         if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
             st.session_state.show_whale = False
@@ -498,26 +470,64 @@ if curr_id:
         with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
             st.write(translate_to_zh(info.get('longBusinessSummary', '暫無簡介。')))
 
-        # --- ⚡ 即時報價 ---
+        # 🚀 完整還原 12 宮格詳細即時報價
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
+        
         curr_p = s_float(today_data.get('Close'), 0)
+        open_p = s_float(today_data.get('Open'), 0)
+        high_p = s_float(today_data.get('High'), 0)
+        low_p = s_float(today_data.get('Low'), 0)
+        vol_shares = s_float(today_data.get('Volume'), 0)
+        
+        vol_lots = int(vol_shares // 1000)
+        prev_vol_lots = int(s_float(prev_data.get('Volume'), 0) // 1000) if len(hist) > 1 else 0
+        
         prev_close = s_float(info.get('previousClose'), s_float(prev_data.get('Close'), 0))
         change = curr_p - prev_close if prev_close else 0
         change_pct = (change / prev_close) * 100 if prev_close else 0
+        amp = ((high_p - low_p) / prev_close) * 100 if prev_close and prev_close > 0 else 0
+        avg_price = (high_p + low_p + curr_p) / 3 if curr_p else 0
+        turnover_100m = (vol_shares * avg_price) / 100000000
+        
+        def get_color(val, base):
+            if val > base: return "#ff4d4d"
+            elif val < base: return "#00cc66"
+            return "#ffffff"
+            
+        c_curr = get_color(curr_p, prev_close)
+        c_open = get_color(open_p, prev_close)
+        c_high = get_color(high_p, prev_close)
+        c_low = get_color(low_p, prev_close)
+        c_change = get_color(change, 0)
+        arrow = "▲" if change > 0 else ("▼" if change < 0 else "")
         
         quote_html = f"""
-        <div style='display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; background: #1e1e1e; padding: 15px; border-radius: 8px; border: 1px solid #333;'>
-            <div style='text-align:center;'><span style='color:#aaa;'>成交</span><br><b style='font-size:1.5rem; color:{'#ff4d4d' if change > 0 else '#00cc66' if change < 0 else '#fff'};'>{curr_p:,.2f}</b></div>
-            <div style='text-align:center;'><span style='color:#aaa;'>昨收</span><br><b style='font-size:1.5rem; color:#fff;'>{prev_close:,.2f}</b></div>
-            <div style='text-align:center;'><span style='color:#aaa;'>漲跌幅</span><br><b style='font-size:1.5rem; color:{'#ff4d4d' if change > 0 else '#00cc66' if change < 0 else '#fff'};'>{'▲' if change > 0 else '▼' if change < 0 else ''} {abs(change_pct):.2f}%</b></div>
+        <style>
+        .q-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px 30px; background: #1e1e1e; padding: 15px 20px; border-radius: 8px; font-family: sans-serif; margin-bottom: 20px; border: 1px solid #333; }}
+        .q-item {{ display: flex; justify-content: space-between; border-bottom: 1px solid #333; padding-bottom: 4px; }}
+        .q-label {{ color: #aaa; font-size: 1rem; }}
+        .q-val {{ font-weight: bold; font-size: 1.1rem; }}
+        </style>
+        <div class="q-container">
+            <div class="q-item"><span class="q-label">成交</span><span class="q-val" style="color: {c_curr};">{curr_p:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">昨收</span><span class="q-val" style="color: #fff;">{prev_close:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">開盤</span><span class="q-val" style="color: {c_open};">{open_p:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">漲跌幅</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change_pct):.2f}%</span></div>
+            <div class="q-item"><span class="q-label">最高</span><span class="q-val" style="color: {c_high};">{high_p:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">漲跌</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change):.2f}</span></div>
+            <div class="q-item"><span class="q-label">最低</span><span class="q-val" style="color: {c_low};">{low_p:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">總量 (張)</span><span class="q-val" style="color: #ffd700;">{vol_lots:,}</span></div>
+            <div class="q-item"><span class="q-label">均價</span><span class="q-val" style="color: #fff;">{avg_price:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">昨量 (張)</span><span class="q-val" style="color: #fff;">{prev_vol_lots:,}</span></div>
+            <div class="q-item"><span class="q-label">成交金額(億)</span><span class="q-val" style="color: #fff;">{turnover_100m:,.2f}</span></div>
+            <div class="q-item"><span class="q-label">振幅</span><span class="q-val" style="color: #fff;">{amp:.2f}%</span></div>
         </div>
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
         # --- 🌍 國際連動與動態時間趨勢推估 (包含點位與百分比) ---
-        st.markdown("<br>", unsafe_allow_html=True)
         trend_data = get_global_market_trend()
         if trend_data:
             target_day_text = trend_data.get('target_day', '明日')
@@ -591,14 +601,13 @@ if curr_id:
             default_eps = st.session_state.ai_fetched_eps.get(curr_id, sys_f_eps if sys_f_eps else (t_eps if t_eps else 1.0))
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
-        # 🚀 暴力安全防線：不再依賴任何外部函數，直接行內格式化！
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
             if t_eps and t_eps > 0 and pe_ratio:
                 cg = (active_f_eps - t_eps) / t_eps
                 peg_ratio = pe_ratio / (cg * 100) if cg > 0 else -999
-                eg_str = f"{cg * 100:.2f}%" if cg is not None else "N/A"
+                eg_str = to_pct(cg)
                 eg_color = "#ff4d4d" if cg > 0 else "#00cc66"
             else:
                 peg_ratio = None
@@ -609,7 +618,7 @@ if curr_id:
             active_f_eps = sys_f_eps
             forward_pe = sys_forward_pe
             peg_ratio = sys_peg_ratio
-            eg_str = f"{earn_growth * 100:.2f}%" if earn_growth is not None and not pd.isna(earn_growth) else "N/A"
+            eg_str = to_pct(earn_growth)
             eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
             eps_source_text = f"海外系統或反推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
@@ -618,12 +627,11 @@ if curr_id:
         active_f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
         f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{active_f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {active_f_eps_str}"
             
-        rg_str = f"{rev_growth * 100:.2f}%" if rev_growth is not None and not pd.isna(rev_growth) else "N/A"
+        rg_str = to_pct(rev_growth)
         rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
-        
-        gm_str = f"{gross_margin * 100:.2f}%" if gross_margin is not None and not pd.isna(gross_margin) else "N/A"
-        om_str = f"{op_margin * 100:.2f}%" if op_margin is not None and not pd.isna(op_margin) else "N/A"
-        roe_str = f"{roe * 100:.2f}%" if roe is not None and not pd.isna(roe) else "N/A"
+        gm_str = to_pct(gross_margin)
+        om_str = to_pct(op_margin)
+        roe_str = to_pct(roe)
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe is not None and roe >= 0.15 else ""
 
         fund_html = f"""
@@ -713,14 +721,9 @@ if curr_id:
                             pe_val = s_float(p_info.get("trailingPE"))
                             pe_fmt = f"{pe_val:.2f}x" if pe_val is not None else "N/A"
                             
-                            gm_val = s_float(p_info.get('grossMargins'))
-                            gm_fmt = f"{gm_val*100:.2f}%" if gm_val is not None else "N/A"
-                            
-                            om_val = s_float(p_info.get('operatingMargins'))
-                            om_fmt = f"{om_val*100:.2f}%" if om_val is not None else "N/A"
-                            
-                            roe_val = s_float(p_info.get('returnOnEquity'))
-                            roe_fmt = f"{roe_val*100:.2f}%" if roe_val is not None else "N/A"
+                            gm_fmt = to_pct(s_float(p_info.get('grossMargins')))
+                            om_fmt = to_pct(s_float(p_info.get('operatingMargins')))
+                            roe_fmt = to_pct(s_float(p_info.get('returnOnEquity')))
                             
                             prev_close_val = s_float(p_info.get("previousClose"))
                             prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
@@ -817,7 +820,7 @@ if curr_id:
                 st.plotly_chart(fig_river, use_container_width=True)
         st.markdown("---")
 
-        # [7] 專業技術線圖與 KD 指標
+        # 🚀 【7. 專業技術線圖與 KD 指標 (徹底修復 Plotly 崩潰問題)】
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         plot_df = hist.tail(120).copy()
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -888,18 +891,20 @@ if curr_id:
         </div>
         """, unsafe_allow_html=True)
         
-        fig_k = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-        fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5', line=dict(color='#00bfff', width=1.5)), row=1, col=1)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10', line=dict(color='#ab82ff', width=1.5)), row=1, col=1)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20', line=dict(color='#ff8c00', width=1.5)), row=1, col=1)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60', line=dict(color='#ffd700', width=1.5)), row=1, col=1)
+        # 🚀 徹底修復 ValueError：明確宣告雙 Y 軸設定，讓成交量能正確顯示在右側軸
+        fig_k = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
+        
+        fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
         
         vol_colors = ['#ff4d4d' if plot_df['Close'].iloc[i] >= plot_df['Open'].iloc[i] else '#00cc66' for i in range(len(plot_df))]
         fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
         
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1, secondary_y=False)
         
         max_vol = plot_df['Volume'].max() / 1000 if not plot_df['Volume'].empty else 100
         fig_k.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
