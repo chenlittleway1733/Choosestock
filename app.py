@@ -44,7 +44,7 @@ if 'show_pk' not in st.session_state:
 if 'ai_industry_result' not in st.session_state:
     st.session_state.ai_industry_result = None
 
-# 🚀 修正：點擊股票按鈕時，同步將下拉選單狀態歸零，避免互相打架
+# 點擊股票按鈕時，同步將下拉選單狀態歸零，避免互相打架
 def change_stock(stock_code):
     st.session_state.selected_stock = stock_code
     if "quick_select" in st.session_state:
@@ -509,7 +509,6 @@ with st.sidebar:
                     is_good = res['peg'] < 1.5 and res['roe'] > 0.15
                     icon = "🔥" if is_good else "🔸"
                     
-                    # 🚀 關鍵修正：加入 \n 強制斷行，讓 PEG 和 ROE 在按鈕內顯示為整齊的第二行
                     btn_label = f"{icon} {res['name']} ({res['code']})\nPEG: {res['peg_str']} | ROE: {res['roe_str']}"
                     
                     st.button(btn_label, key=f"scr_{res['code']}", on_click=change_stock, args=(res['code'],), use_container_width=True)
@@ -933,14 +932,14 @@ if curr_id:
             fig_rev.add_trace(go.Bar(x=df_rev['Month'], y=df_rev['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
             fig_rev.add_trace(go.Scatter(x=df_rev['Month'], y=df_rev['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
             
+            # 🚀 修正：移除 template="plotly_dark" 讓圖表自動適應您的淺色模式
             fig_rev.update_layout(
-                height=400, template="plotly_dark", hovermode="x unified", 
+                height=400, hovermode="x unified", 
                 margin=dict(l=10, r=10, t=50, b=10), 
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), 
-                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
             )
             fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
-            fig_rev.update_yaxes(title_text="年增率 YoY (%)", secondary_y=True, showgrid=True, gridcolor='#333', zeroline=True, zerolinewidth=1, zerolinecolor='#555')
+            fig_rev.update_yaxes(title_text="年增率 YoY (%)", secondary_y=True, showgrid=True, gridcolor='#e0e0e0', zeroline=True, zerolinewidth=1, zerolinecolor='#ccc')
             fig_rev.update_xaxes(type='category')
             
             st.plotly_chart(fig_rev, use_container_width=True)
@@ -1162,36 +1161,35 @@ if curr_id:
             merged = pd.merge(hist_reset, df_per, left_on='Date_only', right_on='date_only', how='inner')
 
             if not merged.empty and len(merged) > 60: 
-                # 反推每日的 EPS (收盤價 / 當日本益比)
                 merged['EPS_calc'] = merged['Close'] / merged['PER']
-
-                # 將 EPS 取 60 日移動平均，讓「階梯狀」變成平滑優美的「河流」
                 merged['EPS_smoothed'] = merged['EPS_calc'].rolling(window=60, min_periods=1).mean()
 
-                # 透過分位數抓出過去五年的「本益比慣性通道」
                 pe_quantiles = merged['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
 
                 fig_river = go.Figure()
 
-                # 建立五條河流邊界 (使用平滑後的 EPS)
                 b1 = merged['EPS_smoothed'] * pe_quantiles[0]
                 b2 = merged['EPS_smoothed'] * pe_quantiles[1]
                 b3 = merged['EPS_smoothed'] * pe_quantiles[2]
                 b4 = merged['EPS_smoothed'] * pe_quantiles[3]
                 b5 = merged['EPS_smoothed'] * pe_quantiles[4]
 
-                # 畫出河流圖 (運用 Plotly 的 fill='tonexty' 營造帶狀區間)
                 fig_river.add_trace(go.Scatter(x=merged['Date'], y=b1, mode='lines', line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
                 fig_river.add_trace(go.Scatter(x=merged['Date'], y=b2, mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
                 fig_river.add_trace(go.Scatter(x=merged['Date'], y=b3, mode='lines', fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
                 fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
                 fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
 
-                # 把實際股價疊加在河流圖之上
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#ffffff', width=2.5), name='實際股價'))
+                # 🚀 修正 1：把原本會隱形的白色股價線，改成在淺色/深色背景都極度搶眼的「深邃藍」並加粗
+                fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#0033cc', width=3), name='實際股價'))
 
-                # 計算目前落在哪個位階
                 current_pe = merged['PER'].iloc[-1]
+                
+                # 🚀 修正 2：加入「估值重評 (Re-rating)」智能警告機制
+                rerating_warn = ""
+                if current_pe >= pe_quantiles[4] * 0.95:
+                     rerating_warn = "<br><br><span style='color:#ff8c00; font-size:0.95rem;'>⚠️ <b>系統智能偵測：可能發生「估值重評 (Re-rating)」</b><br>此股票目前本益比已突破或逼近五年歷史極高點（如設備廠轉型 AI 供應鏈）。此時歷史河流圖的參考價值降低，請務必配合「未來 EPS 爆發力」與「右方 AI 深度推演」來評估其實際價值，切勿單看歷史估值放空！</span>"
+                
                 if current_pe <= pe_quantiles[1]:
                     pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
                 elif current_pe >= pe_quantiles[3]:
@@ -1199,17 +1197,16 @@ if curr_id:
                 else:
                     pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
 
+                # 🚀 修正 3：全面移除 template="plotly_dark"，讓圖表自動適應您的「淺色模式 (Light Mode)」
                 fig_river.update_layout(
                     height=450,
-                    template="plotly_dark",
                     margin=dict(l=10, r=10, t=50, b=10),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                    hovermode="x unified",
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+                    hovermode="x unified"
                 )
-                fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#333')
+                fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#e0e0e0')
 
-                st.markdown(f"<div style='background:#1e1e1e; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x)</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='background:#f8f9fa; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px; color:#333;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x){rerating_warn}</div>", unsafe_allow_html=True)
                 st.plotly_chart(fig_river, use_container_width=True)
             else:
                 st.info("💡 該股票資料筆數不足以計算有效的本益比通道。")
@@ -1339,15 +1336,15 @@ if curr_id:
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1)
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=2, col=1)
 
-        fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
+        fig.update_yaxes(side="right", mirror=True, showline=True, linecolor='#ccc', secondary_y=False, row=1, col=1)
         max_vol = plot_df['Volume'].max() / 1000 if not plot_df['Volume'].empty else 100
         fig.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
-        fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
-        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
+        fig.update_yaxes(range=[0, 100], dtick=10, side="right", mirror=True, showline=True, linecolor='#ccc', row=2, col=1)
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#e0e0e0', mirror=True, showline=True, linecolor='#ccc')
         
+        # 🚀 修正：移除 K 線圖的 template="plotly_dark"，自動適應淺色模式
         fig.update_layout(
             height=650, 
-            template="plotly_dark", 
             xaxis_rangeslider_visible=False, 
             margin=dict(l=10, r=10, t=50, b=10), 
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), 
