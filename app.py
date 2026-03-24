@@ -49,7 +49,7 @@ def to_pct(val):
         return "N/A"
 
 # ==========================================
-# 2. Session State 初始化 & 狀態重置函數
+# 2. Session State 初始化 & 狀態管理回呼函數 (Callbacks)
 # ==========================================
 if 'selected_stock' not in st.session_state: st.session_state.selected_stock = "2330"
 if 'topic_results' not in st.session_state: st.session_state.topic_results = None
@@ -60,14 +60,39 @@ if 'show_pk' not in st.session_state: st.session_state.show_pk = False
 if 'ai_industry_result' not in st.session_state: st.session_state.ai_industry_result = None
 if 'run_screener' not in st.session_state: st.session_state.run_screener = False
 if 'quick_select' not in st.session_state: st.session_state.quick_select = "-- 快速切換標的 --"
+if 'stock_input_widget' not in st.session_state: st.session_state.stock_input_widget = "2330"
 
-# 🚀 絕對防禦：任何換股動作都呼叫此函數，保證關閉所有掃描與分析狀態
+# 🚀 Callback 1：按鈕觸發的換股重置
 def reset_all_states_on_stock_change(stock_code):
     st.session_state.selected_stock = stock_code
     st.session_state.quick_select = "-- 快速切換標的 --"
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
     st.session_state.run_screener = False
+
+# 🚀 Callback 2：手動輸入框換股 (解決 API Exception)
+def on_stock_input_change():
+    new_stock = st.session_state.stock_input_widget
+    if new_stock != st.session_state.selected_stock:
+        st.session_state.selected_stock = new_stock
+        st.session_state.quick_select = "-- 快速切換標的 --"
+        st.session_state.show_pk = False
+        st.session_state.ai_industry_result = None
+        st.session_state.run_screener = False
+
+# 🚀 Callback 3：下拉選單換股 (解決 API Exception)
+def on_quick_select_change():
+    selected = st.session_state.quick_select
+    if selected != "-- 快速切換標的 --":
+        if not selected.startswith("🏷️"):
+            q_code = selected.replace("　🔸 ", "").split(" ")[0].strip()
+            if q_code != st.session_state.selected_stock:
+                st.session_state.selected_stock = q_code
+                st.session_state.show_pk = False
+                st.session_state.ai_industry_result = None
+                st.session_state.run_screener = False
+        # 無論選了什麼，強制重置下拉選單顯示
+        st.session_state.quick_select = "-- 快速切換標的 --"
 
 # ==========================================
 # 3. 外部 API 與模型模組
@@ -129,9 +154,11 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         if res.status_code == 200: return re.sub(r'```markdown\n?|```', '', res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')).strip()
         elif res.status_code == 429: return "⏳ API 呼叫太頻繁，請稍後再試，或切換至 Flash 模型。"
         return f"AI 分析連線失敗"
-    except Exception as e: return f"連線異常: {str(e)}"
+    except Exception as e:
+        if "timeout" in str(e).lower(): return "⏳ API 連線逾時，請重試。"
+        return f"連線異常: {str(e)}"
 
-# --- 🌍 動態判定今日/明日 ---
+# --- 🌍 動態判定今日/明日 (高精準時段與權重切換) ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -313,11 +340,8 @@ def translate_to_zh(text):
 # ==========================================
 with st.sidebar:
     st.markdown("### 🔍 個股查詢")
-    stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
-    
-    if stock_input != st.session_state.selected_stock:
-        reset_all_states_on_stock_change(stock_input)
-        st.rerun()
+    # 🚀 使用 Callback 安全處理手動輸入換股
+    st.text_input("輸入台股代號", value=st.session_state.selected_stock, key="stock_input_widget", on_change=on_stock_input_change)
     
     options = ["-- 快速切換標的 --"]
     categories = {}
@@ -340,17 +364,8 @@ with st.sidebar:
                         categories[current_cat] = []
         except: pass
             
-    selected_quick = st.selectbox("⚡ 快速選股名單", options, key="quick_select")
-    if selected_quick != "-- 快速切換標的 --":
-        if not selected_quick.startswith("🏷️"):
-            q_code = selected_quick.replace("　🔸 ", "").split(" ")[0].strip()
-            if q_code != st.session_state.selected_stock:
-                reset_all_states_on_stock_change(q_code)
-                st.rerun()
-        else:
-            st.session_state.quick_select = "-- 快速切換標的 --"
-            st.session_state.run_screener = False
-            st.rerun()
+    # 🚀 使用 Callback 安全處理下拉選單換股
+    st.selectbox("⚡ 快速選股名單", options, key="quick_select", on_change=on_quick_select_change)
 
     st.markdown("---")
     st.markdown("### 🎯 策略漏斗掃描器")
@@ -482,7 +497,7 @@ if curr_id:
             st.write(translate_to_zh(info.get('longBusinessSummary', '暫無簡介。')))
 
         # ==========================================
-        # ⚡ 即時報價 (恢復 12 宮格完整版)
+        # ⚡ 即時報價
         # ==========================================
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
@@ -724,7 +739,7 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 滿血復活 1：月營收圖表
+        # 🚀 月營收圖表
         # ==========================================
         if df_rev_bk is not None and not df_rev_bk.empty:
             st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
@@ -748,7 +763,7 @@ if curr_id:
             st.markdown("---")
 
         # ==========================================
-        # 🚀 滿血復活 2：產業前景與競爭優勢評估 (Moat / Trend cards)
+        # 🚀 產業前景與競爭優勢評估 (Moat / Trend cards)
         # ==========================================
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：下方為客觀數據推導。您可點擊 AI 按鈕進行聯網深度檢索與買賣點分析。*</small>", unsafe_allow_html=True)
@@ -801,7 +816,7 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 滿血復活 3：AI 提示詞按鈕與複製面板
+        # 🚀 法人預估目標價
         # ==========================================
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
@@ -810,6 +825,130 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
+        if hi_val is not None and me_val is not None and lo_val is not None:
+            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+            v1, v2, v3 = st.columns(3)
+            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi_val:.1f}</b></div>", unsafe_allow_html=True)
+            upside = ((me_val / curr_p) - 1) * 100 if curr_p else 0
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
+            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo_val:.1f}</b></div>", unsafe_allow_html=True)
+            st.markdown("---")
+        elif hi_val is not None:
+             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+             st.info(f"法人最高預期：**{hi_val:.1f}**")
+             st.markdown("---")
+
+        # ==========================================
+        # 🚀 籌碼面與股權結構分析
+        # ==========================================
+        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
+        insider_pct = s_float(info.get('heldPercentInsiders'))
+        inst_pct = s_float(info.get('heldPercentInstitutions'))
+        shares_out = s_float(info.get('sharesOutstanding'))
+        share_capital = shares_out * 10 if shares_out is not None else None
+
+        if share_capital is not None:
+            if share_capital >= 10_000_000_000:
+                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
+            elif share_capital <= 3_000_000_000:
+                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
+            else:
+                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
+        else:
+            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
+
+        inst_str = to_pct(inst_pct)
+        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
+
+        insider_str = to_pct(insider_pct)
+        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
+
+        chip_html = f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
+                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
+                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
+                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
+                </div>
+                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
+            </div>
+        </div>
+        """
+        st.markdown(chip_html, unsafe_allow_html=True)
+        st.markdown("---")
+
+        # 產業 PK (側邊欄觸發)
+        if st.session_state.show_pk:
+            st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
+            st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
+            with st.spinner("AI 正在深度檢索產業鏈與競爭對手，並同步抓取最新財報數據..."):
+                peers = get_peers_from_ai(c_name, curr_id, st.session_state.api_key)
+                if peers:
+                    compare_list = [curr_id] + [p for p in peers if p != curr_id]
+                    compare_data = []
+                    for code in compare_list:
+                        _, p_info = get_stock_data(code)
+                        p_name = get_chinese_name(code) or code
+                        if p_info:
+                            pe_val = s_float(p_info.get("trailingPE"))
+                            pe_fmt = f"{pe_val:.2f}x" if pe_val is not None else "N/A"
+                            
+                            gm_fmt = to_pct(s_float(p_info.get('grossMargins')))
+                            om_fmt = to_pct(s_float(p_info.get('operatingMargins')))
+                            roe_fmt = to_pct(s_float(p_info.get('returnOnEquity')))
+                            
+                            prev_close_val = s_float(p_info.get("previousClose"))
+                            prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
+                            
+                            t_eps_p = s_float(p_info.get('trailingEps'))
+                            f_eps_p = s_float(p_info.get('forwardEps'))
+                            t_eps_p_str = f"{t_eps_p:.2f}" if t_eps_p is not None else "N/A"
+                            f_eps_p_str = f"{f_eps_p:.2f}" if f_eps_p is not None else "N/A"
+                            eps_display = f"{t_eps_p_str} / <span style='color:#00bfff;'>{f_eps_p_str}</span>"
+                            
+                            if prev_close_val is not None and f_eps_p is not None and f_eps_p > 0:
+                                fpe_fmt = f"<b style='color:#FFD700;'>{prev_close_val / f_eps_p:.1f}x</b>"
+                            else: fpe_fmt = "<span style='color:gray;'>N/A</span>"
+
+                            target_mean_p = s_float(p_info.get('targetMeanPrice'))
+                            if target_mean_p is not None and prev_close_val is not None and prev_close_val > 0:
+                                upside = ((target_mean_p - prev_close_val) / prev_close_val) * 100
+                                if upside >= 25: upside_fmt = f"<span style='color:#ff4d4d; font-weight:bold;'>+{upside:.1f}%</span>"
+                                elif upside > 0: upside_fmt = f"<span style='color:#00cc66;'>+{upside:.1f}%</span>"
+                                else: upside_fmt = f"<span style='color:#aaa;'>{upside:.1f}%</span>"
+                                target_display = f"{target_mean_p:.1f} ({upside_fmt})"
+                            else: target_display = "<span style='color:gray;'>無資料</span>"
+                            
+                            compare_data.append({"代號": f"{p_name} ({code})", "股價": prev_close_fmt, "前瞻 P/E": fpe_fmt, "預估 EPS": eps_display, "目標價": target_display, "毛利率": gm_fmt, "營益率": om_fmt, "ROE": roe_fmt})
+                    
+                    if compare_data:
+                        table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem; color: #e0e0e0;'><tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>前瞻 P/E</th><th>預估 EPS (今/明)</th><th>目標價 (潛在空間)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
+                        for d in compare_data:
+                            row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" 
+                            table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'><td style='padding:12px; color:#ffffff;'><b>{d['代號']}</b></td><td>{d['股價']}</td><td>{d['前瞻 P/E']}</td><td>{d['預估 EPS']}</td><td>{d['目標價']}</td><td>{d['毛利率']}</td><td>{d['營益率']}</td><td style='color:#00bfff;'><b>{d['ROE']}</b></td></tr>"
+                        table_html += "</table>"
+                        st.markdown(table_html, unsafe_allow_html=True)
+                else: st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
+            st.markdown("---")
+
+        # ==========================================
+        # 🚀 滿血復活 3：AI 提示詞按鈕與複製面板
+        # ==========================================
         context_str = f"""
         【即時盤面與估值】
         - 最新收盤價: {curr_p} 元
@@ -875,130 +1014,6 @@ if curr_id:
             st.markdown("<br>", unsafe_allow_html=True)
             
         st.markdown("---")
-
-        # ==========================================
-        # 🚀 滿血復活 4：法人預估目標價
-        # ==========================================
-        if hi_val is not None and me_val is not None and lo_val is not None:
-            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-            v1, v2, v3 = st.columns(3)
-            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi_val:.1f}</b></div>", unsafe_allow_html=True)
-            upside = ((me_val / curr_p) - 1) * 100 if curr_p else 0
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
-            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo_val:.1f}</b></div>", unsafe_allow_html=True)
-            st.markdown("---")
-        elif hi_val is not None:
-             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-             st.info(f"法人最高預期：**{hi_val:.1f}**")
-             st.markdown("---")
-
-        # ==========================================
-        # 🚀 滿血復活 5：籌碼面與股權結構分析
-        # ==========================================
-        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
-        insider_pct = s_float(info.get('heldPercentInsiders'))
-        inst_pct = s_float(info.get('heldPercentInstitutions'))
-        shares_out = s_float(info.get('sharesOutstanding'))
-        share_capital = shares_out * 10 if shares_out is not None else None
-
-        if share_capital is not None:
-            if share_capital >= 10_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
-            elif share_capital <= 3_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
-            else:
-                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
-        else:
-            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
-
-        inst_str = to_pct(inst_pct)
-        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
-
-        insider_str = to_pct(insider_pct)
-        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
-
-        chip_html = f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
-                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
-                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
-                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
-                </div>
-                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
-            </div>
-        </div>
-        """
-        st.markdown(chip_html, unsafe_allow_html=True)
-        st.markdown("---")
-
-        # [4] 產業 PK (側邊欄觸發)
-        if st.session_state.show_pk:
-            st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
-            st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
-            with st.spinner("AI 正在深度檢索產業鏈與競爭對手，並同步抓取最新財報數據..."):
-                peers = get_peers_from_ai(c_name, curr_id, st.session_state.api_key)
-                if peers:
-                    compare_list = [curr_id] + [p for p in peers if p != curr_id]
-                    compare_data = []
-                    for code in compare_list:
-                        _, p_info = get_stock_data(code)
-                        p_name = get_chinese_name(code) or code
-                        if p_info:
-                            pe_val = s_float(p_info.get("trailingPE"))
-                            pe_fmt = f"{pe_val:.2f}x" if pe_val is not None else "N/A"
-                            
-                            gm_fmt = to_pct(s_float(p_info.get('grossMargins')))
-                            om_fmt = to_pct(s_float(p_info.get('operatingMargins')))
-                            roe_fmt = to_pct(s_float(p_info.get('returnOnEquity')))
-                            
-                            prev_close_val = s_float(p_info.get("previousClose"))
-                            prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
-                            
-                            t_eps_p = s_float(p_info.get('trailingEps'))
-                            f_eps_p = s_float(p_info.get('forwardEps'))
-                            t_eps_p_str = f"{t_eps_p:.2f}" if t_eps_p is not None else "N/A"
-                            f_eps_p_str = f"{f_eps_p:.2f}" if f_eps_p is not None else "N/A"
-                            eps_display = f"{t_eps_p_str} / <span style='color:#00bfff;'>{f_eps_p_str}</span>"
-                            
-                            if prev_close_val is not None and f_eps_p is not None and f_eps_p > 0:
-                                fpe_fmt = f"<b style='color:#FFD700;'>{prev_close_val / f_eps_p:.1f}x</b>"
-                            else: fpe_fmt = "<span style='color:gray;'>N/A</span>"
-
-                            target_mean_p = s_float(p_info.get('targetMeanPrice'))
-                            if target_mean_p is not None and prev_close_val is not None and prev_close_val > 0:
-                                upside = ((target_mean_p - prev_close_val) / prev_close_val) * 100
-                                if upside >= 25: upside_fmt = f"<span style='color:#ff4d4d; font-weight:bold;'>+{upside:.1f}%</span>"
-                                elif upside > 0: upside_fmt = f"<span style='color:#00cc66;'>+{upside:.1f}%</span>"
-                                else: upside_fmt = f"<span style='color:#aaa;'>{upside:.1f}%</span>"
-                                target_display = f"{target_mean_p:.1f} ({upside_fmt})"
-                            else: target_display = "<span style='color:gray;'>無資料</span>"
-                            
-                            compare_data.append({"代號": f"{p_name} ({code})", "股價": prev_close_fmt, "前瞻 P/E": fpe_fmt, "預估 EPS": eps_display, "目標價": target_display, "毛利率": gm_fmt, "營益率": om_fmt, "ROE": roe_fmt})
-                    
-                    if compare_data:
-                        table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem; color: #e0e0e0;'><tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>前瞻 P/E</th><th>預估 EPS (今/明)</th><th>目標價 (潛在空間)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
-                        for d in compare_data:
-                            row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" 
-                            table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'><td style='padding:12px; color:#ffffff;'><b>{d['代號']}</b></td><td>{d['股價']}</td><td>{d['前瞻 P/E']}</td><td>{d['預估 EPS']}</td><td>{d['目標價']}</td><td>{d['毛利率']}</td><td>{d['營益率']}</td><td style='color:#00bfff;'><b>{d['ROE']}</b></td></tr>"
-                        table_html += "</table>"
-                        st.markdown(table_html, unsafe_allow_html=True)
-                else: st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
-            st.markdown("---")
 
         # 本益比河流圖 (回歸最真實無平滑版本)
         if df_per_bk is not None and not df_per_bk.empty:
