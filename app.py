@@ -315,6 +315,30 @@ def get_stock_data(stock_id):
         return hist, info_data
     return None, None
 
+# 🚀 新增：專屬動態 K 線數據抓取函數 (支援 60分, 日, 週, 月)
+@st.cache_data(ttl=900)
+def get_chart_data(stock_id, timeframe):
+    stock_id = str(stock_id).strip()
+    interval_map = {
+        "日線": {"period": "1y", "interval": "1d"},
+        "週線": {"period": "2y", "interval": "1wk"},
+        "月線": {"period": "5y", "interval": "1mo"},
+        "60分線": {"period": "1mo", "interval": "60m"}
+    }
+    params = interval_map.get(timeframe, {"period": "1y", "interval": "1d"})
+    
+    for ext in [".TW", ".TWO"]:
+        try:
+            ticker = yf.Ticker(f"{stock_id}{ext}")
+            df = ticker.history(period=params["period"], interval=params["interval"])
+            if not df.empty:
+                if df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+                return df
+        except:
+            continue
+    return pd.DataFrame()
+
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
     try:
@@ -816,7 +840,7 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 法人預估目標價
+        # 🚀 AI 提示詞按鈕與複製面板
         # ==========================================
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
@@ -825,6 +849,75 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
+        context_str = f"""
+        【即時盤面與估值】
+        - 最新收盤價: {curr_p} 元
+        - 歷史本益比 (Trailing P/E): {pe_str}
+        - 前瞻本益比 (Forward P/E): {fpe_str_val}
+        - 股價淨值比 (P/B): {pb_str_val}
+        - 本益成長比 (PEG): {peg_str_val}
+
+        【財務基本面動能】
+        - 預估 EPS: {active_f_eps} 元
+        - 營收年增率 (YoY): {rg_str}
+        - 毛利率: {gm_str}
+        - 營業利益率: {om_str}
+        - 股東權益報酬率 (ROE): {roe_str}
+
+        【法人預估目標價】
+        - 最高目標價: {hi_str}
+        - 平均目標價: {me_str}
+        - 最低保底價: {lo_str}
+        """
+
+        current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
+        
+        full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
+請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
+1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
+2. 公司競爭優勢 (護城河、市占率、核心技術)
+3. 具體的買賣點建議與操作策略 (請結合我提供的基本面、本益比、目標價潛在空間與技術型態，給出具體進出場評估或價位區間參考)
+
+請深度分析台股 {c_name} ({curr_id}) 的產業前景、競爭優勢及買賣點策略。
+
+【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_str}"""
+
+        col_ai1, col_ai2 = st.columns([1.2, 1])
+        with col_ai1:
+            if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
+                if not st.session_state.api_key:
+                    st.warning("請先於左側選單輸入您的 API Key。")
+                else:
+                    with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
+                        st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
+        
+        with col_ai2:
+            with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
+                st.markdown("<small style='color:gray;'>*點擊下方黑框右上角的 📋 複製圖示，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
+                st.code(full_prompt_for_copy, language="text")
+        
+        if st.session_state.ai_industry_result:
+            st.markdown("<br>", unsafe_allow_html=True)
+            with st.container(border=True):
+                col1, col2 = st.columns([0.7, 0.3])
+                with col1:
+                    st.markdown("### 🤖 AI 產業透視與實戰策略")
+                with col2:
+                    st.markdown("<div style='text-align:right; margin-top:20px;'><small style='color:#00bfff;'>💡 往下捲動有【一鍵複製區塊】</small></div>", unsafe_allow_html=True)
+                
+                st.markdown(st.session_state.ai_industry_result)
+                
+                st.markdown("---")
+                st.markdown("##### 📋 【純文字複製區】")
+                st.markdown("<small style='color:gray;'>*將游標移至下方黑框內，點擊右上角的「📋」圖示，即可將報告全文複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
+                st.code(st.session_state.ai_industry_result, language="markdown")
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+        st.markdown("---")
+
+        # ==========================================
+        # 🚀 法人預估目標價
+        # ==========================================
         if hi_val is not None and me_val is not None and lo_val is not None:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
             v1, v2, v3 = st.columns(3)
@@ -946,75 +1039,6 @@ if curr_id:
                 else: st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
             st.markdown("---")
 
-        # ==========================================
-        # 🚀 滿血復活 3：AI 提示詞按鈕與複製面板
-        # ==========================================
-        context_str = f"""
-        【即時盤面與估值】
-        - 最新收盤價: {curr_p} 元
-        - 歷史本益比 (Trailing P/E): {pe_str}
-        - 前瞻本益比 (Forward P/E): {fpe_str_val}
-        - 股價淨值比 (P/B): {pb_str_val}
-        - 本益成長比 (PEG): {peg_str_val}
-
-        【財務基本面動能】
-        - 預估 EPS: {active_f_eps} 元
-        - 營收年增率 (YoY): {rg_str}
-        - 毛利率: {gm_str}
-        - 營業利益率: {om_str}
-        - 股東權益報酬率 (ROE): {roe_str}
-
-        【法人預估目標價】
-        - 最高目標價: {hi_str}
-        - 平均目標價: {me_str}
-        - 最低保底價: {lo_str}
-        """
-
-        current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
-        
-        full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
-請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
-1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
-2. 公司競爭優勢 (護城河、市占率、核心技術)
-3. 具體的買賣點建議與操作策略 (請結合我提供的基本面、本益比、目標價潛在空間與技術型態，給出具體進出場評估或價位區間參考)
-
-請深度分析台股 {c_name} ({curr_id}) 的產業前景、競爭優勢及買賣點策略。
-
-【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_str}"""
-
-        col_ai1, col_ai2 = st.columns([1.2, 1])
-        with col_ai1:
-            if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
-                if not st.session_state.api_key:
-                    st.warning("請先於左側選單輸入您的 API Key。")
-                else:
-                    with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
-                        st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
-        
-        with col_ai2:
-            with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
-                st.markdown("<small style='color:gray;'>*點擊下方黑框右上角的 📋 複製圖示，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
-                st.code(full_prompt_for_copy, language="text")
-        
-        if st.session_state.ai_industry_result:
-            st.markdown("<br>", unsafe_allow_html=True)
-            with st.container(border=True):
-                col1, col2 = st.columns([0.7, 0.3])
-                with col1:
-                    st.markdown("### 🤖 AI 產業透視與實戰策略")
-                with col2:
-                    st.markdown("<div style='text-align:right; margin-top:20px;'><small style='color:#00bfff;'>💡 往下捲動有【一鍵複製區塊】</small></div>", unsafe_allow_html=True)
-                
-                st.markdown(st.session_state.ai_industry_result)
-                
-                st.markdown("---")
-                st.markdown("##### 📋 【純文字複製區】")
-                st.markdown("<small style='color:gray;'>*將游標移至下方黑框內，點擊右上角的「📋」圖示，即可將報告全文複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
-                st.code(st.session_state.ai_industry_result, language="markdown")
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-        st.markdown("---")
-
         # 本益比河流圖 (回歸最真實無平滑版本)
         if df_per_bk is not None and not df_per_bk.empty:
             st.markdown("### 🌊 近五年本益比河流圖 (P/E River)")
@@ -1063,9 +1087,20 @@ if curr_id:
                 st.plotly_chart(fig_river, use_container_width=True)
         st.markdown("---")
 
-        # 專業技術線圖與 KD 指標
-        st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
-        plot_df = hist.tail(120).copy()
+        # 🚀 專業技術線圖與 KD 指標 (新增週期切換器)
+        st.markdown("### 🤖 專業技術線圖與量化型態分析")
+        
+        # 加入週期切換按鈕，預設為「日線」
+        chart_tf = st.radio("切換 K 線週期：", ["60分線", "日線", "週線", "月線"], index=1, horizontal=True)
+        
+        with st.spinner(f"載入 {chart_tf} 數據中..."):
+            chart_df = get_chart_data(curr_id, chart_tf)
+            
+        if chart_df.empty:
+            plot_df = hist.tail(120).copy() # 如果抓不到，退回使用原本抓好的日線資料
+        else:
+            plot_df = chart_df.tail(120).copy()
+
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
             if col not in plot_df.columns: plot_df[col] = 0.0
             
@@ -1073,7 +1108,6 @@ if curr_id:
         plot_df['MA10'] = plot_df['Close'].rolling(10).mean()
         plot_df['MA20'] = plot_df['Close'].rolling(20).mean()
         plot_df['MA60'] = plot_df['Close'].rolling(60).mean()
-        plot_df['MA120'] = plot_df['Close'].rolling(120).mean()
         plot_df['Vol_MA20'] = plot_df['Volume'].rolling(20).mean()
         
         h9, l9 = plot_df['High'].rolling(9).max(), plot_df['Low'].rolling(9).min()
@@ -1108,17 +1142,18 @@ if curr_id:
         support_price = max(recent_low, ma60_last) if last_close > ma60_last else recent_low
         resist_price = recent_high if last_close > ma20_last else min(recent_high, ma20_last)
 
-        if last_close < ma60_last: trend_status, trend_color = "⚠️ 跌破季線 (趨勢轉弱)", "#00cc66"
-        elif last_close > ma20_last and ma5_last > ma20_last: trend_status, trend_color = "📈 多頭強勢 (站上月線)", "#ff4d4d"
-        elif last_close < ma20_last and ma5_last < ma20_last: trend_status, trend_color = "📉 空頭弱勢 (跌破月線)", "#00cc66"
+        # 針對不同週期，修改均線說法避免誤導
+        if last_close < ma60_last: trend_status, trend_color = "⚠️ 跌破長線支撐 (趨勢轉弱)", "#00cc66"
+        elif last_close > ma20_last and ma5_last > ma20_last: trend_status, trend_color = "📈 多頭強勢 (站上短中均線)", "#ff4d4d"
+        elif last_close < ma20_last and ma5_last < ma20_last: trend_status, trend_color = "📉 空頭弱勢 (跌破中線)", "#00cc66"
         else: trend_status, trend_color = "↔️ 區間震盪 (方向未明)", "#ffd700"
             
         if high_vol_warning: adv_text, buy_rec, sell_rec = "🚨 【量價警訊】高檔爆出天量且跌破低點，切勿盲目接刀！", "強烈觀望", f"反彈至 {max_vol_day['High']:.2f} 逃命"
-        elif last_close < ma60_last: adv_text, buy_rec, sell_rec = "📉 【趨勢轉弱】跌破季線(生命線)，應耐心等待底部確立。", "等待站回季線", f"{ma60_last:.2f} (季線壓力)"
+        elif last_close < ma60_last: adv_text, buy_rec, sell_rec = "📉 【趨勢轉弱】跌破長期均線，應耐心等待底部確立。", "等待站回均線", f"{ma60_last:.2f} (長線壓力)"
         elif k_last < 25 and k_last > d_last: adv_text, buy_rec, sell_rec = "📈 【技術反彈】KD 低檔黃金交叉，可嘗試逢低少量佈局。", f"現價~{support_price:.2f} 附近", f"{resist_price:.2f} (上檔壓力)"
         elif k_last > 80 and k_last < d_last: adv_text, buy_rec, sell_rec = "⚠️ 【動能轉弱】KD 高檔死亡交叉，建議適度獲利了結保住利潤。", "暫時觀望", f"現價~{resist_price:.2f} 附近"
-        elif last_close > ma20_last: adv_text, buy_rec, sell_rec = "🔥 【多方格局】量價配合良好，拉回月線(20MA)有守可伺機介入。", f"{ma20_last:.2f} (月線支撐)", f"{resist_price:.2f} (近期前高)"
-        else: adv_text, buy_rec, sell_rec = "❄️ 【空方格局】短線均線反壓，反彈至均線壓力區可考慮減碼。", "等待技術面打底", f"{ma20_last:.2f} (月線壓力)"
+        elif last_close > ma20_last: adv_text, buy_rec, sell_rec = "🔥 【多方格局】量價配合良好，拉回中線(20MA)有守可伺機介入。", f"{ma20_last:.2f} (中線支撐)", f"{resist_price:.2f} (近期前高)"
+        else: adv_text, buy_rec, sell_rec = "❄️ 【空方格局】短線均線反壓，反彈至均線壓力區可考慮減碼。", "等待技術面打底", f"{ma20_last:.2f} (中線壓力)"
 
         st.markdown(f"""
         <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; margin-bottom:20px;'>
@@ -1136,10 +1171,10 @@ if curr_id:
         
         fig_k = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
         fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='MA5', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='MA10', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='MA20', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='MA60', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='5MA', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='10MA', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='20MA', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='60MA', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
         
         vol_colors = ['#ff4d4d' if plot_df['Close'].iloc[i] >= plot_df['Open'].iloc[i] else '#00cc66' for i in range(len(plot_df))]
         fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
@@ -1151,7 +1186,10 @@ if curr_id:
         fig_k.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
         fig_k.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
         fig_k.update_yaxes(range=[0, 100], dtick=20, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
-        fig_k.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat="%m/%d", showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
+        
+        # 根據不同的週期，動態調整圖表下方的時間格式 (60分線會顯示到小時)
+        x_fmt = "%m/%d %H:%M" if chart_tf == "60分線" else "%Y/%m" if chart_tf == "月線" else "%m/%d"
+        fig_k.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat=x_fmt, showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
         
         fig_k.update_layout(height=650, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
         st.plotly_chart(fig_k, use_container_width=True)
