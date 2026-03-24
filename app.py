@@ -67,7 +67,7 @@ def reset_all_states_on_stock_change(stock_code):
     st.session_state.quick_select = "-- 快速切換標的 --"
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
-    st.session_state.run_screener = False  # 徹底根除自動掃描 Bug
+    st.session_state.run_screener = False
 
 # ==========================================
 # 3. 外部 API 與模型模組
@@ -131,7 +131,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         return f"AI 分析連線失敗"
     except Exception as e: return f"連線異常: {str(e)}"
 
-# --- 🌍 動態判定今日/明日 (高精準時段與權重切換) ---
+# --- 🌍 動態判定今日/明日 ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -315,7 +315,6 @@ with st.sidebar:
     st.markdown("### 🔍 個股查詢")
     stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
     
-    # 🚀 徹底解決手動換股 Bug
     if stock_input != st.session_state.selected_stock:
         reset_all_states_on_stock_change(stock_input)
         st.rerun()
@@ -346,7 +345,7 @@ with st.sidebar:
         if not selected_quick.startswith("🏷️"):
             q_code = selected_quick.replace("　🔸 ", "").split(" ")[0].strip()
             if q_code != st.session_state.selected_stock:
-                reset_all_states_on_stock_change(q_code) # 🚀 下拉選單換股安全重置
+                reset_all_states_on_stock_change(q_code)
                 st.rerun()
         else:
             st.session_state.quick_select = "-- 快速切換標的 --"
@@ -389,7 +388,6 @@ with st.sidebar:
                 st.markdown("<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果</b></div>", unsafe_allow_html=True)
                 for res in results:
                     icon = "🔥" if res['peg_sort'] < 1.5 and res['roe'] and res['roe'] > 0.15 else "🔸"
-                    # 🚀 修復：點擊漏斗按鈕換股時，一樣徹底關閉掃描
                     st.button(f"{icon} {res['name']} ({res['code']})\nPEG: {res['peg_str']} | ROE: {res['roe_str']}", key=f"s_{res['code']}", on_click=reset_all_states_on_stock_change, args=(res['code'],), use_container_width=True)
 
     st.markdown("---")
@@ -726,7 +724,31 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 滿血復活 1：產業前景與競爭優勢評估 (Moat / Trend cards)
+        # 🚀 滿血復活 1：月營收圖表
+        # ==========================================
+        if df_rev_bk is not None and not df_rev_bk.empty:
+            st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
+            st.markdown("<small style='color:gray;'>*數據來源：自動抓取最新公告之每月營收與年增率 (YoY)*</small>", unsafe_allow_html=True)
+
+            fig_rev = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_rev.add_trace(go.Bar(x=df_rev_bk['Month'], y=df_rev_bk['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
+            fig_rev.add_trace(go.Scatter(x=df_rev_bk['Month'], y=df_rev_bk['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
+
+            fig_rev.update_layout(
+                height=400, template="plotly_dark", hovermode="x unified",
+                margin=dict(l=10, r=10, t=50, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+            )
+            fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
+            fig_rev.update_yaxes(title_text="年增率 YoY (%)", secondary_y=True, showgrid=True, gridcolor='#333', zeroline=True, zerolinewidth=1, zerolinecolor='#555')
+            fig_rev.update_xaxes(type='category')
+
+            st.plotly_chart(fig_rev, use_container_width=True)
+            st.markdown("---")
+
+        # ==========================================
+        # 🚀 滿血復活 2：產業前景與競爭優勢評估 (Moat / Trend cards)
         # ==========================================
         st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
         st.markdown("<small style='color:gray;'>*註：下方為客觀數據推導。您可點擊 AI 按鈕進行聯網深度檢索與買賣點分析。*</small>", unsafe_allow_html=True)
@@ -779,12 +801,84 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 滿血復活 2：法人預估目標價
+        # 🚀 滿血復活 3：AI 提示詞按鈕與複製面板
         # ==========================================
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
         lo_val = s_float(info.get('targetLowPrice'))
+        hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
+        me_str = f"{me_val:.1f}" if me_val else "無資料"
+        lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
+        context_str = f"""
+        【即時盤面與估值】
+        - 最新收盤價: {curr_p} 元
+        - 歷史本益比 (Trailing P/E): {pe_str}
+        - 前瞻本益比 (Forward P/E): {fpe_str_val}
+        - 股價淨值比 (P/B): {pb_str_val}
+        - 本益成長比 (PEG): {peg_str_val}
+
+        【財務基本面動能】
+        - 預估 EPS: {active_f_eps} 元
+        - 營收年增率 (YoY): {rg_str}
+        - 毛利率: {gm_str}
+        - 營業利益率: {om_str}
+        - 股東權益報酬率 (ROE): {roe_str}
+
+        【法人預估目標價】
+        - 最高目標價: {hi_str}
+        - 平均目標價: {me_str}
+        - 最低保底價: {lo_str}
+        """
+
+        current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
+        
+        full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
+請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
+1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
+2. 公司競爭優勢 (護城河、市占率、核心技術)
+3. 具體的買賣點建議與操作策略 (請結合我提供的基本面、本益比、目標價潛在空間與技術型態，給出具體進出場評估或價位區間參考)
+
+請深度分析台股 {c_name} ({curr_id}) 的產業前景、競爭優勢及買賣點策略。
+
+【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_str}"""
+
+        col_ai1, col_ai2 = st.columns([1.2, 1])
+        with col_ai1:
+            if st.button("🤖 啟動 AI 深度產業與操作分析 (聯網推演)", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
+                if not st.session_state.api_key:
+                    st.warning("請先於左側選單輸入您的 API Key。")
+                else:
+                    with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
+                        st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
+        
+        with col_ai2:
+            with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
+                st.markdown("<small style='color:gray;'>*點擊下方黑框右上角的 📋 複製圖示，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
+                st.code(full_prompt_for_copy, language="text")
+        
+        if st.session_state.ai_industry_result:
+            st.markdown("<br>", unsafe_allow_html=True)
+            with st.container(border=True):
+                col1, col2 = st.columns([0.7, 0.3])
+                with col1:
+                    st.markdown("### 🤖 AI 產業透視與實戰策略")
+                with col2:
+                    st.markdown("<div style='text-align:right; margin-top:20px;'><small style='color:#00bfff;'>💡 往下捲動有【一鍵複製區塊】</small></div>", unsafe_allow_html=True)
+                
+                st.markdown(st.session_state.ai_industry_result)
+                
+                st.markdown("---")
+                st.markdown("##### 📋 【純文字複製區】")
+                st.markdown("<small style='color:gray;'>*將游標移至下方黑框內，點擊右上角的「📋」圖示，即可將報告全文複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
+                st.code(st.session_state.ai_industry_result, language="markdown")
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+        st.markdown("---")
+
+        # ==========================================
+        # 🚀 滿血復活 4：法人預估目標價
+        # ==========================================
         if hi_val is not None and me_val is not None and lo_val is not None:
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
             v1, v2, v3 = st.columns(3)
@@ -799,7 +893,7 @@ if curr_id:
              st.markdown("---")
 
         # ==========================================
-        # 🚀 滿血復活 3：籌碼面與股權結構分析
+        # 🚀 滿血復活 5：籌碼面與股權結構分析
         # ==========================================
         st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
         insider_pct = s_float(info.get('heldPercentInsiders'))
@@ -852,7 +946,7 @@ if curr_id:
         st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 產業 PK (側邊欄觸發)
+        # [4] 產業 PK (側邊欄觸發)
         if st.session_state.show_pk:
             st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
             st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
@@ -905,28 +999,6 @@ if curr_id:
                         st.markdown(table_html, unsafe_allow_html=True)
                 else: st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
             st.markdown("---")
-
-        # 產業前景與 AI 報告
-        if st.button("🤖 啟動 AI 深度報告 (含一鍵複製)", use_container_width=True):
-            if st.session_state.api_key:
-                hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
-                me_str = f"{me_val:.1f}" if me_val else "無資料"
-                lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
-                
-                # 🚀 完整 Context：將目標價加入讓 AI 更精準
-                ctx = f"""
-                【即時盤面與估值】現價:{curr_p}, P/E:{pe_str}, 前瞻P/E:{fpe_str_val}, P/B:{pb_str_val}, PEG:{peg_str_val}
-                【財務基本面動能】預估EPS:{active_f_eps}, 營收YoY:{rg_str}, 毛利率:{gm_str}, 營益率:{om_str}, ROE:{roe_str}
-                【法人預估目標價】最高:{hi_str}, 平均:{me_str}, 最低保底:{lo_str}
-                """
-                st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, ctx, st.session_state.get('selected_model', 'gemini-2.5-flash'))
-        if st.session_state.ai_industry_result:
-            with st.container(border=True):
-                st.markdown("### 🤖 AI 產業透視與實戰策略")
-                st.markdown(st.session_state.ai_industry_result)
-                st.markdown("---")
-                with st.expander("📋 點擊展開【純文字版完整報告】 (附一鍵複製按鈕)"):
-                    st.code(st.session_state.ai_industry_result, language="markdown")
 
         # 本益比河流圖 (回歸最真實無平滑版本)
         if df_per_bk is not None and not df_per_bk.empty:
