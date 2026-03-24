@@ -62,7 +62,6 @@ if 'run_screener' not in st.session_state: st.session_state.run_screener = False
 if 'quick_select' not in st.session_state: st.session_state.quick_select = "-- 快速切換標的 --"
 if 'stock_input_widget' not in st.session_state: st.session_state.stock_input_widget = "2330"
 
-# 🚀 Callback 1：按鈕觸發的換股重置
 def reset_all_states_on_stock_change(stock_code):
     st.session_state.selected_stock = stock_code
     st.session_state.quick_select = "-- 快速切換標的 --"
@@ -70,42 +69,39 @@ def reset_all_states_on_stock_change(stock_code):
     st.session_state.ai_industry_result = None
     st.session_state.run_screener = False
 
-# 🚀 Callback 2：手動輸入框換股 (解決 API Exception)
 def on_stock_input_change():
     new_stock = st.session_state.stock_input_widget
     if new_stock != st.session_state.selected_stock:
-        st.session_state.selected_stock = new_stock
-        st.session_state.quick_select = "-- 快速切換標的 --"
-        st.session_state.show_pk = False
-        st.session_state.ai_industry_result = None
-        st.session_state.run_screener = False
+        reset_all_states_on_stock_change(new_stock)
 
-# 🚀 Callback 3：下拉選單換股 (解決 API Exception)
 def on_quick_select_change():
     selected = st.session_state.quick_select
     if selected != "-- 快速切換標的 --":
         if not selected.startswith("🏷️"):
             q_code = selected.replace("　🔸 ", "").split(" ")[0].strip()
             if q_code != st.session_state.selected_stock:
-                st.session_state.selected_stock = q_code
-                st.session_state.show_pk = False
-                st.session_state.ai_industry_result = None
-                st.session_state.run_screener = False
-        # 無論選了什麼，強制重置下拉選單顯示
+                reset_all_states_on_stock_change(q_code)
         st.session_state.quick_select = "-- 快速切換標的 --"
 
 # ==========================================
-# 3. 外部 API 與模型模組
+# 3. 外部 API 與模型模組 (支援自動降級防禦)
 # ==========================================
-def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
+def get_ai_analysis_final(topic, api_key, model_name="gemini-2.0-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
     api_key = api_key.strip()
     headers = {"Content-Type": "application/json"}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
     payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
+    
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        # 🚀 自動降級機制：如果遇到 404 (模型未開放)，自動切換回穩定的 2.0 Flash
+        if response.status_code == 404 and model_name != "gemini-2.0-flash":
+            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+            response = requests.post(fallback_url, headers=headers, json=payload, timeout=30)
+
         if response.status_code == 200:
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
@@ -116,13 +112,15 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
             grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
             links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
             return json.loads(clean_json), list(set(links))
-        return f"API 錯誤: {response.status_code}", []
+        else:
+            err_msg = response.json().get('error', {}).get('message', response.text)
+            return f"API 錯誤 ({response.status_code}): {err_msg}", []
     except Exception as e: return f"連線異常: {str(e)}", []
 
 def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     system_prompt = "你是一個精準的財經數據提取機器人。請上網搜尋國內外法人針對該公司「明年」或「今年」所預估的 EPS。『嚴格只回傳一個最合理的數字』（例如：30.5）。不要解釋、不要有其他文字。若查無資料，請回傳 0。"
     payload = {"contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新的法人預估 EPS"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}]}
     try:
@@ -134,7 +132,7 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
 @st.cache_data(ttl=86400)
 def get_peers_from_ai(stock_name, stock_id, api_key):
     if not api_key: return []
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key.strip()}"
     payload = {"contents": [{"parts": [{"text": f"請尋找 {stock_name} ({stock_id}) 的同業競爭對手"}]}], "systemInstruction": {"parts": [{"text": "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"}]}}
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
@@ -145,20 +143,33 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
     except: pass
     return []
 
-def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.5-flash"):
+def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.0-flash"):
     if not api_key: return "ERROR: 未輸入金鑰"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
     payload = {"contents": [{"parts": [{"text": f"請分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}"}]}], "systemInstruction": {"parts": [{"text": "你是一位精通台股的資深產業分析師與操盤手。請針對目標公司的最新動態、財報與法說會提供分析。包含產業前景、競爭優勢與具體買賣點策略。請用 Markdown 格式與 Emoji。不要輸出 HTML。"}]}, "tools": [{"google_search": {}}]}
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
-        if res.status_code == 200: return re.sub(r'```markdown\n?|```', '', res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')).strip()
-        elif res.status_code == 429: return "⏳ API 呼叫太頻繁，請稍後再試，或切換至 Flash 模型。"
-        return f"AI 分析連線失敗"
+        
+        # 🚀 自動降級機制：遇到 404 找不到高階模型，自動切換為免費極速版
+        fallback_msg = ""
+        if res.status_code == 404 and model_name != "gemini-2.0-flash":
+            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key.strip()}"
+            res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
+            fallback_msg = f"> 💡 **系統提示**：您指定的 `{model_name}` 尚未對您的 API Key 開放，系統已自動降級使用 `Gemini 2.0 Flash` 為您完成分析。若您有購買網頁版 Gemini Advanced，建議使用右方【打包提示詞】按鈕。\n\n---\n\n"
+
+        if res.status_code == 200: 
+            ans = re.sub(r'```markdown\n?|```', '', res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')).strip()
+            return fallback_msg + ans
+        elif res.status_code == 429: 
+            return "⏳ API 呼叫太頻繁，請稍後再試，或切換至免費極速版模型。"
+        else:
+            err_msg = res.json().get('error', {}).get('message', res.text)
+            return f"⚠️ API 連線失敗 (狀態碼: {res.status_code})\n\nGoogle 回傳錯誤:\n`{err_msg}`"
     except Exception as e:
         if "timeout" in str(e).lower(): return "⏳ API 連線逾時，請重試。"
         return f"連線異常: {str(e)}"
 
-# --- 🌍 動態判定今日/明日 (高精準時段與權重切換) ---
+# --- 🌍 動態判定今日/明日 ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -315,7 +326,6 @@ def get_stock_data(stock_id):
         return hist, info_data
     return None, None
 
-# 🚀 新增：專屬動態 K 線數據抓取函數 (支援 60分, 日, 週, 月)
 @st.cache_data(ttl=900)
 def get_chart_data(stock_id, timeframe):
     stock_id = str(stock_id).strip()
@@ -364,7 +374,6 @@ def translate_to_zh(text):
 # ==========================================
 with st.sidebar:
     st.markdown("### 🔍 個股查詢")
-    # 🚀 使用 Callback 安全處理手動輸入換股
     st.text_input("輸入台股代號", value=st.session_state.selected_stock, key="stock_input_widget", on_change=on_stock_input_change)
     
     options = ["-- 快速切換標的 --"]
@@ -388,7 +397,6 @@ with st.sidebar:
                         categories[current_cat] = []
         except: pass
             
-    # 🚀 使用 Callback 安全處理下拉選單換股
     st.selectbox("⚡ 快速選股名單", options, key="quick_select", on_change=on_quick_select_change)
 
     st.markdown("---")
@@ -443,26 +451,22 @@ with st.sidebar:
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
-    # 🚀 AI 模型選單 (加入 Gemini 3.1 系列)
+    # 🚀 AI 模型選單更新：保留最強選項
     ai_model_option = st.radio("選擇 AI 大腦", [
-        "Gemini 2.5 Flash", 
-        "Gemini 2.5 Pro", 
-        "Gemini 3.1 Flash (免費版)", 
-        "Gemini 3.1 Pro (付費版)"
+        "Gemini 2.0 Flash (最新免費極速版)", 
+        "Gemini 1.5 Pro (深度付費推理版)",
+        "Gemini 2.5 / 3.1 Pro (若您的 API 已開通)"
     ])
     st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key)
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
         if topic_q and st.session_state.api_key:
-            # 🚀 根據選單設定選擇底層模型
-            if "3.1 Pro" in ai_model_option:
-                st.session_state.selected_model = "gemini-3.1-pro"
-            elif "3.1 Flash" in ai_model_option:
-                st.session_state.selected_model = "gemini-3.1-flash"
-            elif "2.5 Pro" in ai_model_option:
-                st.session_state.selected_model = "gemini-2.5-pro"
+            if "2.5 / 3.1 Pro" in ai_model_option:
+                st.session_state.selected_model = "gemini-2.5-pro" # 作為測試代表，若失敗會自動降級
+            elif "1.5 Pro" in ai_model_option:
+                st.session_state.selected_model = "gemini-1.5-pro"
             else:
-                st.session_state.selected_model = "gemini-2.5-flash"
+                st.session_state.selected_model = "gemini-2.0-flash"
                 
             st.session_state.topic_results = "LOADING"
             st.session_state.ai_industry_result = None
@@ -486,7 +490,7 @@ st.markdown("## 📈 台股聯網 AI 投資戰情室")
 
 if st.session_state.topic_results == "LOADING":
     with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
-        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, st.session_state.get('selected_model', 'gemini-2.5-flash'))
+        data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, st.session_state.get('selected_model', 'gemini-2.0-flash'))
         if isinstance(data, dict):
             st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
             st.session_state.show_whale = False
@@ -886,14 +890,7 @@ if curr_id:
         - 最低保底價: {lo_str}
         """
 
-        if "3.1 Pro" in ai_model_option:
-            current_model = "gemini-3.1-pro"
-        elif "3.1 Flash" in ai_model_option:
-            current_model = "gemini-3.1-flash"
-        elif "2.5 Pro" in ai_model_option:
-            current_model = "gemini-2.5-pro"
-        else:
-            current_model = "gemini-2.5-flash"
+        current_model = st.session_state.get('selected_model', 'gemini-2.0-flash')
         
         full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
 請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
@@ -911,7 +908,7 @@ if curr_id:
                 if not st.session_state.api_key:
                     st.warning("請先於左側選單輸入您的 API Key。")
                 else:
-                    with st.spinner(f"AI ({current_model}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
+                    with st.spinner(f"AI 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
                         st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model)
         
         with col_ai2:
