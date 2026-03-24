@@ -442,12 +442,28 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
-    ai_model_option = st.radio("選擇 AI 大腦", ["Gemini 2.5 Flash", "Gemini 2.5 Pro"])
+    
+    # 🚀 AI 模型選單 (加入 Gemini 3.1 系列)
+    ai_model_option = st.radio("選擇 AI 大腦", [
+        "Gemini 2.5 Flash", 
+        "Gemini 2.5 Pro", 
+        "Gemini 3.1 Flash (免費版)", 
+        "Gemini 3.1 Pro (付費版)"
+    ])
     st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key)
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
         if topic_q and st.session_state.api_key:
-            st.session_state.selected_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
+            # 🚀 根據選單設定選擇底層模型
+            if "3.1 Pro" in ai_model_option:
+                st.session_state.selected_model = "gemini-3.1-pro"
+            elif "3.1 Flash" in ai_model_option:
+                st.session_state.selected_model = "gemini-3.1-flash"
+            elif "2.5 Pro" in ai_model_option:
+                st.session_state.selected_model = "gemini-2.5-pro"
+            else:
+                st.session_state.selected_model = "gemini-2.5-flash"
+                
             st.session_state.topic_results = "LOADING"
             st.session_state.ai_industry_result = None
             st.session_state.run_screener = False
@@ -870,7 +886,14 @@ if curr_id:
         - 最低保底價: {lo_str}
         """
 
-        current_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
+        if "3.1 Pro" in ai_model_option:
+            current_model = "gemini-3.1-pro"
+        elif "3.1 Flash" in ai_model_option:
+            current_model = "gemini-3.1-flash"
+        elif "2.5 Pro" in ai_model_option:
+            current_model = "gemini-2.5-pro"
+        else:
+            current_model = "gemini-2.5-flash"
         
         full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
 請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
