@@ -49,7 +49,7 @@ def to_pct(val):
         return "N/A"
 
 # ==========================================
-# 2. Session State 初始化
+# 2. Session State 初始化 & 狀態重置函數
 # ==========================================
 if 'selected_stock' not in st.session_state: st.session_state.selected_stock = "2330"
 if 'topic_results' not in st.session_state: st.session_state.topic_results = None
@@ -61,12 +61,13 @@ if 'ai_industry_result' not in st.session_state: st.session_state.ai_industry_re
 if 'run_screener' not in st.session_state: st.session_state.run_screener = False
 if 'quick_select' not in st.session_state: st.session_state.quick_select = "-- 快速切換標的 --"
 
-def change_stock(stock_code):
+# 🚀 絕對防禦：任何換股動作都呼叫此函數，保證關閉所有掃描與分析狀態
+def reset_all_states_on_stock_change(stock_code):
     st.session_state.selected_stock = stock_code
     st.session_state.quick_select = "-- 快速切換標的 --"
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
-    st.session_state.run_screener = False # 🚀 修正：點擊按鈕換股時關閉掃描
+    st.session_state.run_screener = False  # 徹底根除自動掃描 Bug
 
 # ==========================================
 # 3. 外部 API 與模型模組
@@ -130,6 +131,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         return f"AI 分析連線失敗"
     except Exception as e: return f"連線異常: {str(e)}"
 
+# --- 🌍 動態判定今日/明日 (高精準時段與權重切換) ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -178,6 +180,7 @@ def get_global_market_trend():
         }
     except: return None
 
+# --- 數據獲取引擎 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id):
     try:
@@ -269,10 +272,8 @@ def get_stock_data(stock_id):
             
     if hist is None or hist.empty:
         try:
-            today = datetime.date.today()
-            start_str = f"{today.year - 5}-{today.month:02d}-{today.day:02d}"
-            url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
-            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            start_str = f"{(datetime.date.today() - datetime.timedelta(days=1825)).isoformat()}"
+            res = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}", headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             data = res.json()
             if data.get('status') == 200 and data.get('data'):
                 df = pd.DataFrame(data['data'])
@@ -314,6 +315,11 @@ with st.sidebar:
     st.markdown("### 🔍 個股查詢")
     stock_input = st.text_input("輸入台股代號", value=st.session_state.selected_stock)
     
+    # 🚀 徹底解決手動換股 Bug
+    if stock_input != st.session_state.selected_stock:
+        reset_all_states_on_stock_change(stock_input)
+        st.rerun()
+    
     options = ["-- 快速切換標的 --"]
     categories = {}
     current_cat = "未分類"
@@ -340,18 +346,12 @@ with st.sidebar:
         if not selected_quick.startswith("🏷️"):
             q_code = selected_quick.replace("　🔸 ", "").split(" ")[0].strip()
             if q_code != st.session_state.selected_stock:
-                st.session_state.selected_stock = q_code
-                st.session_state.run_screener = False # 🚀 修正：下拉選單換股時關閉掃描
+                reset_all_states_on_stock_change(q_code) # 🚀 下拉選單換股安全重置
                 st.rerun()
         else:
             st.session_state.quick_select = "-- 快速切換標的 --"
             st.session_state.run_screener = False
             st.rerun()
-
-    if stock_input != st.session_state.selected_stock:
-        st.session_state.selected_stock = stock_input
-        st.session_state.run_screener = False # 🚀 修正：手動輸入換股時關閉掃描
-        st.rerun()
 
     st.markdown("---")
     st.markdown("### 🎯 策略漏斗掃描器")
@@ -389,7 +389,8 @@ with st.sidebar:
                 st.markdown("<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果</b></div>", unsafe_allow_html=True)
                 for res in results:
                     icon = "🔥" if res['peg_sort'] < 1.5 and res['roe'] and res['roe'] > 0.15 else "🔸"
-                    st.button(f"{icon} {res['name']} ({res['code']})\nPEG: {res['peg_str']} | ROE: {res['roe_str']}", key=f"s_{res['code']}", on_click=change_stock, args=(res['code'],), use_container_width=True)
+                    # 🚀 修復：點擊漏斗按鈕換股時，一樣徹底關閉掃描
+                    st.button(f"{icon} {res['name']} ({res['code']})\nPEG: {res['peg_str']} | ROE: {res['roe_str']}", key=f"s_{res['code']}", on_click=reset_all_states_on_stock_change, args=(res['code'],), use_container_width=True)
 
     st.markdown("---")
     st.markdown("### 🐳 籌碼集中度追蹤")
@@ -398,6 +399,7 @@ with st.sidebar:
         st.session_state.topic_results = None
         st.session_state.show_pk = False
         st.session_state.ai_industry_result = None
+        st.session_state.run_screener = False
         st.rerun()
         
     st.markdown("---")
@@ -411,6 +413,7 @@ with st.sidebar:
             st.session_state.selected_model = "gemini-2.5-pro" if "Pro" in ai_model_option else "gemini-2.5-flash"
             st.session_state.topic_results = "LOADING"
             st.session_state.ai_industry_result = None
+            st.session_state.run_screener = False
             st.rerun()
             
     st.markdown("---")
@@ -446,12 +449,12 @@ if isinstance(st.session_state.topic_results, dict):
     with c1:
         st.markdown("#### 🛡️ 潛力權值股")
         for s in [x for x in t['data'].get('stocks', []) if x['type'] == "潛力"]:
-            st.button(f"{s['name']} ({s['id']})", on_click=change_stock, args=(s['id'],), key=f"tp_{s['id']}", use_container_width=True)
+            st.button(f"{s['name']} ({s['id']})", on_click=reset_all_states_on_stock_change, args=(s['id'],), key=f"tp_{s['id']}", use_container_width=True)
             st.caption(f"理由：{s['why']}")
     with c2:
         st.markdown("#### 🚀 爆發概念股")
         for s in [x for x in t['data'].get('stocks', []) if x['type'] != "潛力"]:
-            st.button(f"{s['name']} ({s['id']})", on_click=change_stock, args=(s['id'],), key=f"ts_{s['id']}", use_container_width=True)
+            st.button(f"{s['name']} ({s['id']})", on_click=reset_all_states_on_stock_change, args=(s['id'],), key=f"ts_{s['id']}", use_container_width=True)
             st.caption(f"理由：{s['why']}")
     if t['links']:
         with st.expander("🔗 查看 AI 參考來源"):
@@ -463,7 +466,7 @@ if st.session_state.show_whale:
     whales = [("2317", "鴻海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("3324", "雙鴻")]
     cols = st.columns(5)
     for idx, (code, name) in enumerate(whales):
-        with cols[idx]: st.button(f"{name}\n({code})", on_click=change_stock, args=(code,), key=f"w_{code}", use_container_width=True)
+        with cols[idx]: st.button(f"{name}\n({code})", on_click=reset_all_states_on_stock_change, args=(code,), key=f"w_{code}", use_container_width=True)
     st.markdown("---")
 
 curr_id = st.session_state.selected_stock
@@ -475,14 +478,18 @@ if curr_id:
 
     if hist is not None and not hist.empty:
         st.markdown(f"### 🏢 {c_name} ({curr_id})")
-        st.markdown(f"**🏷️ 產業分類：** {SECTOR_MAP.get(info.get('sector', '未知'), info.get('sector', '未知'))} / {info.get('industry', '未知')}")
+        sector_disp = SECTOR_MAP.get(info.get('sector', '未知'), info.get('sector', '未知'))
+        st.markdown(f"**🏷️ 產業分類：** {sector_disp} / {info.get('industry', '未知')}")
         with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
             st.write(translate_to_zh(info.get('longBusinessSummary', '暫無簡介。')))
 
-        # --- ⚡ 即時報價 ---
+        # ==========================================
+        # ⚡ 即時報價 (恢復 12 宮格完整版)
+        # ==========================================
         st.markdown("#### ⚡ 即時報價與交易資訊")
         today_data = hist.iloc[-1]
         prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
+        
         curr_p = s_float(today_data.get('Close'), 0)
         open_p = s_float(today_data.get('Open'), 0)
         high_p = s_float(today_data.get('High'), 0)
@@ -535,7 +542,9 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # --- 🌍 國際連動與動態時間趨勢推估 ---
+        # ==========================================
+        # 🌍 國際連動與動態時間趨勢推估
+        # ==========================================
         st.markdown("<br>", unsafe_allow_html=True)
         trend_data = get_global_market_trend()
         if trend_data:
@@ -557,7 +566,9 @@ if curr_id:
             """
             st.markdown(trend_html, unsafe_allow_html=True)
 
-        # --- 💼 財務基本面與獲利基準微調 ---
+        # ==========================================
+        # 💼 財務基本面與獲利基準微調
+        # ==========================================
         st.markdown("#### 💼 財務基本面與獲利基準微調")
         df_rev_bk = get_monthly_revenue(curr_id)
         df_per_bk = get_pe_pb_data(curr_id)
@@ -714,7 +725,62 @@ if curr_id:
         st.markdown(val_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 補回：法人預估目標價
+        # ==========================================
+        # 🚀 滿血復活 1：產業前景與競爭優勢評估 (Moat / Trend cards)
+        # ==========================================
+        st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
+        st.markdown("<small style='color:gray;'>*註：下方為客觀數據推導。您可點擊 AI 按鈕進行聯網深度檢索與買賣點分析。*</small>", unsafe_allow_html=True)
+
+        hot_industries = ['Semiconductor', 'Software', 'Hardware', 'Electronic', 'IT Services', 'Communication', 'Technology']
+        is_hot = any(hot in sector_disp for hot in hot_industries) or any(hot in info.get('industry', '未知') for hot in hot_industries)
+        
+        if is_hot:
+            trend_icon, trend_title, trend_desc, trend_color = "🚀", "長線成長大趨勢", f"所屬板塊 ({info.get('industry', '未知')}) 涵蓋高階運算、AI 應用或資料中心等剛性需求，具備長期市場成長潛力。", "#ff4d4d"
+        else:
+            trend_icon, trend_title, trend_desc, trend_color = "🏭", "穩定或景氣循環產業", f"所屬板塊 ({info.get('industry', '未知')}) 發展相對成熟，需特別留意整體景氣波動或公司的特殊利基點。", "#FFD700"
+
+        if gross_margin is None:
+            moat_icon, moat_title, moat_desc, moat_color = "❓", "數據不足", "缺乏毛利率數據無法精確評估。", "gray"
+        elif gross_margin >= 0.40:
+            moat_icon, moat_title, moat_desc, moat_color = "🏰", "極寬廣 (強大護城河)", f"毛利率高達 {gross_margin*100:.1f}%！顯示公司具備極高的技術門檻、專利佈局或客戶轉換成本，對手極難搶奪市佔率。", "#ff4d4d"
+        elif gross_margin >= 0.20:
+            moat_icon, moat_title, moat_desc, moat_color = "🛡️", "中等壁壘", f"毛利率 {gross_margin*100:.1f}%。具備一定的技術領先或營運規模，存在競爭壁壘。", "#FFD700"
+        else:
+            moat_icon, moat_title, moat_desc, moat_color = "⚔️", "競爭激烈 (低護城河)", f"毛利率僅 {gross_margin*100:.1f}%。產品同質性偏高，容易落入價格戰，無法輕易阻擋對手跨入。", "#00cc66"
+
+        if op_margin is None:
+            pos_icon, pos_title, pos_desc, pos_color = "❓", "數據不足", "缺乏營益率數據無法精確評估。", "gray"
+        elif op_margin >= 0.15:
+            pos_icon, pos_title, pos_desc, pos_color = "👑", "核心主導者 (具定價權)", f"營益率高達 {op_margin*100:.1f}%。在產業鏈中掌握關鍵零組件、設備或 IP 設計，景氣波動時具備高度抗跌能力與話語權。", "#ff4d4d"
+        elif op_margin >= 0.05:
+            pos_icon, pos_title, pos_desc, pos_color = "⚙️", "關鍵供應商", f"營益率 {op_margin*100:.1f}%。在整體供應鏈中扮演不可或缺的一環，營運與定價能力相對穩健。", "#FFD700"
+        else:
+            pos_icon, pos_title, pos_desc, pos_color = "📦", "弱勢地位 (低階代工/組裝)", f"營益率僅 {op_margin*100:.1f}%。毛利微薄且被成本擠壓，在供應鏈中缺乏定價權，極易受原物料上漲與終端砍單衝擊。", "#00cc66"
+
+        st.markdown(f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {trend_color};'>
+                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>{trend_icon} 市場趨勢</div>
+                <div style='color:{trend_color}; font-weight:bold; margin-bottom:5px;'>{trend_title}</div>
+                <div style='color:#aaa; font-size:0.9rem; line-height:1.5;'>{trend_desc}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {moat_color};'>
+                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>{moat_icon} 護城河 (競爭壁壘)</div>
+                <div style='color:{moat_color}; font-weight:bold; margin-bottom:5px;'>{moat_title}</div>
+                <div style='color:#aaa; font-size:0.9rem; line-height:1.5;'>{moat_desc}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pos_color};'>
+                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>{pos_icon} 供應鏈地位</div>
+                <div style='color:{pos_color}; font-weight:bold; margin-bottom:5px;'>{pos_title}</div>
+                <div style='color:#aaa; font-size:0.9rem; line-height:1.5;'>{pos_desc}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("---")
+
+        # ==========================================
+        # 🚀 滿血復活 2：法人預估目標價
+        # ==========================================
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
         lo_val = s_float(info.get('targetLowPrice'))
@@ -732,7 +798,61 @@ if curr_id:
              st.info(f"法人最高預期：**{hi_val:.1f}**")
              st.markdown("---")
 
-        # [4] 產業 PK (側邊欄觸發)
+        # ==========================================
+        # 🚀 滿血復活 3：籌碼面與股權結構分析
+        # ==========================================
+        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
+        insider_pct = s_float(info.get('heldPercentInsiders'))
+        inst_pct = s_float(info.get('heldPercentInstitutions'))
+        shares_out = s_float(info.get('sharesOutstanding'))
+        share_capital = shares_out * 10 if shares_out is not None else None
+
+        if share_capital is not None:
+            if share_capital >= 10_000_000_000:
+                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
+            elif share_capital <= 3_000_000_000:
+                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
+            else:
+                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
+        else:
+            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
+
+        inst_str = to_pct(inst_pct)
+        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
+
+        insider_str = to_pct(insider_pct)
+        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
+
+        chip_html = f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
+                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
+                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
+                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
+                </div>
+                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
+            </div>
+        </div>
+        """
+        st.markdown(chip_html, unsafe_allow_html=True)
+        st.markdown("---")
+
+        # 產業 PK (側邊欄觸發)
         if st.session_state.show_pk:
             st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
             st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
@@ -786,35 +906,20 @@ if curr_id:
                 else: st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
             st.markdown("---")
 
-        # [5] 產業前景與 AI 報告
+        # 產業前景與 AI 報告
         if st.button("🤖 啟動 AI 深度報告 (含一鍵複製)", use_container_width=True):
             if st.session_state.api_key:
                 hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
                 me_str = f"{me_val:.1f}" if me_val else "無資料"
                 lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
                 
-                # 🚀 強化版 Context：讓 AI 同時評估法人目標價
-                context_str = f"""
-                【即時盤面與估值】
-                - 最新收盤價: {curr_p} 元
-                - 歷史本益比 (Trailing P/E): {pe_str}
-                - 前瞻本益比 (Forward P/E): {fpe_str_val}
-                - 股價淨值比 (P/B): {pb_str_val}
-                - 本益成長比 (PEG): {peg_str_val}
-                
-                【財務基本面動能】
-                - 預估 EPS: {active_f_eps} 元
-                - 營收年增率 (YoY): {rg_str}
-                - 毛利率: {gm_str}
-                - 營業利益率: {om_str}
-                - 股東權益報酬率 (ROE): {roe_str}
-                
-                【法人預估目標價】
-                - 最高目標價: {hi_str}
-                - 平均目標價: {me_str}
-                - 最低保底價: {lo_str}
+                # 🚀 完整 Context：將目標價加入讓 AI 更精準
+                ctx = f"""
+                【即時盤面與估值】現價:{curr_p}, P/E:{pe_str}, 前瞻P/E:{fpe_str_val}, P/B:{pb_str_val}, PEG:{peg_str_val}
+                【財務基本面動能】預估EPS:{active_f_eps}, 營收YoY:{rg_str}, 毛利率:{gm_str}, 營益率:{om_str}, ROE:{roe_str}
+                【法人預估目標價】最高:{hi_str}, 平均:{me_str}, 最低保底:{lo_str}
                 """
-                st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, st.session_state.get('selected_model', 'gemini-2.5-flash'))
+                st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, ctx, st.session_state.get('selected_model', 'gemini-2.5-flash'))
         if st.session_state.ai_industry_result:
             with st.container(border=True):
                 st.markdown("### 🤖 AI 產業透視與實戰策略")
@@ -823,7 +928,7 @@ if curr_id:
                 with st.expander("📋 點擊展開【純文字版完整報告】 (附一鍵複製按鈕)"):
                     st.code(st.session_state.ai_industry_result, language="markdown")
 
-        # [6] 本益比河流圖 (回歸最真實無平滑版本)
+        # 本益比河流圖 (回歸最真實無平滑版本)
         if df_per_bk is not None and not df_per_bk.empty:
             st.markdown("### 🌊 近五年本益比河流圖 (P/E River)")
             st.markdown("<small style='color:gray;'>*實戰價值：以最真實未平滑的財報數據繪製。一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
@@ -871,7 +976,7 @@ if curr_id:
                 st.plotly_chart(fig_river, use_container_width=True)
         st.markdown("---")
 
-        # [7] 專業技術線圖與 KD 指標
+        # 專業技術線圖與 KD 指標
         st.markdown("### 🤖 專業技術線圖與量化型態分析 (近半年)")
         plot_df = hist.tail(120).copy()
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
