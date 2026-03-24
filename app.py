@@ -451,7 +451,6 @@ with st.sidebar:
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
-    # 🚀 AI 模型選單更新：保留最強選項
     ai_model_option = st.radio("選擇 AI 大腦", [
         "Gemini 2.0 Flash (最新免費極速版)", 
         "Gemini 1.5 Pro (深度付費推理版)",
@@ -462,7 +461,7 @@ with st.sidebar:
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
         if topic_q and st.session_state.api_key:
             if "2.5 / 3.1 Pro" in ai_model_option:
-                st.session_state.selected_model = "gemini-2.5-pro" # 作為測試代表，若失敗會自動降級
+                st.session_state.selected_model = "gemini-2.5-pro"
             elif "1.5 Pro" in ai_model_option:
                 st.session_state.selected_model = "gemini-1.5-pro"
             else:
@@ -1207,9 +1206,24 @@ if curr_id:
         fig_k.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
         fig_k.update_yaxes(range=[0, 100], dtick=20, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
         
-        # 根據不同的週期，動態調整圖表下方的時間格式 (60分線會顯示到小時)
-        x_fmt = "%m/%d %H:%M" if chart_tf == "60分線" else "%Y/%m" if chart_tf == "月線" else "%m/%d"
-        fig_k.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickformat=x_fmt, showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
+        # 🚀 動態調整圖表時間格式與隱藏區間 (解決夜間與週末破圖問題)
+        if chart_tf == "60分線":
+            x_fmt = "%m/%d %H:%M"
+            rb = [
+                dict(bounds=["sat", "mon"]),           # 隱藏週末
+                dict(bounds=[13.5, 9], pattern="hour") # 隱藏盤後時間 (13:30~09:00)
+            ]
+        elif chart_tf == "月線":
+            x_fmt = "%Y/%m"
+            rb = [] # 🚨 月線絕對不能隱藏週末，否則 1 號遇到假日整個月的 K 棒會消失！
+        elif chart_tf == "週線":
+            x_fmt = "%Y/%m/%d"
+            rb = [] # 週線同理，不刻意隱藏週末
+        else: # 日線
+            x_fmt = "%m/%d"
+            rb = [dict(bounds=["sat", "mon"])] # 日線僅隱藏週末
+
+        fig_k.update_xaxes(rangebreaks=rb, tickformat=x_fmt, showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
         
         fig_k.update_layout(height=650, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
         st.plotly_chart(fig_k, use_container_width=True)
