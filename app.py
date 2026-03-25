@@ -86,7 +86,7 @@ def on_quick_select_change():
         st.session_state.quick_select = "-- 快速切換標的 --"
 
 # ==========================================
-# 3. 外部 API 與模型模組 (對接 Gemini 最新模型與自動降級)
+# 3. 外部 API 與模型模組
 # ==========================================
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
@@ -99,7 +99,6 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         
-        # 自動降級機制
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             response = requests.post(fallback_url, headers=headers, json=payload, timeout=30)
@@ -259,9 +258,16 @@ def get_monthly_revenue(stock_id):
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
             df['date'] = pd.to_datetime(df['date'])
-            df = df[df['date'] < pd.to_datetime(f"{today.year}-{today.month:02d}-01")].sort_values('date').reset_index(drop=True)
+            current_month_start = pd.to_datetime(f"{today.year}-{today.month:02d}-01")
+            df = df[df['date'] < current_month_start].sort_values('date').reset_index(drop=True)
             df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
-            df['YoY'] = df['revenue'].pct_change(periods=12) * 100
+            
+            # 🚀 升級 YoY 計算：強制讀取官方提供的準確成長率，解決空缺月份計算失真的問題
+            if 'revenue_year_on_year_growth' in df.columns:
+                df['YoY'] = pd.to_numeric(df['revenue_year_on_year_growth'], errors='coerce')
+            else:
+                df['YoY'] = df['revenue'].pct_change(periods=12) * 100
+                
             df['Month'] = df['date'].dt.strftime('%Y/%m')
             df['Revenue'] = df['revenue'] / 100000000 
             final_df = df.dropna(subset=['YoY']).tail(12).copy()
@@ -290,22 +296,28 @@ def get_pe_pb_data(stock_id):
     except: pass
     return None
 
+# 🚀 升級百毒不侵的備用爬蟲 (專治上櫃股票資料遺失)
 def get_fallback_info(stock_id):
     info = {}
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, timeout=5)
         text = res.text
         
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
             if idx != -1:
-                chunk = text[idx:idx+200]
-                match = re.search(r'>(?:\s*|&nbsp;)*([-0-9]{1,3}(?:\.[0-9]+)?)\s*%?\s*<', chunk)
-                if match:
+                # 往後截取 HTML，容錯度拉高
+                chunk = text[idx:idx+300]
+                # 尋找 HTML 標籤 > < 之間的最真實數字 (支援千分位、小數、負號與百分比)
+                matches = re.findall(r'>\s*([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(%)?\s*<', chunk)
+                if matches:
                     try:
-                        val = float(match.group(1).replace(',', ''))
-                        return val / 100.0 if is_pct else val
+                        val_str = matches[0][0].replace(',', '')
+                        val = float(val_str)
+                        if is_pct or matches[0][1] == '%':
+                            return val / 100.0
+                        return val
                     except: pass
             return None
 
@@ -315,6 +327,7 @@ def get_fallback_info(stock_id):
         info['grossMargins'] = fuzzy_ext('毛利率', True) or fuzzy_ext('營業毛利率', True)
         info['operatingMargins'] = fuzzy_ext('營業利益率', True) or fuzzy_ext('營益率', True)
         info['returnOnEquity'] = fuzzy_ext('ROE', True) or fuzzy_ext('權益報酬率', True)
+        
         sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text)
         if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
     except: pass
@@ -351,7 +364,12 @@ def get_stock_data(stock_id):
         except: pass
 
     if hist is not None and not hist.empty:
-        if not info_data.get('returnOnEquity'): info_data.update(get_fallback_info(stock_id))
+        # 🚀 強制將 Yahoo 備用數據補入 yfinance 缺失的欄位中 (針對 OTC 上櫃股票如 6442 專用)
+        fallback = get_fallback_info(stock_id)
+        for k, v in fallback.items():
+            if v is not None:
+                if k not in info_data or info_data[k] is None or str(info_data[k]).lower() == 'nan':
+                    info_data[k] = v
         return hist, info_data
     return None, None
 
@@ -481,7 +499,6 @@ with st.sidebar:
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
-    # 🚀 終極版選單：完整還原 Gemini 最強系列模型
     ai_model_option = st.radio("選擇 AI 大腦", [
         "Gemini 2.5 Flash", 
         "Gemini 2.5 Pro",
@@ -492,7 +509,6 @@ with st.sidebar:
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
         if topic_q and st.session_state.api_key:
-            # 🚀 精準對接 API 模型字串
             if "3.1 Flash-Lite" in ai_model_option:
                 st.session_state.selected_model = "gemini-3.1-flash-lite-preview"
             elif "3 Flash" in ai_model_option:
