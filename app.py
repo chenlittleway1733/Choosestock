@@ -109,7 +109,7 @@ def on_quick_select_change():
         st.session_state.quick_select = "-- 快速切換標的 --"
 
 # ==========================================
-# 3. 外部 API 與模型模組
+# 3. 外部 API 與模型模組 (已修復 URL 污染與 yfinance 阻斷問題)
 # ==========================================
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
@@ -355,20 +355,26 @@ def get_fallback_info(stock_id):
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     stock_id = str(stock_id).strip()
-    hist, info_data = None, {}
+    hist = None
+    info_data = {}
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
             temp_hist = ticker.history(period="5y")
             if not temp_hist.empty:
-                hist, info_data = temp_hist, ticker.info
+                hist = temp_hist
+                try:
+                    info_data = ticker.info
+                except:
+                    info_data = {}
                 break
         except: continue
             
     if hist is None or hist.empty:
         try:
             start_str = f"{(datetime.date.today() - datetime.timedelta(days=1825)).isoformat()}"
-            res = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}", headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
+            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             data = res.json()
             if data.get('status') == 200 and data.get('data'):
                 df = pd.DataFrame(data['data'])
