@@ -77,6 +77,7 @@ if 'selected_stock' not in st.session_state: st.session_state.selected_stock = "
 if 'topic_results' not in st.session_state: st.session_state.topic_results = None
 if 'show_whale' not in st.session_state: st.session_state.show_whale = False
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
+if 'fugle_key' not in st.session_state: st.session_state.fugle_key = "" # 🚀 儲存 Fugle 金鑰
 if 'ai_fetched_eps' not in st.session_state: st.session_state.ai_fetched_eps = {}
 if 'ai_fetched_financials' not in st.session_state: st.session_state.ai_fetched_financials = {}
 if 'show_pk' not in st.session_state: st.session_state.show_pk = False
@@ -109,8 +110,26 @@ def on_quick_select_change():
         st.session_state.quick_select = "-- 快速切換標的 --"
 
 # ==========================================
-# 3. 外部 API 與模型模組
+# 3. 外部 API 與模型模組 (🚀 新增 Fugle API 整合)
 # ==========================================
+def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
+    """使用 Fugle API 抓取高精度 K 線資料"""
+    if not api_key: return pd.DataFrame()
+    url = f"https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/{stock_id}?timeframe={timeframe}"
+    headers = {"X-API-KEY": api_key.strip()}
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json().get('data', [])
+            if data:
+                df = pd.DataFrame(data)
+                df['Date'] = pd.to_datetime(df['date'])
+                df.set_index('Date', inplace=True)
+                df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                return df[['Open', 'High', 'Low', 'Close', 'Volume']].sort_index()
+    except: pass
+    return pd.DataFrame()
+
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
     api_key = api_key.strip()
@@ -353,16 +372,26 @@ def get_fallback_info(stock_id):
     return info
 
 @st.cache_data(ttl=3600)
-def get_stock_data(stock_id):
+def get_stock_data(stock_id, fugle_key=""):
     stock_id = str(stock_id).strip()
-    hist, info_data = None, {}
+    hist = None
+    info_data = {}
+    
+    # 🚀 優先使用 Fugle 取得準確股價與成交量
+    if fugle_key:
+        hist = fetch_fugle_kline(stock_id, fugle_key, "D")
+    
+    # 備用機制或取得基本面資訊
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
-            temp_hist = ticker.history(period="5y")
-            if not temp_hist.empty:
-                hist, info_data = temp_hist, ticker.info
-                break
+            if hist is None or hist.empty:
+                temp_hist = ticker.history(period="5y")
+                if not temp_hist.empty:
+                    hist = temp_hist
+            try: info_data = ticker.info
+            except: pass
+            if info_data: break
         except: continue
             
     if hist is None or hist.empty:
@@ -389,8 +418,17 @@ def get_stock_data(stock_id):
     return None, None
 
 @st.cache_data(ttl=900)
-def get_chart_data(stock_id, timeframe):
+def get_chart_data(stock_id, timeframe, fugle_key=""):
     stock_id = str(stock_id).strip()
+    tf_map = {"日線": "D", "週線": "W", "月線": "M", "60分線": "60"}
+    
+    # 🚀 優先使用 Fugle 繪製高精準 K 線
+    if fugle_key:
+        tf = tf_map.get(timeframe, "D")
+        df = fetch_fugle_kline(stock_id, fugle_key, tf)
+        if not df.empty: return df
+
+    # Fallback 到 yfinance
     interval_map = {"日線": {"period": "1y", "interval": "1d"}, "週線": {"period": "2y", "interval": "1wk"}, "月線": {"period": "5y", "interval": "1mo"}, "60分線": {"period": "1mo", "interval": "60m"}}
     params = interval_map.get(timeframe, {"period": "1y", "interval": "1d"})
     for ext in [".TW", ".TWO"]:
@@ -466,7 +504,7 @@ with st.sidebar:
                 results = []
                 pbar = st.progress(0)
                 for i, (c, n) in enumerate(target_stocks):
-                    _, inf = get_stock_data(c)
+                    _, inf = get_stock_data(c, st.session_state.fugle_key)
                     if inf:
                         pe = s_float(inf.get('trailingPE'))
                         roe = s_float(inf.get('returnOnEquity'))
@@ -504,7 +542,6 @@ with st.sidebar:
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
-    # 🚀 AI 模型選單：完美對接 3.1 Pro
     ai_model_option = st.radio("選擇 AI 大腦", [
         "Gemini 2.5 Flash", 
         "Gemini 2.5 Pro",
@@ -534,6 +571,11 @@ with st.sidebar:
         if not st.session_state.api_key: st.warning("請先輸入您的 API Key。")
         else: st.session_state.show_pk = True; st.rerun()
 
+    st.markdown("---")
+    # 🚀 新增 Fugle 金鑰輸入框
+    st.markdown("### 📈 進階資料源設定")
+    st.session_state.fugle_key = st.text_input("🔑 Fugle (富果) API Key (選填)", type="password", value=st.session_state.fugle_key, help="輸入後將優先使用 Fugle 抓取 100% 準確的高級 K 線與報價資料")
+    
     st.markdown("---")
     if st.button("🔄 重新整理快取", use_container_width=True):
         st.cache_data.clear(); st.rerun()
@@ -584,7 +626,7 @@ if st.session_state.show_whale:
 curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
-        hist, info = get_stock_data(curr_id)
+        hist, info = get_stock_data(curr_id, st.session_state.fugle_key)
         if info is None: info = {}
         c_name = get_chinese_name(curr_id) or info.get('shortName', curr_id)
 
@@ -608,7 +650,7 @@ if curr_id:
         low_p = s_float(today_data.get('Low'), 0)
         vol_shares = s_float(today_data.get('Volume'), 0)
         
-        vol_lots = int(vol_shares // 1000)
+        vol_lots = int(vol_shares // 1000) if vol_shares else 0
         prev_vol_lots = int(s_float(prev_data.get('Volume'), 0) // 1000) if len(hist) > 1 else 0
         
         prev_close = s_float(info.get('previousClose'), s_float(prev_data.get('Close'), 0))
@@ -697,7 +739,6 @@ if curr_id:
         df_rev_bk = get_monthly_revenue(curr_id)
         df_per_bk = get_pe_pb_data(curr_id)
         
-        # 取得系統原始數據
         pe_ratio = s_float(info.get('trailingPE'))
         if (pe_ratio is None or pe_ratio > 1000) and df_per_bk is not None and not df_per_bk.empty:
             if (pd.Timestamp.today() - df_per_bk.iloc[-1]['date']).days < 30: pe_ratio = s_float(df_per_bk['PER'].iloc[-1])
@@ -720,7 +761,6 @@ if curr_id:
             
         sys_f_eps = s_float(info.get('forwardEps'))
         
-        # 取出 AI 校對數據字典
         ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
         ai_pe = s_float(ai_fin.get('pe'))
         ai_pb = s_float(ai_fin.get('pb'))
@@ -731,7 +771,6 @@ if curr_id:
         ai_om = s_float(ai_fin.get('operating_margin'))
         ai_roe = s_float(ai_fin.get('roe'))
         
-        # 決定有效數值 (Fallback to AI)
         eff_pe = pe_ratio if pe_ratio is not None else ai_pe
         eff_pb = pb_ratio if pb_ratio is not None else ai_pb
         eff_t_eps = t_eps if t_eps is not None else ai_t_eps
@@ -741,7 +780,6 @@ if curr_id:
         eff_om = op_margin if op_margin is not None else ai_om
         eff_roe = roe if roe is not None else ai_roe
         
-        # 🚀 智慧反推與有效 Forward EPS 決策
         ai_f_eps_calc = ai_f_eps
         if ai_f_eps_calc is None and eff_t_eps is not None and eff_eg is not None and -1 <= eff_eg <= 5:
             ai_f_eps_calc = eff_t_eps * (1 + eff_eg)
@@ -822,7 +860,6 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
-        # 估值顏色與評語判斷
         if eff_pe is None: pe_color, pe_text = "gray", "數據不足"
         elif eff_pe > 25: pe_color, pe_text = "#ff4d4d", "高成長溢價"
         elif eff_pe < 15: pe_color, pe_text = "#00cc66", "相對便宜"
@@ -968,7 +1005,7 @@ if curr_id:
         elif "2.5 Pro" in ai_model_option: current_model_for_macro = "gemini-2.5-pro"
         else: current_model_for_macro = "gemini-2.5-flash"
 
-        if st.button("🌍 啟動 AI 總經與地緣政治風險推演", use_container_width=True):
+        if st.button("🌍 啟推 AI 總經與地緣政治風險推演", use_container_width=True):
             if not st.session_state.api_key:
                 st.warning("請先於左側選單輸入您的 API Key。")
             else:
@@ -989,7 +1026,6 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
-        # 🚀 安全建立傳遞給 AI 的上下文變數
         ctx_pe = f"{eff_pe:.1f}x" if eff_pe is not None else "N/A"
         ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
         ctx_pb = f"{eff_pb:.2f}x" if eff_pb is not None else "N/A"
@@ -1140,7 +1176,7 @@ if curr_id:
                     compare_list = [curr_id] + [p for p in peers if p != curr_id]
                     compare_data = []
                     for code in compare_list:
-                        _, p_info = get_stock_data(code)
+                        _, p_info = get_stock_data(code, st.session_state.fugle_key)
                         p_name = get_chinese_name(code) or code
                         if p_info:
                             pe_val = s_float(p_info.get("trailingPE"))
@@ -1230,7 +1266,7 @@ if curr_id:
         chart_tf = st.radio("切換 K 線週期：", ["60分線", "日線", "週線", "月線"], index=1, horizontal=True)
         
         with st.spinner(f"載入 {chart_tf} 數據中..."):
-            chart_df = get_chart_data(curr_id, chart_tf)
+            chart_df = get_chart_data(curr_id, chart_tf, st.session_state.fugle_key)
             
         if chart_df.empty: plot_df = hist.tail(120).copy() 
         else: plot_df = chart_df.tail(120).copy()
