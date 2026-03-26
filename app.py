@@ -1162,7 +1162,7 @@ if curr_id:
                                 upside = ((target_mean_p - prev_close_val) / prev_close_val) * 100
                                 if upside >= 25: upside_fmt = f"<span style='color:#ff4d4d; font-weight:bold;'>+{upside:.1f}%</span>"
                                 elif upside > 0: upside_fmt = f"<span style='color:#00cc66;'>+{upside:.1f}%</span>"
-                                else: upside_fmt = fspan style='color:#aaa;'>{upside:.1f}%</span>"
+                                else: upside_fmt = f"<span style='color:#aaa;'>{upside:.1f}%</span>"
                                 target_display = f"{target_mean_p:.1f} ({upside_fmt})"
                             else: target_display = "<span style='color:gray;'>無資料</span>"
                             compare_data.append({"代號": f"{p_name} ({code})", "股價": prev_close_fmt, "前瞻 P/E": fpe_fmt, "預估 EPS": eps_display, "目標價": target_display, "毛利率": gm_fmt, "營益率": om_fmt, "ROE": roe_fmt})
