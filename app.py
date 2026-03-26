@@ -503,6 +503,7 @@ with st.sidebar:
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
+    # 🚀 AI 模型選單更新
     ai_model_option = st.radio("選擇 AI 大腦", [
         "Gemini 2.5 Flash", 
         "Gemini 2.5 Pro",
@@ -987,7 +988,6 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
-        # 安全建立傳遞給 AI 的上下文變數
         ctx_pe = f"{eff_pe:.1f}x" if eff_pe is not None else "N/A"
         ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
         ctx_pb = f"{eff_pb:.2f}x" if eff_pb is not None else "N/A"
