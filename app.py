@@ -197,7 +197,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
 def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
-    system_prompt = """你是一位精通台股的資深產業分析師與操盤手。請針對目標公司的最新動態、財報與法說會提供分析。必須包含：1. 產業前景、2. 競爭優勢、3. 總體經濟與地緣政治系統風險評估(如中東局勢、通膨、關稅)、4. 具體買賣點策略。請用 Markdown 格式與 Emoji。不要輸出 HTML。"""
+    system_prompt = """你是一位精通台股的資深產業分析師與操盤手。請針對目標公司的最新動態、財報與法說會提供分析。必須包含：1. 產業前景、2. 競爭優勢、3. 總體經濟與地緣政治系統風險評估(如中東局勢、通膨、關稅對該公司的近期影響)、4. 具體買賣點策略。請用 Markdown 格式與 Emoji。不要輸出 HTML。"""
     payload = {"contents": [{"parts": [{"text": f"請深度分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}]}
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
@@ -473,9 +473,11 @@ with st.sidebar:
                         if eg is None:
                             df_rv = get_monthly_revenue(c)
                             if df_rv is not None and not df_rv.empty: eg = s_float(df_rv['YoY'].iloc[-1]) / 100.0
+                        
                         sys_peg = s_float(inf.get('pegRatio'))
                         peg_is_neg = (eg is not None and eg <= 0)
                         if (sys_peg is None or pd.isna(sys_peg)) and pe and eg and eg > 0: sys_peg = pe / (eg * 100)
+                        
                         p_sort = sys_peg if sys_peg is not None and not pd.isna(sys_peg) and not peg_is_neg else 999
                         p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None and not pd.isna(sys_peg) else "N/A")
                         results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':to_pct(roe),'peg_str':p_str})
@@ -505,13 +507,15 @@ with st.sidebar:
         "Gemini 2.5 Flash", 
         "Gemini 2.5 Pro",
         "Gemini 3 Flash Preview",
-        "Gemini 3.1 Flash-Lite Preview"
+        "Gemini 3.1 Flash-Lite Preview",
+        "Gemini 3.1 Pro Preview (付費版)"
     ])
     st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key)
     
     if st.button("AI 實時推演分析", type="primary", use_container_width=True):
         if topic_q and st.session_state.api_key:
-            if "3.1 Flash-Lite" in ai_model_option: st.session_state.selected_model = "gemini-3.1-flash-lite-preview"
+            if "3.1 Pro" in ai_model_option: st.session_state.selected_model = "gemini-3.1-pro-preview"
+            elif "3.1 Flash-Lite" in ai_model_option: st.session_state.selected_model = "gemini-3.1-flash-lite-preview"
             elif "3 Flash" in ai_model_option: st.session_state.selected_model = "gemini-3-flash-preview"
             elif "2.5 Pro" in ai_model_option: st.session_state.selected_model = "gemini-2.5-pro"
             else: st.session_state.selected_model = "gemini-2.5-flash"
@@ -657,6 +661,7 @@ if curr_id:
             target_day_text = trend_data.get('target_day', '明日')
             time_status_text = trend_data.get('time_status', '')
             st.markdown(f"#### 🌍 國際連動與{target_day_text}趨勢推估 {time_status_text}", unsafe_allow_html=True)
+            
             def c_color(v): return "#ff4d4d" if v > 0 else "#00cc66" if v < 0 else "#fff"
             trend_html = f"""
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {trend_data['color']}; margin-bottom: 20px; border-top:1px solid #333; border-right:1px solid #333; border-bottom:1px solid #333;'>
@@ -672,7 +677,7 @@ if curr_id:
             st.markdown(trend_html, unsafe_allow_html=True)
 
         # ==========================================
-        # 💼 財務基本面與獲利基準微調 (🚀 全方位 AI 對比引擎)
+        # 💼 財務基本面與獲利基準微調
         # ==========================================
         col_fin_title, col_fin_btn = st.columns([0.6, 0.4])
         with col_fin_title:
@@ -697,30 +702,52 @@ if curr_id:
         pb_ratio = s_float(info.get('priceToBook'))
         if (pb_ratio is None or pb_ratio > 500) and df_per_bk is not None and not df_per_bk.empty and 'PBR' in df_per_bk.columns:
             pb_ratio = s_float(df_per_bk['PBR'].iloc[-1])
+            
         roe = s_float(info.get('returnOnEquity'))
         gross_margin = s_float(info.get('grossMargins'))
         op_margin = s_float(info.get('operatingMargins'))
+        
         rev_growth = s_float(info.get('revenueGrowth'))
         if rev_growth is None and df_rev_bk is not None and not df_rev_bk.empty:
             rev_growth = s_float(df_rev_bk['YoY'].iloc[-1]) / 100.0
         earn_growth = s_float(info.get('earningsGrowth'))
+        
         t_eps = s_float(info.get('trailingEps'))
+        if t_eps is None and pe_ratio is not None and pe_ratio > 0 and curr_p > 0:
+            t_eps = curr_p / pe_ratio
+            
         sys_f_eps = s_float(info.get('forwardEps'))
         
         # 取出 AI 校對數據字典
         ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
+        ai_pe = s_float(ai_fin.get('pe'))
+        ai_pb = s_float(ai_fin.get('pb'))
+        ai_t_eps = s_float(ai_fin.get('trailing_eps'))
+        ai_f_eps = s_float(ai_fin.get('forward_eps'))
+        ai_yoy = s_float(ai_fin.get('yoy'))
+        ai_gm = s_float(ai_fin.get('gross_margin'))
+        ai_om = s_float(ai_fin.get('operating_margin'))
+        ai_roe = s_float(ai_fin.get('roe'))
         
-        # 決定有效數值(供底層邏輯判斷用)
-        eff_pe = pe_ratio if pe_ratio is not None else s_float(ai_fin.get('pe'))
-        eff_pb = pb_ratio if pb_ratio is not None else s_float(ai_fin.get('pb'))
-        eff_t_eps = t_eps if t_eps is not None else s_float(ai_fin.get('trailing_eps'))
-        eff_f_eps = sys_f_eps if sys_f_eps is not None else s_float(ai_fin.get('forward_eps'))
-        eff_rg = rev_growth if rev_growth is not None else s_float(ai_fin.get('yoy'))
-        eff_gm = gross_margin if gross_margin is not None else s_float(ai_fin.get('gross_margin'))
-        eff_om = op_margin if op_margin is not None else s_float(ai_fin.get('operating_margin'))
-        eff_roe = roe if roe is not None else s_float(ai_fin.get('roe'))
-        eff_earn_growth = earn_growth if earn_growth is not None else s_float(ai_fin.get('yoy'))
+        # 決定有效數值 (Fallback to AI)
+        eff_pe = pe_ratio if pe_ratio is not None else ai_pe
+        eff_pb = pb_ratio if pb_ratio is not None else ai_pb
+        eff_t_eps = t_eps if t_eps is not None else ai_t_eps
+        eff_rg = rev_growth if rev_growth is not None else ai_yoy
+        eff_eg = earn_growth if earn_growth is not None else ai_yoy
+        eff_gm = gross_margin if gross_margin is not None else ai_gm
+        eff_om = op_margin if op_margin is not None else ai_om
+        eff_roe = roe if roe is not None else ai_roe
         
+        # 🚀 智慧反推與有效 Forward EPS 決策
+        ai_f_eps_calc = ai_f_eps
+        if ai_f_eps_calc is None and eff_t_eps is not None and eff_eg is not None and -1 <= eff_eg <= 5:
+            ai_f_eps_calc = eff_t_eps * (1 + eff_eg)
+            
+        sys_f_eps_calc = sys_f_eps
+        if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
+            sys_f_eps_calc = t_eps * (1 + earn_growth)
+
         col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
         with col_eps1: use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
         with col_eps3:
@@ -728,70 +755,55 @@ if curr_id:
                 val = get_eps_from_ai(c_name, curr_id, st.session_state.api_key)
                 if val: st.session_state.ai_fetched_eps[curr_id] = val; st.rerun()
         with col_eps2:
-            default_eps = st.session_state.ai_fetched_eps.get(curr_id, eff_f_eps if eff_f_eps else (eff_t_eps if eff_t_eps else 1.0))
+            default_eps = st.session_state.ai_fetched_eps.get(curr_id, ai_f_eps_calc if ai_f_eps_calc else (sys_f_eps_calc if sys_f_eps_calc else 1.0))
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
         if use_custom_eps:
-            active_f_eps = custom_eps
-            forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
-            if eff_t_eps and eff_t_eps > 0 and eff_pe:
-                cg = (active_f_eps - eff_t_eps) / eff_t_eps
-                peg_ratio = eff_pe / (cg * 100) if cg > 0 else -999
-                eg_color = "#ff4d4d" if cg > 0 else "#00cc66"
-                eg_str_disp = f"{cg * 100:.2f}%"
-            else:
-                peg_ratio = None
-                eg_color = "gray"
-                eg_str_disp = "N/A"
-            eps_source_text = f"自訂法人共識 ({active_f_eps:.2f}元)"
-            peg_str_disp = f"{peg_ratio:.2f}" if peg_ratio is not None and peg_ratio != -999 else ("分母為負,無意義" if peg_ratio == -999 else "N/A")
+            eff_f_eps = custom_eps
+            eff_cg = (eff_f_eps - eff_t_eps) / eff_t_eps if eff_t_eps and eff_t_eps > 0 else None
+            eff_forward_pe = curr_p / eff_f_eps if eff_f_eps > 0 else None
+            eff_peg = eff_pe / (eff_cg * 100) if eff_pe and eff_cg and eff_cg > 0 else None
             
-            pe_str = build_cmp_str(pe_ratio, ai_fin.get('pe'), 'x')
-            f_eps_display = build_cmp_dual_str(t_eps, active_f_eps, ai_fin.get('trailing_eps'), None, 'num', 'num', 'AI捉取')
-            fpe_str = f"{forward_pe:.1f}x" if forward_pe is not None else "N/A"
+            eg_str_disp = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
+            eg_color = "#ff4d4d" if eff_cg and eff_cg > 0 else ("#00cc66" if eff_cg and eff_cg < 0 else "gray")
+            eps_source_text = f"自訂法人共識 ({eff_f_eps:.2f}元)"
+            peg_str_disp = f"{eff_peg:.2f}" if eff_peg is not None else "N/A"
+            fpe_str = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
+            
+            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x')
+            f_eps_display = build_cmp_dual_str(t_eps, eff_f_eps, ai_t_eps, None, 'num', 'num', 'AI捉取')
         else:
-            active_f_eps = eff_f_eps
-            sys_forward_pe = s_float(info.get('forwardPE'))
-            if sys_forward_pe is None and eff_f_eps is not None and eff_f_eps > 0: 
-                sys_forward_pe = curr_p / eff_f_eps
-            forward_pe = sys_forward_pe
-            
-            calc_earn_growth = eff_earn_growth if eff_earn_growth is not None and -1 <= eff_earn_growth <= 5 else None
-            peg_is_negative = (calc_earn_growth is not None and calc_earn_growth <= 0)
-            sys_peg_ratio = s_float(info.get('pegRatio'))
-            if (sys_peg_ratio is None or pd.isna(sys_peg_ratio)) and eff_pe is not None and calc_earn_growth is not None and calc_earn_growth > 0:
-                sys_peg_ratio = eff_pe / (calc_earn_growth * 100)
-                
-            peg_ratio = -999 if peg_is_negative else sys_peg_ratio
-            eg_color = "#ff4d4d" if eff_earn_growth and eff_earn_growth > 0 else ("#00cc66" if eff_earn_growth and eff_earn_growth < 0 else "#fff")
+            eff_f_eps = sys_f_eps_calc if sys_f_eps_calc is not None else ai_f_eps_calc
             eps_source_text = f"海外系統或反推 ({eff_f_eps:.2f}元)" if eff_f_eps is not None else "系統預估 (無資料)"
-
-            # 🚀 AI 反推計算 (YoY, PEG, Fwd PE)
-            ai_t = s_float(ai_fin.get('trailing_eps'))
-            ai_f = s_float(ai_fin.get('forward_eps'))
-            ai_cg = (ai_f - ai_t) / ai_t if ai_t and ai_t > 0 and ai_f else None
+            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推/捉')
             
-            orig_eg_str = to_val_str(earn_growth, "pct")
-            if ai_cg is not None or ai_fin.get('yoy') is not None:
-                ai_eg_val = ai_cg if ai_cg is not None else s_float(ai_fin.get('yoy'))
-                eg_str_disp = f"{orig_eg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({to_val_str(ai_eg_val, 'pct')}, AI反推/捉取)</span>"
-            else: eg_str_disp = orig_eg_str
-                
-            orig_peg_str = f"{sys_peg_ratio:.2f}" if sys_peg_ratio is not None and not peg_is_negative else ("分母為負" if peg_is_negative else "N/A")
-            ai_pe = s_float(ai_fin.get('pe'))
+            sys_forward_pe = s_float(info.get('forwardPE'))
+            if sys_forward_pe is None and eff_f_eps is not None and eff_f_eps > 0: sys_forward_pe = curr_p / eff_f_eps
+            
+            ai_fpe = curr_p / ai_f_eps_calc if ai_f_eps_calc and ai_f_eps_calc > 0 else None
+            eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
+            
+            orig_peg = pe_ratio / (earn_growth * 100) if pe_ratio and earn_growth and earn_growth > 0 else None
+            ai_cg = (ai_f_eps_calc - ai_t_eps) / ai_t_eps if ai_t_eps and ai_t_eps > 0 and ai_f_eps_calc else ai_yoy
             ai_peg = ai_pe / (ai_cg * 100) if ai_pe and ai_cg and ai_cg > 0 else None
+            
+            eff_peg = orig_peg if orig_peg is not None else ai_peg
+            if earn_growth is not None and earn_growth <= 0: eff_peg = -999
+            
+            eg_str_disp = build_cmp_str(earn_growth, ai_yoy, 'pct', 'AI捉取')
+            eg_color = "#ff4d4d" if eff_eg and eff_eg > 0 else ("#00cc66" if eff_eg and eff_eg < 0 else "#fff")
+            
+            orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if earn_growth is not None and earn_growth <= 0 else "N/A")
             peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_peg:.2f}, AI反推)</span>" if ai_peg is not None else orig_peg_str
-                
-            orig_fpe_str = to_val_str(sys_forward_pe, "x")
-            ai_fpe = curr_p / ai_f if ai_f and ai_f > 0 else None
+            
+            orig_fpe_str = f"{sys_forward_pe:.1f}x" if sys_forward_pe is not None else "N/A"
             fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_fpe:.1f}x, AI反推)</span>" if ai_fpe is not None else orig_fpe_str
+            
+            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x')
 
-            pe_str = build_cmp_str(pe_ratio, ai_fin.get('pe'), 'x')
-            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps, ai_t, ai_f, 'num', 'num', 'AI捉取')
-
-        rg_str = build_cmp_str(rev_growth, ai_fin.get('yoy'), 'pct')
-        gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_fin.get('gross_margin'), ai_fin.get('operating_margin'), 'pct', 'pct', 'AI捉取')
-        roe_str = build_cmp_str(roe, ai_fin.get('roe'), 'pct')
+        rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct')
+        gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', 'AI捉取')
+        roe_str = build_cmp_str(roe, ai_roe, 'pct')
         
         rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
@@ -808,6 +820,7 @@ if curr_id:
         """
         st.markdown(fund_html, unsafe_allow_html=True)
 
+        # 估值顏色與評語判斷
         if eff_pe is None: pe_color, pe_text = "gray", "數據不足"
         elif eff_pe > 25: pe_color, pe_text = "#ff4d4d", "高成長溢價"
         elif eff_pe < 15: pe_color, pe_text = "#00cc66", "相對便宜"
@@ -818,20 +831,20 @@ if curr_id:
         elif eff_pb < 1.5: pb_color, pb_text = "#00cc66", "具資產保護"
         else: pb_color, pb_text = "#FFD700", "合理區間"
 
-        if peg_ratio == -999: peg_color, peg_text = "gray", "分母為負，無意義"
-        elif peg_ratio is None: peg_color, peg_text = "gray", "衰退或無數據"
+        if eff_peg == -999: peg_color, peg_text = "gray", "分母為負，無意義"
+        elif eff_peg is None: peg_color, peg_text = "gray", "衰退或無數據"
         else: 
-            if peg_ratio > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
-            elif peg_ratio <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
+            if eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
+            elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
             else: peg_color, peg_text = "#FFD700", "合理區間"
 
-        if forward_pe is None: fpe_color, fpe_text = "gray", "數據不足"
+        if eff_forward_pe is None: fpe_color, fpe_text = "gray", "數據不足"
         else:
-            if forward_pe > 25: fpe_color, fpe_text = "#ff4d4d", "高成長期望"
-            elif forward_pe < 15: fpe_color, fpe_text = "#00cc66", "相對便宜"
+            if eff_forward_pe > 25: fpe_color, fpe_text = "#ff4d4d", "高成長期望"
+            elif eff_forward_pe < 15: fpe_color, fpe_text = "#00cc66", "相對便宜"
             else: fpe_color, fpe_text = "#FFD700", "合理區間"
 
-        pb_str = build_cmp_str(pb_ratio, ai_fin.get('pb'), 'x')
+        pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
 
         val_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
@@ -947,7 +960,8 @@ if curr_id:
         st.markdown("#### 🌍 總體經濟與地緣政治系統性風險評估")
         st.markdown("<small style='color:gray;'>*點擊下方按鈕，AI 將即時連網檢索全球最新總經數據（如通膨、利率）與地緣政治（如美伊衝突、貿易戰），評估其對該公司的近期影響。*</small>", unsafe_allow_html=True)
         
-        if "3.1 Flash-Lite" in ai_model_option: current_model_for_macro = "gemini-3.1-flash-lite-preview"
+        if "3.1 Pro" in ai_model_option: current_model_for_macro = "gemini-3.1-pro-preview"
+        elif "3.1 Flash-Lite" in ai_model_option: current_model_for_macro = "gemini-3.1-flash-lite-preview"
         elif "3 Flash" in ai_model_option: current_model_for_macro = "gemini-3-flash-preview"
         elif "2.5 Pro" in ai_model_option: current_model_for_macro = "gemini-2.5-pro"
         else: current_model_for_macro = "gemini-2.5-flash"
@@ -973,23 +987,16 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
-        def get_eff_pct(orig, ai_val_key):
-            v = orig if orig is not None else s_float(ai_fin.get(ai_val_key))
-            return to_pct(v)
-            
-        def get_eff_num(orig, ai_val_key):
-            v = orig if orig is not None else s_float(ai_fin.get(ai_val_key))
-            return f"{v:.2f}" if v is not None else "N/A"
-
+        # 安全建立傳遞給 AI 的上下文變數
         ctx_pe = f"{eff_pe:.1f}x" if eff_pe is not None else "N/A"
-        ctx_fpe = f"{eff_forward_pe:.1f}x" if forward_pe is not None else "N/A"
+        ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
         ctx_pb = f"{eff_pb:.2f}x" if eff_pb is not None else "N/A"
         ctx_peg = peg_str_disp.replace("<br>", " ")
-        ctx_eps = active_f_eps_str
-        ctx_rg = get_eff_pct(rev_growth, 'yoy')
-        ctx_gm = get_eff_pct(gross_margin, 'gross_margin')
-        ctx_om = get_eff_pct(op_margin, 'operating_margin')
-        ctx_roe = get_eff_pct(roe, 'roe')
+        ctx_eps = f"{eff_f_eps:.2f}" if eff_f_eps is not None else "N/A"
+        ctx_rg = to_pct(eff_rg)
+        ctx_gm = to_pct(eff_gm)
+        ctx_om = to_pct(eff_om)
+        ctx_roe = to_pct(eff_roe)
 
         context_str = f"""
         【即時盤面與估值】
@@ -1300,7 +1307,8 @@ if curr_id:
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='20MA', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='60MA', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
         
-        vol_colors = ['#ff4d4d' if plot_df['Close'].iloc[i] >= plot_df['Open'].iloc[i] else '#00cc66' for i in range(len(plot_df))]
+        # 🚀 完美修復 ValueError：使用 zip 動態生成與 x 軸等長的顏色陣列
+        vol_colors = ['#ff4d4d' if c >= o else '#00cc66' for c, o in zip(plot_df['Close'], plot_df['Open'])]
         fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
         
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=2, col=1, secondary_y=False)
