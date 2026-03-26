@@ -77,7 +77,7 @@ if 'selected_stock' not in st.session_state: st.session_state.selected_stock = "
 if 'topic_results' not in st.session_state: st.session_state.topic_results = None
 if 'show_whale' not in st.session_state: st.session_state.show_whale = False
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
-if 'fugle_key' not in st.session_state: st.session_state.fugle_key = "" # 🚀 儲存 Fugle 金鑰
+if 'fugle_key' not in st.session_state: st.session_state.fugle_key = "" 
 if 'ai_fetched_eps' not in st.session_state: st.session_state.ai_fetched_eps = {}
 if 'ai_fetched_financials' not in st.session_state: st.session_state.ai_fetched_financials = {}
 if 'show_pk' not in st.session_state: st.session_state.show_pk = False
@@ -110,12 +110,15 @@ def on_quick_select_change():
         st.session_state.quick_select = "-- 快速切換標的 --"
 
 # ==========================================
-# 3. 外部 API 與模型模組 (🚀 新增 Fugle API 整合)
+# 3. 外部 API 與模型模組
 # ==========================================
 def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
-    """使用 Fugle API 抓取高精度 K 線資料"""
     if not api_key: return pd.DataFrame()
-    url = f"https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/{stock_id}?timeframe={timeframe}"
+    today = datetime.date.today()
+    if timeframe in ["60", "30", "15"]: from_date = (today - datetime.timedelta(days=60)).strftime("%Y-%m-%d")
+    else: from_date = (today - datetime.timedelta(days=365*5)).strftime("%Y-%m-%d")
+    to_date = today.strftime("%Y-%m-%d")
+    url = f"https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/{stock_id}?timeframe={timeframe}&from={from_date}&to={to_date}"
     headers = {"X-API-KEY": api_key.strip()}
     try:
         res = requests.get(url, headers=headers, timeout=10)
@@ -377,11 +380,9 @@ def get_stock_data(stock_id, fugle_key=""):
     hist = None
     info_data = {}
     
-    # 🚀 優先使用 Fugle 取得準確股價與成交量
     if fugle_key:
         hist = fetch_fugle_kline(stock_id, fugle_key, "D")
     
-    # 備用機制或取得基本面資訊
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
@@ -422,13 +423,11 @@ def get_chart_data(stock_id, timeframe, fugle_key=""):
     stock_id = str(stock_id).strip()
     tf_map = {"日線": "D", "週線": "W", "月線": "M", "60分線": "60"}
     
-    # 🚀 優先使用 Fugle 繪製高精準 K 線
     if fugle_key:
         tf = tf_map.get(timeframe, "D")
         df = fetch_fugle_kline(stock_id, fugle_key, tf)
         if not df.empty: return df
 
-    # Fallback 到 yfinance
     interval_map = {"日線": {"period": "1y", "interval": "1d"}, "週線": {"period": "2y", "interval": "1wk"}, "月線": {"period": "5y", "interval": "1mo"}, "60分線": {"period": "1mo", "interval": "60m"}}
     params = interval_map.get(timeframe, {"period": "1y", "interval": "1d"})
     for ext in [".TW", ".TWO"]:
@@ -572,7 +571,6 @@ with st.sidebar:
         else: st.session_state.show_pk = True; st.rerun()
 
     st.markdown("---")
-    # 🚀 新增 Fugle 金鑰輸入框
     st.markdown("### 📈 進階資料源設定")
     st.session_state.fugle_key = st.text_input("🔑 Fugle (富果) API Key (選填)", type="password", value=st.session_state.fugle_key, help="輸入後將優先使用 Fugle 抓取 100% 準確的高級 K 線與報價資料")
     
@@ -739,6 +737,7 @@ if curr_id:
         df_rev_bk = get_monthly_revenue(curr_id)
         df_per_bk = get_pe_pb_data(curr_id)
         
+        # 取得系統原始數據
         pe_ratio = s_float(info.get('trailingPE'))
         if (pe_ratio is None or pe_ratio > 1000) and df_per_bk is not None and not df_per_bk.empty:
             if (pd.Timestamp.today() - df_per_bk.iloc[-1]['date']).days < 30: pe_ratio = s_float(df_per_bk['PER'].iloc[-1])
@@ -761,6 +760,7 @@ if curr_id:
             
         sys_f_eps = s_float(info.get('forwardEps'))
         
+        # 取出 AI 校對數據字典
         ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
         ai_pe = s_float(ai_fin.get('pe'))
         ai_pb = s_float(ai_fin.get('pb'))
@@ -771,6 +771,7 @@ if curr_id:
         ai_om = s_float(ai_fin.get('operating_margin'))
         ai_roe = s_float(ai_fin.get('roe'))
         
+        # 決定有效數值 (Fallback to AI)
         eff_pe = pe_ratio if pe_ratio is not None else ai_pe
         eff_pb = pb_ratio if pb_ratio is not None else ai_pb
         eff_t_eps = t_eps if t_eps is not None else ai_t_eps
@@ -780,6 +781,7 @@ if curr_id:
         eff_om = op_margin if op_margin is not None else ai_om
         eff_roe = roe if roe is not None else ai_roe
         
+        # 🚀 智慧反推與有效 Forward EPS 決策
         ai_f_eps_calc = ai_f_eps
         if ai_f_eps_calc is None and eff_t_eps is not None and eff_eg is not None and -1 <= eff_eg <= 5:
             ai_f_eps_calc = eff_t_eps * (1 + eff_eg)
@@ -1005,7 +1007,7 @@ if curr_id:
         elif "2.5 Pro" in ai_model_option: current_model_for_macro = "gemini-2.5-pro"
         else: current_model_for_macro = "gemini-2.5-flash"
 
-        if st.button("🌍 啟推 AI 總經與地緣政治風險推演", use_container_width=True):
+        if st.button("🌍 啟動 AI 總經與地緣政治風險推演", use_container_width=True):
             if not st.session_state.api_key:
                 st.warning("請先於左側選單輸入您的 API Key。")
             else:
@@ -1017,7 +1019,7 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 AI 綜合產業報告與打包提示詞
+        # 🚀 AI 綜合產業報告與打包提示詞 (乾淨除蟲版)
         # ==========================================
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
@@ -1026,10 +1028,15 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
+        # 🚀 乾淨建立傳遞給 AI 的上下文變數 (確保無 HTML 標籤，且完全採用 AI 校對後數據)
         ctx_pe = f"{eff_pe:.1f}x" if eff_pe is not None else "N/A"
         ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
         ctx_pb = f"{eff_pb:.2f}x" if eff_pb is not None else "N/A"
-        ctx_peg = peg_str_disp.replace("<br>", " ")
+        
+        if eff_peg == -999: ctx_peg = "分母為負，無意義"
+        elif eff_peg is None: ctx_peg = "衰退或無數據"
+        else: ctx_peg = f"{eff_peg:.2f}"
+            
         ctx_eps = f"{eff_f_eps:.2f}" if eff_f_eps is not None else "N/A"
         ctx_rg = to_pct(eff_rg)
         ctx_gm = to_pct(eff_gm)
@@ -1037,14 +1044,14 @@ if curr_id:
         ctx_roe = to_pct(eff_roe)
 
         context_str = f"""
-        【即時盤面與估值】
+        【即時盤面與估值 (已整合 AI 最新校對數據)】
         - 最新收盤價: {curr_p} 元
         - 歷史本益比 (Trailing P/E): {ctx_pe}
         - 前瞻本益比 (Forward P/E): {ctx_fpe}
         - 股價淨值比 (P/B): {ctx_pb}
         - 本益成長比 (PEG): {ctx_peg}
 
-        【財務基本面動能】
+        【財務基本面動能 (已整合 AI 最新校對數據)】
         - 預估 EPS: {ctx_eps} 元
         - 營收年增率 (YoY): {ctx_rg}
         - 毛利率: {ctx_gm}
