@@ -109,7 +109,7 @@ def on_quick_select_change():
         st.session_state.quick_select = "-- 快速切換標的 --"
 
 # ==========================================
-# 3. 外部 API 與模型模組 (已修復 URL 污染與 yfinance 阻斷問題)
+# 3. 外部 API 與模型模組
 # ==========================================
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
@@ -355,18 +355,13 @@ def get_fallback_info(stock_id):
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id):
     stock_id = str(stock_id).strip()
-    hist = None
-    info_data = {}
+    hist, info_data = None, {}
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
             temp_hist = ticker.history(period="5y")
             if not temp_hist.empty:
-                hist = temp_hist
-                try:
-                    info_data = ticker.info
-                except:
-                    info_data = {}
+                hist, info_data = temp_hist, ticker.info
                 break
         except: continue
             
@@ -509,7 +504,7 @@ with st.sidebar:
     st.markdown("### 🧠 AI 聯網議題選股")
     topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
-    # 🚀 AI 模型選單更新
+    # 🚀 AI 模型選單：完美對接 3.1 Pro
     ai_model_option = st.radio("選擇 AI 大腦", [
         "Gemini 2.5 Flash", 
         "Gemini 2.5 Pro",
@@ -762,7 +757,7 @@ if curr_id:
                 val = get_eps_from_ai(c_name, curr_id, st.session_state.api_key)
                 if val: st.session_state.ai_fetched_eps[curr_id] = val; st.rerun()
         with col_eps2:
-            default_eps = st.session_state.ai_fetched_eps.get(curr_id, ai_f_eps_calc if ai_f_eps_calc else (sys_f_eps_calc if sys_f_eps_calc else 1.0))
+            default_eps = st.session_state.ai_fetched_eps.get(curr_id, ai_f_eps_calc if ai_f_eps_calc is not None else (sys_f_eps_calc if sys_f_eps_calc is not None else 1.0))
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
         if use_custom_eps:
@@ -994,6 +989,7 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
+        # 🚀 安全建立傳遞給 AI 的上下文變數
         ctx_pe = f"{eff_pe:.1f}x" if eff_pe is not None else "N/A"
         ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
         ctx_pb = f"{eff_pb:.2f}x" if eff_pb is not None else "N/A"
@@ -1166,7 +1162,7 @@ if curr_id:
                                 upside = ((target_mean_p - prev_close_val) / prev_close_val) * 100
                                 if upside >= 25: upside_fmt = f"<span style='color:#ff4d4d; font-weight:bold;'>+{upside:.1f}%</span>"
                                 elif upside > 0: upside_fmt = f"<span style='color:#00cc66;'>+{upside:.1f}%</span>"
-                                else: upside_fmt = f"<span style='color:#aaa;'>{upside:.1f}%</span>"
+                                else: upside_fmt = fspan style='color:#aaa;'>{upside:.1f}%</span>"
                                 target_display = f"{target_mean_p:.1f} ({upside_fmt})"
                             else: target_display = "<span style='color:gray;'>無資料</span>"
                             compare_data.append({"代號": f"{p_name} ({code})", "股價": prev_close_fmt, "前瞻 P/E": fpe_fmt, "預估 EPS": eps_display, "目標價": target_display, "毛利率": gm_fmt, "營益率": om_fmt, "ROE": roe_fmt})
@@ -1313,7 +1309,6 @@ if curr_id:
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='20MA', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='60MA', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
         
-        # 🚀 完美修復 ValueError：使用 zip 動態生成與 x 軸等長的顏色陣列
         vol_colors = ['#ff4d4d' if c >= o else '#00cc66' for c, o in zip(plot_df['Close'], plot_df['Open'])]
         fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
         
