@@ -56,6 +56,7 @@ if 'topic_results' not in st.session_state: st.session_state.topic_results = Non
 if 'show_whale' not in st.session_state: st.session_state.show_whale = False
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
 if 'ai_fetched_eps' not in st.session_state: st.session_state.ai_fetched_eps = {}
+if 'ai_fetched_financials' not in st.session_state: st.session_state.ai_fetched_financials = {} # 🚀 儲存AI校對財報的結果
 if 'show_pk' not in st.session_state: st.session_state.show_pk = False
 if 'ai_industry_result' not in st.session_state: st.session_state.ai_industry_result = None
 if 'ai_macro_result' not in st.session_state: st.session_state.ai_macro_result = None 
@@ -98,7 +99,6 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
-        
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             response = requests.post(fallback_url, headers=headers, json=payload, timeout=30)
@@ -127,6 +127,30 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
         if res.status_code == 200: return s_float(res.json()['candidates'][0]['content']['parts'][0]['text'].strip())
+    except: pass
+    return None
+
+# 🚀 專門用來強制抓取財報四大指標的 AI 函數
+def get_financials_from_ai(stock_name, stock_id, api_key):
+    if not api_key: return None
+    api_key = api_key.strip()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    system_prompt = """你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新一季的「毛利率」、「營益率」、「ROE(股東權益報酬率)」以及「最新單月或累計營收年增率(YoY)」。
+    必須嚴格回傳 JSON 格式，且數值必須為小數（例如 25.5% 必須寫成 0.255，衰退 5% 寫成 -0.05）。若查無資料，該欄位請填 null。
+    格式範例：
+    {"gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082}
+    絕對不要輸出 markdown 標記或其他文字。"""
+    payload = {
+        "contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新財報的毛利率、營益率、ROE與營收YoY"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "tools": [{"google_search": {}}]
+    }
+    try:
+        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
+        if res.status_code == 200:
+            text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            clean_text = re.sub(r'```json\n?|```', '', text).strip()
+            return json.loads(clean_text)
     except: pass
     return None
 
@@ -262,7 +286,6 @@ def get_monthly_revenue(stock_id):
             df = df[df['date'] < current_month_start].sort_values('date').reset_index(drop=True)
             df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
             
-            # 🚀 升級 YoY 計算：強制讀取官方提供的準確成長率，解決空缺月份計算失真的問題
             if 'revenue_year_on_year_growth' in df.columns:
                 df['YoY'] = pd.to_numeric(df['revenue_year_on_year_growth'], errors='coerce')
             else:
@@ -296,7 +319,6 @@ def get_pe_pb_data(stock_id):
     except: pass
     return None
 
-# 🚀 升級百毒不侵的備用爬蟲 (專治上櫃股票資料遺失)
 def get_fallback_info(stock_id):
     info = {}
     try:
@@ -307,9 +329,7 @@ def get_fallback_info(stock_id):
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
             if idx != -1:
-                # 往後截取 HTML，容錯度拉高
                 chunk = text[idx:idx+300]
-                # 尋找 HTML 標籤 > < 之間的最真實數字 (支援千分位、小數、負號與百分比)
                 matches = re.findall(r'>\s*([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(%)?\s*<', chunk)
                 if matches:
                     try:
@@ -364,7 +384,6 @@ def get_stock_data(stock_id):
         except: pass
 
     if hist is not None and not hist.empty:
-        # 🚀 強制將 Yahoo 備用數據補入 yfinance 缺失的欄位中 (針對 OTC 上櫃股票如 6442 專用)
         fallback = get_fallback_info(stock_id)
         for k, v in fallback.items():
             if v is not None:
@@ -675,9 +694,21 @@ if curr_id:
             st.markdown(trend_html, unsafe_allow_html=True)
 
         # ==========================================
-        # 💼 財務基本面與獲利基準微調
+        # 💼 財務基本面與獲利基準微調 (🚀 加入一鍵 AI 查全指標)
         # ==========================================
-        st.markdown("#### 💼 財務基本面與獲利基準微調")
+        col_fin_title, col_fin_btn = st.columns([0.6, 0.4])
+        with col_fin_title:
+            st.markdown("#### 💼 財務基本面與獲利基準微調")
+        with col_fin_btn:
+            if st.button("🪄 啟動 AI 聯網校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新財報，與現有資料進行比對補齊"):
+                with st.spinner("AI 正在各大財經庫檢索最新財報數據..."):
+                    fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key)
+                    if fetched_data:
+                        st.session_state.ai_fetched_financials[curr_id] = fetched_data
+                        st.rerun()
+                    else:
+                        st.error("AI 暫時無法找到確切數據")
+                        
         df_rev_bk = get_monthly_revenue(curr_id)
         df_per_bk = get_pe_pb_data(curr_id)
         
@@ -700,25 +731,13 @@ if curr_id:
         earn_growth = s_float(info.get('earningsGrowth'))
         if earn_growth is None and rev_growth is not None: earn_growth = rev_growth 
         
-        calc_earn_growth = earn_growth if earn_growth is not None and -1 <= earn_growth <= 5 else None
-        peg_is_negative = (earn_growth is not None and earn_growth <= 0)
-            
         t_eps = s_float(info.get('trailingEps'))
         if t_eps is not None and (t_eps > 500 or t_eps < -500): t_eps = None 
         if t_eps is None and pe_ratio is not None and pe_ratio > 0 and curr_p > 0: t_eps = curr_p / pe_ratio 
             
         sys_f_eps = s_float(info.get('forwardEps'))
         if sys_f_eps is not None and (sys_f_eps > 500 or sys_f_eps < -500): sys_f_eps = None
-        if sys_f_eps is None and t_eps is not None and calc_earn_growth is not None: sys_f_eps = t_eps * (1 + calc_earn_growth) 
-            
-        sys_forward_pe = s_float(info.get('forwardPE'))
-        if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0: sys_forward_pe = curr_p / sys_f_eps
-            
-        sys_peg_ratio = s_float(info.get('pegRatio'))
-        if (sys_peg_ratio is None or pd.isna(sys_peg_ratio)) and pe_ratio is not None and calc_earn_growth is not None and calc_earn_growth > 0:
-            sys_peg_ratio = pe_ratio / (calc_earn_growth * 100)
-        if peg_is_negative: sys_peg_ratio = -999
-
+        
         col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
         with col_eps1: use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
         with col_eps3:
@@ -729,25 +748,56 @@ if curr_id:
             default_eps = st.session_state.ai_fetched_eps.get(curr_id, sys_f_eps if sys_f_eps else (t_eps if t_eps else 1.0))
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
+        # 🚀 取出 AI 校對補齊的狀態
+        ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
+        
+        if sys_f_eps is None and t_eps is not None:
+            c_eg = earn_growth if earn_growth is not None else s_float(ai_fin.get('yoy'))
+            if c_eg is not None and -1 <= c_eg <= 5:
+                sys_f_eps = t_eps * (1 + c_eg)
+            
+        sys_forward_pe = s_float(info.get('forwardPE'))
+        if sys_forward_pe is None and sys_f_eps is not None and sys_f_eps > 0: sys_forward_pe = curr_p / sys_f_eps
+
+        # 計算與準備顯示邏輯
         if use_custom_eps:
             active_f_eps = custom_eps
             forward_pe = curr_p / active_f_eps if active_f_eps > 0 else None
             if t_eps and t_eps > 0 and pe_ratio:
                 cg = (active_f_eps - t_eps) / t_eps
                 peg_ratio = pe_ratio / (cg * 100) if cg > 0 else -999
-                eg_str = to_pct(cg)
+                eg_str_val = to_pct(cg)
                 eg_color = "#ff4d4d" if cg > 0 else "#00cc66"
             else:
                 peg_ratio = None
-                eg_str = "N/A"
+                eg_str_val = "N/A"
                 eg_color = "gray"
             eps_source_text = f"自訂法人共識 ({active_f_eps:.2f}元)"
+            eg_str = eg_str_val
         else:
             active_f_eps = sys_f_eps
             forward_pe = sys_forward_pe
-            peg_ratio = sys_peg_ratio
-            eg_str = to_pct(earn_growth)
-            eg_color = "#ff4d4d" if earn_growth and earn_growth > 0 else ("#00cc66" if earn_growth and earn_growth < 0 else "#fff")
+            
+            calc_earn_growth = earn_growth if earn_growth is not None else s_float(ai_fin.get('yoy'))
+            calc_earn_growth = calc_earn_growth if calc_earn_growth is not None and -1 <= calc_earn_growth <= 5 else None
+            peg_is_negative = (calc_earn_growth is not None and calc_earn_growth <= 0)
+            
+            sys_peg_ratio = s_float(info.get('pegRatio'))
+            if (sys_peg_ratio is None or pd.isna(sys_peg_ratio)) and pe_ratio is not None and calc_earn_growth is not None and calc_earn_growth > 0:
+                sys_peg_ratio = pe_ratio / (calc_earn_growth * 100)
+                
+            peg_ratio = -999 if peg_is_negative else sys_peg_ratio
+            
+            eff_earn_growth = earn_growth if earn_growth is not None else s_float(ai_fin.get('yoy'))
+            eg_str_val = to_pct(eff_earn_growth)
+            eg_color = "#ff4d4d" if eff_earn_growth and eff_earn_growth > 0 else ("#00cc66" if eff_earn_growth and eff_earn_growth < 0 else "#fff")
+            
+            # 若原始資料為空，但 AI 有抓到 YoY，則顯示 AI 資料標籤
+            if earn_growth is None and ai_fin.get('yoy') is not None:
+                eg_str = f"N/A <br><span style='color:#FFD700; font-size:0.85rem;'>({eg_str_val}, AI捉取)</span>"
+            else:
+                eg_str = eg_str_val
+                
             eps_source_text = f"海外系統或反推 ({sys_f_eps:.2f}元)" if sys_f_eps is not None else "系統預估 (無資料)"
 
         pe_str = f"{pe_ratio:.1f}x" if pe_ratio is not None else "N/A"
@@ -755,12 +805,24 @@ if curr_id:
         active_f_eps_str = f"{active_f_eps:.2f}" if active_f_eps is not None else "N/A"
         f_eps_display = f"{t_eps_str} / <span style='color:#00bfff;'>{active_f_eps_str}</span>" if use_custom_eps else f"{t_eps_str} / {active_f_eps_str}"
             
-        rg_str = to_pct(rev_growth)
+        # 🚀 格式化原始數據與 AI 抓取數據的對比函數
+        def format_compare(orig_val, ai_val_key):
+            orig_str = to_pct(orig_val)
+            ai_val = ai_fin.get(ai_val_key)
+            if ai_val is not None:
+                ai_str = f"{s_float(ai_val) * 100:.2f}%"
+                return f"{orig_str} <br><span style='color:#FFD700; font-size:0.85rem;'>({ai_str}, AI捉取)</span>"
+            return orig_str
+            
+        rg_str = format_compare(rev_growth, 'yoy')
+        gm_str = format_compare(gross_margin, 'gross_margin')
+        om_str = format_compare(op_margin, 'operating_margin')
+        roe_str = format_compare(roe, 'roe')
+        
         rg_color = "#ff4d4d" if rev_growth and rev_growth > 0 else ("#00cc66" if rev_growth and rev_growth < 0 else "#fff")
-        gm_str = to_pct(gross_margin)
-        om_str = to_pct(op_margin)
-        roe_str = to_pct(roe)
-        roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if roe is not None and roe >= 0.15 else ""
+        
+        eff_roe = roe if roe is not None else s_float(ai_fin.get('roe'))
+        roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
 
         fund_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
@@ -871,23 +933,25 @@ if curr_id:
         else:
             trend_icon, trend_title, trend_desc, trend_color = "🏭", "穩定或景氣循環產業", f"所屬板塊 ({info.get('industry', '未知')}) 發展相對成熟，需特別留意整體景氣波動或公司的特殊利基點。", "#FFD700"
 
-        if gross_margin is None:
+        eff_gm = gross_margin if gross_margin is not None else s_float(ai_fin.get('gross_margin'))
+        if eff_gm is None:
             moat_icon, moat_title, moat_desc, moat_color = "❓", "數據不足", "缺乏毛利率數據無法精確評估。", "gray"
-        elif gross_margin >= 0.40:
-            moat_icon, moat_title, moat_desc, moat_color = "🏰", "極寬廣 (強大護城河)", f"毛利率高達 {gross_margin*100:.1f}%！顯示公司具備極高的技術門檻、專利佈局或客戶轉換成本，對手極難搶奪市佔率。", "#ff4d4d"
-        elif gross_margin >= 0.20:
-            moat_icon, moat_title, moat_desc, moat_color = "🛡️", "中等壁壘", f"毛利率 {gross_margin*100:.1f}%。具備一定的技術領先或營運規模，存在競爭壁壘。", "#FFD700"
+        elif eff_gm >= 0.40:
+            moat_icon, moat_title, moat_desc, moat_color = "🏰", "極寬廣 (強大護城河)", f"毛利率高達 {eff_gm*100:.1f}%！顯示公司具備極高的技術門檻、專利佈局或客戶轉換成本，對手極難搶奪市佔率。", "#ff4d4d"
+        elif eff_gm >= 0.20:
+            moat_icon, moat_title, moat_desc, moat_color = "🛡️", "中等壁壘", f"毛利率 {eff_gm*100:.1f}%。具備一定的技術領先或營運規模，存在競爭壁壘。", "#FFD700"
         else:
-            moat_icon, moat_title, moat_desc, moat_color = "⚔️", "競爭激烈 (低護城河)", f"毛利率僅 {gross_margin*100:.1f}%。產品同質性偏高，容易落入價格戰，無法輕易阻擋對手跨入。", "#00cc66"
+            moat_icon, moat_title, moat_desc, moat_color = "⚔️", "競爭激烈 (低護城河)", f"毛利率僅 {eff_gm*100:.1f}%。產品同質性偏高，容易落入價格戰，無法輕易阻擋對手跨入。", "#00cc66"
 
-        if op_margin is None:
+        eff_om = op_margin if op_margin is not None else s_float(ai_fin.get('operating_margin'))
+        if eff_om is None:
             pos_icon, pos_title, pos_desc, pos_color = "❓", "數據不足", "缺乏營益率數據無法精確評估。", "gray"
-        elif op_margin >= 0.15:
-            pos_icon, pos_title, pos_desc, pos_color = "👑", "核心主導者 (具定價權)", f"營益率高達 {op_margin*100:.1f}%。在產業鏈中掌握關鍵零組件、設備或 IP 設計，景氣波動時具備高度抗跌能力與話語權。", "#ff4d4d"
-        elif op_margin >= 0.05:
-            pos_icon, pos_title, pos_desc, pos_color = "⚙️", "關鍵供應商", f"營益率 {op_margin*100:.1f}%。在整體供應鏈中扮演不可或缺的一環，營運與定價能力相對穩健。", "#FFD700"
+        elif eff_om >= 0.15:
+            pos_icon, pos_title, pos_desc, pos_color = "👑", "核心主導者 (具定價權)", f"營益率高達 {eff_om*100:.1f}%。在產業鏈中掌握關鍵零組件、設備或 IP 設計，景氣波動時具備高度抗跌能力與話語權。", "#ff4d4d"
+        elif eff_om >= 0.05:
+            pos_icon, pos_title, pos_desc, pos_color = "⚙️", "關鍵供應商", f"營益率 {eff_om*100:.1f}%。在整體供應鏈中扮演不可或缺的一環，營運與定價能力相對穩健。", "#FFD700"
         else:
-            pos_icon, pos_title, pos_desc, pos_color = "📦", "弱勢地位 (低階代工/組裝)", f"營益率僅 {op_margin*100:.1f}%。毛利微薄且被成本擠壓，在供應鏈中缺乏定價權，極易受原物料上漲與終端砍單衝擊。", "#00cc66"
+            pos_icon, pos_title, pos_desc, pos_color = "📦", "弱勢地位 (低階代工/組裝)", f"營益率僅 {eff_om*100:.1f}%。毛利微薄且被成本擠壓，在供應鏈中缺乏定價權，極易受原物料上漲與終端砍單衝擊。", "#00cc66"
 
         st.markdown(f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
@@ -915,7 +979,6 @@ if curr_id:
         st.markdown("#### 🌍 總體經濟與地緣政治系統性風險評估")
         st.markdown("<small style='color:gray;'>*點擊下方按鈕，AI 將即時連網檢索全球最新總經數據（如通膨、利率）與地緣政治（如美伊衝突、貿易戰），評估其對該公司的近期影響。*</small>", unsafe_allow_html=True)
         
-        # AI 選單對接 (找出實際要傳給 API 的模型字串)
         if "3.1 Flash-Lite" in ai_model_option:
             current_model_for_macro = "gemini-3.1-flash-lite-preview"
         elif "3 Flash" in ai_model_option:
@@ -947,6 +1010,15 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
+        def get_eff_pct(orig, ai_val):
+            if ai_val is not None: return to_pct(s_float(ai_val))
+            return to_pct(orig)
+
+        ctx_rg = get_eff_pct(rev_growth, ai_fin.get('yoy'))
+        ctx_gm = get_eff_pct(gross_margin, ai_fin.get('gross_margin'))
+        ctx_om = get_eff_pct(op_margin, ai_fin.get('operating_margin'))
+        ctx_roe = get_eff_pct(roe, ai_fin.get('roe'))
+
         context_str = f"""
         【即時盤面與估值】
         - 最新收盤價: {curr_p} 元
@@ -957,10 +1029,10 @@ if curr_id:
 
         【財務基本面動能】
         - 預估 EPS: {active_f_eps} 元
-        - 營收年增率 (YoY): {rg_str}
-        - 毛利率: {gm_str}
-        - 營業利益率: {om_str}
-        - 股東權益報酬率 (ROE): {roe_str}
+        - 營收年增率 (YoY): {ctx_rg}
+        - 毛利率: {ctx_gm}
+        - 營業利益率: {ctx_om}
+        - 股東權益報酬率 (ROE): {ctx_roe}
 
         【法人預估目標價】
         - 最高目標價: {hi_str}
@@ -1187,7 +1259,6 @@ if curr_id:
         # 🚀 專業技術線圖與 KD 指標 (新增週期切換器)
         st.markdown("### 🤖 專業技術線圖與量化型態分析")
         
-        # 加入週期切換按鈕，預設為「日線」
         chart_tf = st.radio("切換 K 線週期：", ["60分線", "日線", "週線", "月線"], index=1, horizontal=True)
         
         with st.spinner(f"載入 {chart_tf} 數據中..."):
@@ -1239,7 +1310,6 @@ if curr_id:
         support_price = max(recent_low, ma60_last) if last_close > ma60_last else recent_low
         resist_price = recent_high if last_close > ma20_last else min(recent_high, ma20_last)
 
-        # 針對不同週期，修改均線說法避免誤導
         if last_close < ma60_last: trend_status, trend_color = "⚠️ 跌破長線支撐 (趨勢轉弱)", "#00cc66"
         elif last_close > ma20_last and ma5_last > ma20_last: trend_status, trend_color = "📈 多頭強勢 (站上短中均線)", "#ff4d4d"
         elif last_close < ma20_last and ma5_last < ma20_last: trend_status, trend_color = "📉 空頭弱勢 (跌破中線)", "#00cc66"
@@ -1284,22 +1354,21 @@ if curr_id:
         fig_k.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
         fig_k.update_yaxes(range=[0, 100], dtick=20, side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
         
-        # 🚀 動態調整圖表時間格式與隱藏區間 (解決夜間與週末破圖問題)
         if chart_tf == "60分線":
             x_fmt = "%m/%d %H:%M"
             rb = [
-                dict(bounds=["sat", "mon"]),           # 隱藏週末
-                dict(bounds=[13.5, 9], pattern="hour") # 隱藏盤後時間 (13:30~09:00)
+                dict(bounds=["sat", "mon"]),           
+                dict(bounds=[13.5, 9], pattern="hour") 
             ]
         elif chart_tf == "月線":
             x_fmt = "%Y/%m"
-            rb = [] # 🚨 月線絕對不能隱藏週末，否則 1 號遇到假日整個月的 K 棒會消失！
+            rb = [] 
         elif chart_tf == "週線":
             x_fmt = "%Y/%m/%d"
-            rb = [] # 週線同理，不刻意隱藏週末
-        else: # 日線
+            rb = [] 
+        else: 
             x_fmt = "%m/%d"
-            rb = [dict(bounds=["sat", "mon"])] # 日線僅隱藏週末
+            rb = [dict(bounds=["sat", "mon"])] 
 
         fig_k.update_xaxes(rangebreaks=rb, tickformat=x_fmt, showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
         
