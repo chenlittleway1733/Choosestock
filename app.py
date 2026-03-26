@@ -162,8 +162,13 @@ def get_eps_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    system_prompt = "你是一個精準的財經數據提取機器人。請上網搜尋國內外法人針對該公司「明年」或「今年」所預估的 EPS。『嚴格只回傳一個最合理的數字』（例如：30.5）。不要解釋、不要有其他文字。若查無資料，請回傳 0。"
-    payload = {"contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新的法人預估 EPS"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}]}
+    
+    # 🚀 動態時間校準：如果現在是 1~8月找今年，9~12月找明年
+    current_year = datetime.date.today().year
+    target_year = current_year if datetime.date.today().month < 9 else current_year + 1
+    
+    system_prompt = f"你是一個精準的財經數據提取機器人。請優先搜尋國內外法人針對該公司「{target_year} 年度」所預估的 EPS。『嚴格只回傳一個最合理的數字』（例如：30.5）。不要解釋、不要有其他文字。若查無資料，請回傳 0。"
+    payload = {"contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新的法人預估 EPS ({target_year}年)"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}]}
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
         if res.status_code == 200: return s_float(res.json()['candidates'][0]['content']['parts'][0]['text'].strip())
@@ -174,10 +179,15 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    system_prompt = """你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
+    
+    # 🚀 動態時間校準
+    current_year = datetime.date.today().year
+    target_year = current_year if datetime.date.today().month < 9 else current_year + 1
+    
+    system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
-    3. 「法人預估今年或明年 EPS (Forward EPS)」
+    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」(請優先找 {target_year} 年的預測值)
     4. 「股價淨值比 (P/B)」
     5. 「毛利率」
     6. 「營益率」
@@ -186,10 +196,10 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
 
     必須嚴格回傳 JSON 格式，百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     格式範例：
-    {"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082}
+    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082}}
     絕對不要輸出 markdown 標記或其他文字。"""
     payload = {
-        "contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新財報的8大估值與財務指標"}]}],
+        "contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新財報與 {target_year} 預估估值指標"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}]
     }
@@ -1028,7 +1038,6 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
-        # 🚀 建立傳遞給 AI 的純文字對比數據 (系統原始值 vs AI 捉取值)
         def p_fmt(orig, ai_val, fmt="pct", suffix="AI捉取"):
             s = to_val_str(orig, fmt)
             if ai_val is not None and not pd.isna(ai_val):
