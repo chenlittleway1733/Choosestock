@@ -1019,7 +1019,7 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 AI 綜合產業報告與打包提示詞 (乾淨除蟲版)
+        # 🚀 AI 綜合產業報告與打包提示詞
         # ==========================================
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
@@ -1028,32 +1028,55 @@ if curr_id:
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
 
-        # 🚀 乾淨建立傳遞給 AI 的上下文變數 (確保無 HTML 標籤，且完全採用 AI 校對後數據)
-        ctx_pe = f"{eff_pe:.1f}x" if eff_pe is not None else "N/A"
-        ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
-        ctx_pb = f"{eff_pb:.2f}x" if eff_pb is not None else "N/A"
-        
-        if eff_peg == -999: ctx_peg = "分母為負，無意義"
-        elif eff_peg is None: ctx_peg = "衰退或無數據"
-        else: ctx_peg = f"{eff_peg:.2f}"
+        # 🚀 建立傳遞給 AI 的純文字對比數據 (系統原始值 vs AI 捉取值)
+        def p_fmt(orig, ai_val, fmt="pct", suffix="AI捉取"):
+            s = to_val_str(orig, fmt)
+            if ai_val is not None and not pd.isna(ai_val):
+                s += f" ({to_val_str(float(ai_val), fmt)}, {suffix})"
+            return s
             
-        ctx_eps = f"{eff_f_eps:.2f}" if eff_f_eps is not None else "N/A"
-        ctx_rg = to_pct(eff_rg)
-        ctx_gm = to_pct(eff_gm)
-        ctx_om = to_pct(eff_om)
-        ctx_roe = to_pct(eff_roe)
+        def p_dual(o1, o2, a1, a2, suffix="AI捉取"):
+            s = f"{to_val_str(o1, 'num')} / {to_val_str(o2, 'num')}"
+            if (a1 is not None and not pd.isna(a1)) or (a2 is not None and not pd.isna(a2)):
+                sa1 = to_val_str(float(a1) if a1 is not None else None, 'num')
+                sa2 = to_val_str(float(a2) if a2 is not None else None, 'num')
+                s += f" ({sa1} / {sa2}, {suffix})"
+            return s
+
+        ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
+        ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
+        ctx_rg = p_fmt(rev_growth, ai_yoy, 'pct')
+        ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
+        ctx_om = p_fmt(op_margin, ai_om, 'pct')
+        ctx_roe = p_fmt(roe, ai_roe, 'pct')
+        
+        if use_custom_eps:
+            ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
+            ctx_peg = f"{eff_peg:.2f}" if eff_peg is not None else "N/A"
+            ctx_eps = p_dual(t_eps, eff_f_eps, ai_t_eps, None, 'AI捉取')
+            ctx_eg = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
+        else:
+            ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推')
+            orig_peg_num = orig_peg if orig_peg is not None else (-999 if earn_growth is not None and earn_growth <= 0 else None)
+            if orig_peg_num == -999:
+                ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
+            else:
+                ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
+            ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
+            ctx_eg = p_fmt(earn_growth, ai_yoy, 'pct', 'AI捉取')
 
         context_str = f"""
-        【即時盤面與估值 (已整合 AI 最新校對數據)】
+        【即時盤面與估值 (原始數據 vs AI數據)】
         - 最新收盤價: {curr_p} 元
         - 歷史本益比 (Trailing P/E): {ctx_pe}
         - 前瞻本益比 (Forward P/E): {ctx_fpe}
         - 股價淨值比 (P/B): {ctx_pb}
         - 本益成長比 (PEG): {ctx_peg}
 
-        【財務基本面動能 (已整合 AI 最新校對數據)】
-        - 預估 EPS: {ctx_eps} 元
+        【財務基本面動能 (原始數據 vs AI數據)】
+        - EPS (目前 / 預估): {ctx_eps} 元
         - 營收年增率 (YoY): {ctx_rg}
+        - 預估獲利成長 (YoY): {ctx_eg}
         - 毛利率: {ctx_gm}
         - 營業利益率: {ctx_om}
         - 股東權益報酬率 (ROE): {ctx_roe}
@@ -1275,28 +1298,30 @@ if curr_id:
         with st.spinner(f"載入 {chart_tf} 數據中..."):
             chart_df = get_chart_data(curr_id, chart_tf, st.session_state.fugle_key)
             
-        if chart_df.empty: plot_df = hist.tail(120).copy() 
-        else: plot_df = chart_df.tail(120).copy()
+        if chart_df.empty: full_df = hist.copy() 
+        else: full_df = chart_df.copy()
 
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-            if col not in plot_df.columns: plot_df[col] = 0.0
+            if col not in full_df.columns: full_df[col] = 0.0
             
-        plot_df['MA5'] = plot_df['Close'].rolling(5).mean()
-        plot_df['MA10'] = plot_df['Close'].rolling(10).mean()
-        plot_df['MA20'] = plot_df['Close'].rolling(20).mean()
-        plot_df['MA60'] = plot_df['Close'].rolling(60).mean()
-        plot_df['Vol_MA20'] = plot_df['Volume'].rolling(20).mean()
+        full_df['MA5'] = full_df['Close'].rolling(5).mean()
+        full_df['MA10'] = full_df['Close'].rolling(10).mean()
+        full_df['MA20'] = full_df['Close'].rolling(20).mean()
+        full_df['MA60'] = full_df['Close'].rolling(60).mean()
+        full_df['Vol_MA20'] = full_df['Volume'].rolling(20).mean()
         
-        h9, l9 = plot_df['High'].rolling(9).max(), plot_df['Low'].rolling(9).min()
+        h9, l9 = full_df['High'].rolling(9).max(), full_df['Low'].rolling(9).min()
         h9_l9_diff = h9 - l9
         h9_l9_diff[h9_l9_diff == 0] = 1e-9 
-        rsv = (plot_df['Close'] - l9) / h9_l9_diff * 100
+        rsv = (full_df['Close'] - l9) / h9_l9_diff * 100
         
         K, D = [50], [50]
         for v in rsv.fillna(50):
             K.append(K[-1]*(2/3) + v*(1/3))
             D.append(D[-1]*(2/3) + K[-1]*(1/3))
-        plot_df['K'], plot_df['D'] = K[1:], D[1:]
+        full_df['K'], full_df['D'] = K[1:], D[1:]
+        
+        plot_df = full_df.tail(120).copy()
         
         last_close = plot_df['Close'].iloc[-1]
         ma5_last = plot_df['MA5'].iloc[-1]
