@@ -78,7 +78,6 @@ if 'topic_results' not in st.session_state: st.session_state.topic_results = Non
 if 'show_whale' not in st.session_state: st.session_state.show_whale = False
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
 if 'fugle_key' not in st.session_state: st.session_state.fugle_key = "" 
-if 'ai_fetched_eps' not in st.session_state: st.session_state.ai_fetched_eps = {}
 if 'ai_fetched_financials' not in st.session_state: st.session_state.ai_fetched_financials = {}
 if 'show_pk' not in st.session_state: st.session_state.show_pk = False
 if 'ai_industry_result' not in st.session_state: st.session_state.ai_industry_result = None
@@ -158,29 +157,11 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
         else: return f"API 錯誤 ({response.status_code})", []
     except Exception as e: return f"連線異常: {str(e)}", []
 
-def get_eps_from_ai(stock_name, stock_id, api_key):
-    if not api_key: return None
-    api_key = api_key.strip()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    
-    # 🚀 動態時間校準：如果現在是 1~8月找今年，9~12月找明年
-    current_year = datetime.date.today().year
-    target_year = current_year if datetime.date.today().month < 9 else current_year + 1
-    
-    system_prompt = f"你是一個精準的財經數據提取機器人。請優先搜尋國內外法人針對該公司「{target_year} 年度」所預估的 EPS。『嚴格只回傳一個最合理的數字』（例如：30.5）。不要解釋、不要有其他文字。若查無資料，請回傳 0。"
-    payload = {"contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新的法人預估 EPS ({target_year}年)"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}]}
-    try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
-        if res.status_code == 200: return s_float(res.json()['candidates'][0]['content']['parts'][0]['text'].strip())
-    except: pass
-    return None
-
 def get_financials_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     
-    # 🚀 動態時間校準
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
     
@@ -193,13 +174,14 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     6. 「營益率」
     7. 「ROE(股東權益報酬率)」
     8. 「最新單月或累計營收年增率(YoY)」
+    9. 「國內外法人最新預估目標價 (Target Price)」(請找近期外資或投信給出的目標價平均或最新值)
 
     必須嚴格回傳 JSON 格式，百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     格式範例：
-    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082}}
+    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0}}
     絕對不要輸出 markdown 標記或其他文字。"""
     payload = {
-        "contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新財報與 {target_year} 預估估值指標"}]}],
+        "contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新財報與 {target_year} 預估估值指標與目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}]
     }
@@ -780,6 +762,7 @@ if curr_id:
         ai_gm = s_float(ai_fin.get('gross_margin'))
         ai_om = s_float(ai_fin.get('operating_margin'))
         ai_roe = s_float(ai_fin.get('roe'))
+        ai_target_price = s_float(ai_fin.get('target_price'))
         
         # 決定有效數值 (Fallback to AI)
         eff_pe = pe_ratio if pe_ratio is not None else ai_pe
@@ -800,14 +783,12 @@ if curr_id:
         if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
             sys_f_eps_calc = t_eps * (1 + earn_growth)
 
-        col_eps1, col_eps2, col_eps3 = st.columns([1.2, 1.5, 1])
-        with col_eps1: use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
-        with col_eps3:
-            if st.button("🤖 AI 自動上網尋找法人 EPS", disabled=not st.session_state.api_key):
-                val = get_eps_from_ai(c_name, curr_id, st.session_state.api_key)
-                if val: st.session_state.ai_fetched_eps[curr_id] = val; st.rerun()
+        # 🚀 乾淨的雙欄位配置 (移除多餘的 AI 搜尋 EPS 按鈕)
+        col_eps1, col_eps2 = st.columns([1.2, 1.5])
+        with col_eps1: 
+            use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
         with col_eps2:
-            default_eps = st.session_state.ai_fetched_eps.get(curr_id, ai_f_eps_calc if ai_f_eps_calc is not None else (sys_f_eps_calc if sys_f_eps_calc is not None else 1.0))
+            default_eps = ai_f_eps_calc if ai_f_eps_calc is not None else (sys_f_eps_calc if sys_f_eps_calc is not None else 1.0)
             custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
 
         if use_custom_eps:
@@ -1029,14 +1010,98 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 AI 綜合產業報告與打包提示詞
+        # 🚀 法人預估目標價 (系統原始數據 vs AI聯網捕捉)
         # ==========================================
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
         lo_val = s_float(info.get('targetLowPrice'))
+        ai_target_price = s_float(st.session_state.ai_fetched_financials.get(curr_id, {}).get('target_price'))
+
+        st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+        
+        if hi_val is not None and me_val is not None and lo_val is not None:
+            v1, v2, v3 = st.columns(3)
+            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi_val:.1f}</b></div>", unsafe_allow_html=True)
+            upside = ((me_val / curr_p) - 1) * 100 if curr_p else 0
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
+            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo_val:.1f}</b></div>", unsafe_allow_html=True)
+            if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元")
+            st.markdown("---")
+            
+        elif hi_val is not None:
+             st.info(f"系統法人最高預期：**{hi_val:.1f}**")
+             if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元")
+             st.markdown("---")
+             
+        elif ai_target_price:
+             upside_ai = ((ai_target_price / curr_p) - 1) * 100 if curr_p else 0
+             st.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>🤖 AI 聯網捕捉最新目標價</small><br><b>{ai_target_price:.1f}</b><br><small>潛在空間: {upside_ai:+.1f}%</small></div>", unsafe_allow_html=True)
+             st.markdown("---")
+        else:
+             st.markdown("<span style='color:gray;'>系統與 AI 目前皆無明確的法人目標價資料。</span>", unsafe_allow_html=True)
+             st.markdown("---")
+
+        # ==========================================
+        # 🚀 籌碼面與股權結構分析
+        # ==========================================
+        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
+        insider_pct = s_float(info.get('heldPercentInsiders'))
+        inst_pct = s_float(info.get('heldPercentInstitutions'))
+        shares_out = s_float(info.get('sharesOutstanding'))
+        share_capital = shares_out * 10 if shares_out is not None else None
+
+        if share_capital is not None:
+            if share_capital >= 10_000_000_000:
+                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
+            elif share_capital <= 3_000_000_000:
+                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
+            else:
+                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
+        else:
+            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
+
+        inst_str = to_pct(inst_pct)
+        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
+
+        insider_str = to_pct(insider_pct)
+        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
+
+        chip_html = f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
+                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
+                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
+                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
+                </div>
+                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
+            </div>
+        </div>
+        """
+        st.markdown(chip_html, unsafe_allow_html=True)
+        st.markdown("---")
+
+        # ==========================================
+        # 🚀 AI 綜合產業報告與打包提示詞
+        # ==========================================
         hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
+        ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price else "未捕捉到"
 
         def p_fmt(orig, ai_val, fmt="pct", suffix="AI捉取"):
             s = to_val_str(orig, fmt)
@@ -1094,6 +1159,7 @@ if curr_id:
         - 最高目標價: {hi_str}
         - 平均目標價: {me_str}
         - 最低保底價: {lo_str}
+        - AI 聯網捕捉最新目標價: {ai_tp_str}
         """
         
         full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
@@ -1133,76 +1199,6 @@ if curr_id:
                 st.code(st.session_state.ai_industry_result, language="markdown")
             st.markdown("<br>", unsafe_allow_html=True)
             
-        st.markdown("---")
-
-        # ==========================================
-        # 🚀 法人預估目標價
-        # ==========================================
-        if hi_val is not None and me_val is not None and lo_val is not None:
-            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-            v1, v2, v3 = st.columns(3)
-            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi_val:.1f}</b></div>", unsafe_allow_html=True)
-            upside = ((me_val / curr_p) - 1) * 100 if curr_p else 0
-            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
-            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo_val:.1f}</b></div>", unsafe_allow_html=True)
-            st.markdown("---")
-        elif hi_val is not None:
-             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
-             st.info(f"法人最高預期：**{hi_val:.1f}**")
-             st.markdown("---")
-
-        # ==========================================
-        # 🚀 籌碼面與股權結構分析
-        # ==========================================
-        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
-        insider_pct = s_float(info.get('heldPercentInsiders'))
-        inst_pct = s_float(info.get('heldPercentInstitutions'))
-        shares_out = s_float(info.get('sharesOutstanding'))
-        share_capital = shares_out * 10 if shares_out is not None else None
-
-        if share_capital is not None:
-            if share_capital >= 10_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
-            elif share_capital <= 3_000_000_000:
-                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
-            else:
-                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
-        else:
-            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
-
-        inst_str = to_pct(inst_pct)
-        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
-
-        insider_str = to_pct(insider_pct)
-        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
-
-        chip_html = f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
-                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
-                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
-                </div>
-                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
-                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
-                </div>
-                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
-                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
-            </div>
-        </div>
-        """
-        st.markdown(chip_html, unsafe_allow_html=True)
         st.markdown("---")
 
         # 產業 PK
