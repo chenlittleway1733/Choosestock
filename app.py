@@ -70,6 +70,44 @@ def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI捉取"
         s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({sa1} / {sa2}, {suffix})</span>"
     return s
 
+# --- 🌟 動態自選股讀寫引擎 ---
+def get_watchlist():
+    watchlist = []
+    if os.path.exists("stocklist.txt"):
+        try:
+            with open("stocklist.txt", "r", encoding="utf-8") as f:
+                for line in f:
+                    if "," in line:
+                        watchlist.append(line.split(",")[0].strip())
+        except: pass
+    return watchlist
+
+def toggle_watchlist(code, name):
+    lines = []
+    if os.path.exists("stocklist.txt"):
+        try:
+            with open("stocklist.txt", "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except: pass
+    
+    new_lines = []
+    is_removed = False
+    for line in lines:
+        # 若清單內已有此代號，則過濾掉 (等同於移除)
+        if "," in line and line.split(",")[0].strip() == str(code):
+            is_removed = True
+            continue
+        new_lines.append(line)
+        
+    if not is_removed:
+        # 若清單內沒有此代號，則新增到最後一行
+        if new_lines and not new_lines[-1].endswith("\n"):
+            new_lines[-1] = new_lines[-1] + "\n"
+        new_lines.append(f"{code},{name}\n")
+        
+    with open("stocklist.txt", "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
 # ==========================================
 # 2. Session State 初始化 & 狀態管理
 # ==========================================
@@ -584,7 +622,7 @@ if isinstance(st.session_state.topic_results, dict):
 
 if st.session_state.show_whale:
     st.markdown("### 🐳 近兩周大戶持股比例顯著增加標的")
-    whales = [("2317", "鸿海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("3324", "雙鴻")]
+    whales = [("2317", "鴻海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("3324", "雙鴻")]
     cols = st.columns(5)
     for idx, (code, name) in enumerate(whales):
         with cols[idx]: st.button(f"{name}\n({code})", on_click=reset_all_states_on_stock_change, args=(code,), key=f"w_{code}", use_container_width=True)
@@ -598,7 +636,18 @@ if curr_id:
         c_name = get_chinese_name(curr_id) or info.get('shortName', curr_id)
 
     if hist is not None and not hist.empty:
-        st.markdown(f"### 🏢 {c_name} ({curr_id})")
+        
+        # 🌟 動態加入/移除自選股按鈕
+        col_title, col_star = st.columns([0.85, 0.15])
+        with col_title:
+            st.markdown(f"### 🏢 {c_name} ({curr_id})")
+        with col_star:
+            in_watch = curr_id in get_watchlist()
+            btn_label = "⭐ 移除自選" if in_watch else "☆ 加入自選"
+            if st.button(btn_label, use_container_width=True):
+                toggle_watchlist(curr_id, c_name)
+                st.rerun()
+
         sector_disp = SECTOR_MAP.get(info.get('sector', '未知'), info.get('sector', '未知'))
         st.markdown(f"**🏷️ 產業分類：** {sector_disp} / {info.get('industry', '未知')}")
         with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
@@ -760,7 +809,7 @@ if curr_id:
         if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
             sys_f_eps_calc = t_eps * (1 + earn_growth)
 
-        # 🚀 乾淨的雙欄位配置
+        # 🚀 乾淨的雙欄位配置 (移除多餘的 AI 搜尋 EPS 按鈕)
         col_eps1, col_eps2 = st.columns([1.2, 1.5])
         with col_eps1: 
             use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
