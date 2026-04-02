@@ -459,6 +459,12 @@ def get_inst_data(stock_id):
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
             df['date'] = pd.to_datetime(df['date'])
+            
+            # 🚀 修正點：自行計算「買進 - 賣出 = 買賣超淨額」
+            df['buy'] = pd.to_numeric(df['buy'], errors='coerce').fillna(0)
+            df['sell'] = pd.to_numeric(df['sell'], errors='coerce').fillna(0)
+            df['buy_sell'] = df['buy'] - df['sell']
+            
             pivot_df = df.pivot_table(index='date', columns='name', values='buy_sell', aggfunc='sum').fillna(0)
             res_df = pd.DataFrame(index=pivot_df.index)
             f_cols = [c for c in pivot_df.columns if '外資' in c]
