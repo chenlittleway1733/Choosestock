@@ -762,6 +762,7 @@ if curr_id:
         ai_gm = s_float(ai_fin.get('gross_margin'))
         ai_om = s_float(ai_fin.get('operating_margin'))
         ai_roe = s_float(ai_fin.get('roe'))
+        ai_target_price = s_float(ai_fin.get('target_price'))
         
         # 決定有效數值 (Fallback to AI)
         eff_pe = pe_ratio if pe_ratio is not None else ai_pe
