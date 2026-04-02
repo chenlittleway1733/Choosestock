@@ -93,14 +93,12 @@ def toggle_watchlist(code, name):
     new_lines = []
     is_removed = False
     for line in lines:
-        # 若清單內已有此代號，則過濾掉 (等同於移除)
         if "," in line and line.split(",")[0].strip() == str(code):
             is_removed = True
             continue
         new_lines.append(line)
         
     if not is_removed:
-        # 若清單內沒有此代號，則新增到最後一行
         if new_lines and not new_lines[-1].endswith("\n"):
             new_lines[-1] = new_lines[-1] + "\n"
         new_lines.append(f"{code},{name}\n")
@@ -447,6 +445,30 @@ def get_chart_data(stock_id, timeframe, fugle_key=""):
                 if df.index.tz is not None: df.index = df.index.tz_localize(None)
                 return df
         except: continue
+    return pd.DataFrame()
+
+# 🌟 新增：取得法人買賣超資料
+@st.cache_data(ttl=43200)
+def get_inst_data(stock_id):
+    try:
+        today = datetime.date.today()
+        start_str = (today - datetime.timedelta(days=180)).strftime("%Y-%m-%d")
+        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={stock_id}&start_date={start_str}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        data = res.json()
+        if data.get('status') == 200 and data.get('data'):
+            df = pd.DataFrame(data['data'])
+            df['date'] = pd.to_datetime(df['date'])
+            pivot_df = df.pivot_table(index='date', columns='name', values='buy_sell', aggfunc='sum').fillna(0)
+            res_df = pd.DataFrame(index=pivot_df.index)
+            f_cols = [c for c in pivot_df.columns if '外資' in c]
+            t_cols = [c for c in pivot_df.columns if '投信' in c]
+            d_cols = [c for c in pivot_df.columns if '自營商' in c]
+            res_df['Foreign'] = pivot_df[f_cols].sum(axis=1) if f_cols else 0
+            res_df['Trust'] = pivot_df[t_cols].sum(axis=1) if t_cols else 0
+            res_df['Dealer'] = pivot_df[d_cols].sum(axis=1) if d_cols else 0
+            return res_df / 1000 # 轉換為「張數」
+    except: pass
     return pd.DataFrame()
 
 @st.cache_data(ttl=86400) 
@@ -809,7 +831,7 @@ if curr_id:
         if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
             sys_f_eps_calc = t_eps * (1 + earn_growth)
 
-        # 🚀 乾淨的雙欄位配置 (移除多餘的 AI 搜尋 EPS 按鈕)
+        # 🚀 乾淨的雙欄位配置
         col_eps1, col_eps2 = st.columns([1.2, 1.5])
         with col_eps1: 
             use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
@@ -1179,7 +1201,7 @@ if curr_id:
 
         col_ai1, col_ai2 = st.columns([1.2, 1])
         with col_ai1:
-            if st.button("🤖 啟動 AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
+            if st.button("🤖 啟提 AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
                 if not st.session_state.api_key: st.warning("請先於左側選單輸入您的 API Key。")
                 else:
                     with st.spinner(f"AI ({st.session_state.get('selected_model', 'gemini-2.5-flash')}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
@@ -1390,6 +1412,7 @@ if curr_id:
         
         # 🌟 將圖表從 2 層改為 3 層
         fig_k = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]])
+        
         fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='5MA', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='10MA', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
@@ -1432,7 +1455,7 @@ if curr_id:
 
         fig_k.update_xaxes(rangebreaks=rb, tickformat=x_fmt, showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
         
-        fig_k.update_layout(height=650, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+        fig_k.update_layout(height=750, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
         st.plotly_chart(fig_k, use_container_width=True)
     else:
         st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")
