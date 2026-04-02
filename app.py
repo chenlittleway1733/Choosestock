@@ -81,7 +81,6 @@ if 'fugle_key' not in st.session_state: st.session_state.fugle_key = ""
 if 'ai_fetched_financials' not in st.session_state: st.session_state.ai_fetched_financials = {}
 if 'show_pk' not in st.session_state: st.session_state.show_pk = False
 if 'ai_industry_result' not in st.session_state: st.session_state.ai_industry_result = None
-if 'ai_macro_result' not in st.session_state: st.session_state.ai_macro_result = None 
 if 'run_screener' not in st.session_state: st.session_state.run_screener = False
 if 'quick_select' not in st.session_state: st.session_state.quick_select = "-- 快速切換標的 --"
 if 'stock_input_widget' not in st.session_state: st.session_state.stock_input_widget = "2330"
@@ -91,7 +90,6 @@ def reset_all_states_on_stock_change(stock_code):
     st.session_state.quick_select = "-- 快速切換標的 --"
     st.session_state.show_pk = False
     st.session_state.ai_industry_result = None
-    st.session_state.ai_macro_result = None
     st.session_state.run_screener = False
 
 def on_stock_input_change():
@@ -224,25 +222,6 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
             ans = re.sub(r'```markdown\n?|```', '', res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')).strip()
             return fallback_msg + ans
         elif res.status_code == 429: return "⏳ API 呼叫太頻繁，請稍候再試或切換回 Flash 模型。"
-        else: return f"⚠️ API 連線失敗 (狀態碼: {res.status_code})"
-    except Exception as e: return f"連線異常: {str(e)}"
-
-def get_ai_macro_analysis(stock_name, stock_id, api_key, model_name="gemini-2.5-flash"):
-    if not api_key: return "ERROR: 未輸入金鑰"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
-    system_prompt = """你是一位專注於全球總體經濟與地緣政治的金融風險分析師。請針對目標公司，連網檢索並單獨分析目前的全球總體經濟環境（如通膨、利率動向、匯率波動）與近期的地緣政治事件（如中東局勢、美伊衝突、國際貿易戰等系統性風險）對該公司的具體影響。
-    【排版要求】：1. 必須專注於「總體經濟」與「地緣政治」維度。 2. 使用 Markdown 格式與 Emoji 點綴，條理分明。不要輸出 HTML。"""
-    payload = {"contents": [{"parts": [{"text": f"請分析最新總體經濟與地緣政治局勢，對台股 {stock_name} ({stock_id}) 近期的系統性影響與風險評估。"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}]}
-    try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
-        fallback_msg = ""
-        if res.status_code == 404 and model_name != "gemini-2.5-flash":
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
-            res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
-            fallback_msg = f"> 💡 **系統提示**：已自動降級使用 `Gemini 2.5 Flash` 為您完成分析。\n\n---\n\n"
-        if res.status_code == 200: 
-            ans = re.sub(r'```markdown\n?|```', '', res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')).strip()
-            return fallback_msg + ans
         else: return f"⚠️ API 連線失敗 (狀態碼: {res.status_code})"
     except Exception as e: return f"連線異常: {str(e)}"
 
@@ -525,7 +504,6 @@ with st.sidebar:
         st.session_state.topic_results = None
         st.session_state.show_pk = False
         st.session_state.ai_industry_result = None
-        st.session_state.ai_macro_result = None
         st.session_state.run_screener = False
         st.rerun()
         
@@ -552,7 +530,6 @@ with st.sidebar:
                 
             st.session_state.topic_results = "LOADING"
             st.session_state.ai_industry_result = None
-            st.session_state.ai_macro_result = None
             st.session_state.run_screener = False
             st.rerun()
             
@@ -607,7 +584,7 @@ if isinstance(st.session_state.topic_results, dict):
 
 if st.session_state.show_whale:
     st.markdown("### 🐳 近兩周大戶持股比例顯著增加標的")
-    whales = [("2317", "鴻海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("3324", "雙鴻")]
+    whales = [("2317", "鸿海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("3324", "雙鴻")]
     cols = st.columns(5)
     for idx, (code, name) in enumerate(whales):
         with cols[idx]: st.button(f"{name}\n({code})", on_click=reset_all_states_on_stock_change, args=(code,), key=f"w_{code}", use_container_width=True)
@@ -783,7 +760,7 @@ if curr_id:
         if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
             sys_f_eps_calc = t_eps * (1 + earn_growth)
 
-        # 🚀 乾淨的雙欄位配置 (移除多餘的 AI 搜尋 EPS 按鈕)
+        # 🚀 乾淨的雙欄位配置
         col_eps1, col_eps2 = st.columns([1.2, 1.5])
         with col_eps1: 
             use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
@@ -985,28 +962,6 @@ if curr_id:
             </div>
         </div>
         """, unsafe_allow_html=True)
-        
-        # ==========================================
-        # 🚀 總體經濟與地緣政治風險評估 (AI 專屬)
-        # ==========================================
-        st.markdown("#### 🌍 總體經濟與地緣政治系統性風險評估")
-        st.markdown("<small style='color:gray;'>*點擊下方按鈕，AI 將即時連網檢索全球最新總經數據（如通膨、利率）與地緣政治（如美伊衝突、貿易戰），評估其對該公司的近期影響。*</small>", unsafe_allow_html=True)
-        
-        if "3.1 Pro" in ai_model_option: current_model_for_macro = "gemini-3.1-pro-preview"
-        elif "3.1 Flash-Lite" in ai_model_option: current_model_for_macro = "gemini-3.1-flash-lite-preview"
-        elif "3 Flash" in ai_model_option: current_model_for_macro = "gemini-3-flash-preview"
-        elif "2.5 Pro" in ai_model_option: current_model_for_macro = "gemini-2.5-pro"
-        else: current_model_for_macro = "gemini-2.5-flash"
-
-        if st.button("🌍 啟動 AI 總經與地緣政治風險推演", use_container_width=True):
-            if not st.session_state.api_key:
-                st.warning("請先於左側選單輸入您的 API Key。")
-            else:
-                with st.spinner(f"AI ({current_model_for_macro}) 正在深度檢索全球總經與地緣政治事件..."):
-                    st.session_state.ai_macro_result = get_ai_macro_analysis(c_name, curr_id, st.session_state.api_key, current_model_for_macro)
-        
-        if st.session_state.ai_macro_result:
-            with st.container(border=True): st.markdown(st.session_state.ai_macro_result)
         st.markdown("---")
 
         # ==========================================
@@ -1178,8 +1133,8 @@ if curr_id:
             if st.button("🤖 啟動 AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
                 if not st.session_state.api_key: st.warning("請先於左側選單輸入您的 API Key。")
                 else:
-                    with st.spinner(f"AI ({current_model_for_macro}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
-                        st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, current_model_for_macro)
+                    with st.spinner(f"AI ({st.session_state.get('selected_model', 'gemini-2.5-flash')}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
+                        st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, st.session_state.get('selected_model', 'gemini-2.5-flash'))
         
         with col_ai2:
             with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
