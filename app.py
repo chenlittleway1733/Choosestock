@@ -447,7 +447,7 @@ def get_chart_data(stock_id, timeframe, fugle_key=""):
         except: continue
     return pd.DataFrame()
 
-# 🌟 新增：取得法人買賣超資料
+# 🌟 極度容錯版：取得法人買賣超資料
 @st.cache_data(ttl=43200)
 def get_inst_data(stock_id):
     try:
@@ -456,26 +456,39 @@ def get_inst_data(stock_id):
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={stock_id}&start_date={start_str}"
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         data = res.json()
+        
+        # 確認 API 有正常回傳，且 data 裡面真的有東西
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
+            if df.empty: return pd.DataFrame()
+            
             df['date'] = pd.to_datetime(df['date'])
             
-            # 🚀 修正點：自行計算「買進 - 賣出 = 買賣超淨額」
-            df['buy'] = pd.to_numeric(df['buy'], errors='coerce').fillna(0)
-            df['sell'] = pd.to_numeric(df['sell'], errors='coerce').fillna(0)
-            df['buy_sell'] = df['buy'] - df['sell']
+            # 🚀 暴力防呆：處理各種可能的欄位缺失狀況
+            if 'buy_sell' not in df.columns:
+                if 'buy' not in df.columns: df['buy'] = 0
+                if 'sell' not in df.columns: df['sell'] = 0
+                df['buy'] = pd.to_numeric(df['buy'], errors='coerce').fillna(0)
+                df['sell'] = pd.to_numeric(df['sell'], errors='coerce').fillna(0)
+                df['buy_sell'] = df['buy'] - df['sell']
+            else:
+                df['buy_sell'] = pd.to_numeric(df['buy_sell'], errors='coerce').fillna(0)
             
             pivot_df = df.pivot_table(index='date', columns='name', values='buy_sell', aggfunc='sum').fillna(0)
             res_df = pd.DataFrame(index=pivot_df.index)
-            f_cols = [c for c in pivot_df.columns if '外資' in c]
-            t_cols = [c for c in pivot_df.columns if '投信' in c]
-            d_cols = [c for c in pivot_df.columns if '自營商' in c]
+            
+            # 模糊比對欄位名稱，避免中英文變更
+            f_cols = [c for c in pivot_df.columns if '外資' in str(c) or 'Foreign' in str(c)]
+            t_cols = [c for c in pivot_df.columns if '投信' in str(c) or 'Trust' in str(c)]
+            d_cols = [c for c in pivot_df.columns if '自營商' in str(c) or 'Dealer' in str(c)]
+            
             res_df['Foreign'] = pivot_df[f_cols].sum(axis=1) if f_cols else 0
             res_df['Trust'] = pivot_df[t_cols].sum(axis=1) if t_cols else 0
             res_df['Dealer'] = pivot_df[d_cols].sum(axis=1) if d_cols else 0
-            return res_df / 1000 # 轉換為「張數」
+            return res_df / 1000 # 轉換為張數
     except: pass
-    return pd.DataFrame()
+    
+    return pd.DataFrame() # 只要出錯一律安靜回傳空表
 
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
@@ -1360,14 +1373,20 @@ if curr_id:
         
         plot_df = full_df.tail(120).copy()
         
-        # --- 加入法人籌碼資料對齊 ---
+        # --- 🚀 完美容錯版：加入法人籌碼資料對齊 ---
         inst_df = get_inst_data(curr_id)
         if not inst_df.empty:
-            plot_df.index = pd.to_datetime(plot_df.index).normalize()
+            # 建立暫存日期欄位來對齊，確保不會破壞原本 K 線的 intraday 時間軸
+            temp_dates = pd.to_datetime(plot_df.index).normalize()
             inst_df.index = pd.to_datetime(inst_df.index).normalize()
-            plot_df = plot_df.join(inst_df, how='left').fillna(0)
+            
+            plot_df['Foreign'] = temp_dates.map(inst_df['Foreign']).fillna(0)
+            plot_df['Trust'] = temp_dates.map(inst_df['Trust']).fillna(0)
+            plot_df['Dealer'] = temp_dates.map(inst_df['Dealer']).fillna(0)
         else:
+            # 若資料庫斷線或回傳空表，全部設為 0，並跳出黃色警示！
             plot_df['Foreign'] = 0; plot_df['Trust'] = 0; plot_df['Dealer'] = 0
+            st.warning("⚠️ 系統無法獲取三大法人買賣超數據。 (原因：免費資料庫 FinMind 限制每小時 300 次請求，您可能已達上限，請稍後再試。下方籌碼圖暫時以 0 顯示。)")
             
         last_close = plot_df['Close'].iloc[-1]
         ma5_last = plot_df['MA5'].iloc[-1]
