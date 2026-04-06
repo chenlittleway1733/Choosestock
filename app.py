@@ -166,31 +166,6 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     except: pass
     return pd.DataFrame()
 
-def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
-    if not api_key: return "ERROR: 未輸入金鑰", []
-    api_key = api_key.strip()
-    headers = {"Content-Type": "application/json"}
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-    system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
-    payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        if response.status_code == 404 and model_name != "gemini-2.5-flash":
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            response = requests.post(fallback_url, headers=headers, json=payload, timeout=30)
-        if response.status_code == 200:
-            res_json = response.json()
-            content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-            clean_json = re.sub(r'```json\n?|```', '', content).strip()
-            s_idx = clean_json.find('{')
-            e_idx = clean_json.rfind('}')
-            if s_idx != -1 and e_idx != -1: clean_json = clean_json[s_idx:e_idx+1]
-            grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
-            links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
-            return json.loads(clean_json), list(set(links))
-        else: return f"API 錯誤 ({response.status_code})", []
-    except Exception as e: return f"連線異常: {str(e)}", []
-
 def get_financials_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
@@ -199,6 +174,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
     
+    # 🚀 加入負債權益比 (D/E Ratio) 的強制搜尋
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
@@ -206,16 +182,18 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     4. 「股價淨值比 (P/B)」
     5. 「毛利率」
     6. 「營益率」
-    7. 「ROE(股東權益報酬率)」
+    7. 「ROE(股東權益報酬率)」(非常重要，請務必搜尋)
     8. 「最新單月或累計營收年增率(YoY)」
     9. 「國內外法人最新預估目標價 (Target Price)」(請找近期外資或投信給出的目標價平均或最新值)
+    10. 「負債權益比 (Debt-to-Equity Ratio)」(請務必搜尋，評估財務槓桿)
 
-    必須嚴格回傳 JSON 格式，百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
+    必須嚴格回傳包含上述 10 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     格式範例：
-    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0}}
+    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "debt_to_equity": 0.45}}
     絕對不要輸出 markdown 標記或其他文字。"""
+    
     payload = {
-        "contents": [{"parts": [{"text": f"請搜尋台股 {stock_name} ({stock_id}) 最新財報與 {target_year} 預估估值指標與目標價"}]}],
+        "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 (務必找出: 毛利率、營益率、ROE 股東權益報酬率、負債權益比) 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}]
     }
@@ -260,6 +238,31 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         elif res.status_code == 429: return "⏳ API 呼叫太頻繁，請稍候再試或切換回 Flash 模型。"
         else: return f"⚠️ API 連線失敗 (狀態碼: {res.status_code})"
     except Exception as e: return f"連線異常: {str(e)}"
+
+def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
+    if not api_key: return "ERROR: 未輸入金鑰", []
+    api_key = api_key.strip()
+    headers = {"Content-Type": "application/json"}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
+    payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        if response.status_code == 404 and model_name != "gemini-2.5-flash":
+            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+            response = requests.post(fallback_url, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            res_json = response.json()
+            content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            clean_json = re.sub(r'```json\n?|```', '', content).strip()
+            s_idx = clean_json.find('{')
+            e_idx = clean_json.rfind('}')
+            if s_idx != -1 and e_idx != -1: clean_json = clean_json[s_idx:e_idx+1]
+            grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
+            links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
+            return json.loads(clean_json), list(set(links))
+        else: return f"API 錯誤 ({response.status_code})", []
+    except Exception as e: return f"連線異常: {str(e)}", []
 
 # --- 🌍 動態判定今日/明日 ---
 @st.cache_data(ttl=900) 
@@ -805,6 +808,11 @@ if curr_id:
             pb_ratio = s_float(df_per_bk['PBR'].iloc[-1])
             
         roe = s_float(info.get('returnOnEquity'))
+        
+        # 🚀 負債權益比 (Yahoo 預設為百分位數如 50 代表 50%)
+        sys_de = s_float(info.get('debtToEquity'))
+        if sys_de is not None: sys_de = sys_de / 100.0  
+        
         gross_margin = s_float(info.get('grossMargins'))
         op_margin = s_float(info.get('operatingMargins'))
         
@@ -829,6 +837,7 @@ if curr_id:
         ai_gm = s_float(ai_fin.get('gross_margin'))
         ai_om = s_float(ai_fin.get('operating_margin'))
         ai_roe = s_float(ai_fin.get('roe'))
+        ai_de = s_float(ai_fin.get('debt_to_equity'))
         ai_target_price = s_float(ai_fin.get('target_price'))
         
         # 決定有效數值 (Fallback to AI)
@@ -840,6 +849,7 @@ if curr_id:
         eff_gm = gross_margin if gross_margin is not None else ai_gm
         eff_om = op_margin if op_margin is not None else ai_om
         eff_roe = roe if roe is not None else ai_roe
+        eff_de = sys_de if sys_de is not None else ai_de
         
         # 🚀 智慧反推與有效 Forward EPS 決策
         ai_f_eps_calc = ai_f_eps
@@ -904,10 +914,13 @@ if curr_id:
         rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct')
         gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', 'AI捉取')
         roe_str = build_cmp_str(roe, ai_roe, 'pct')
+        de_str = build_cmp_str(sys_de, ai_de, 'pct')
         
         rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
+        de_eval = " <span style='color:#ff4d4d; font-size:0.8rem; margin-left:5px;' title='大於100%視為高槓桿風險'>⚠️ 高槓桿</span>" if eff_de is not None and eff_de > 1.0 else (" <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;'>🛡️ 穩健</span>" if eff_de is not None and eff_de < 0.5 else "")
 
+        # 🚀 在畫面上加入第 7 格：負債權益比
         fund_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>歷史本益比 (P/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{pe_str}</div></div>
@@ -916,6 +929,7 @@ if curr_id:
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>預估獲利成長 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{eg_color};'>{eg_str_disp}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>毛利率 / 營益率</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{gm_om_str}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>ROE (權益報酬率)</div><div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{roe_str}{roe_eval}</div></div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>負債權益比 (D/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{de_str}{de_eval}</div></div>
         </div>
         """
         st.markdown(fund_html, unsafe_allow_html=True)
@@ -1168,6 +1182,7 @@ if curr_id:
         ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
         ctx_om = p_fmt(op_margin, ai_om, 'pct')
         ctx_roe = p_fmt(roe, ai_roe, 'pct')
+        ctx_de = p_fmt(sys_de, ai_de, 'pct')
         
         if use_custom_eps:
             ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
@@ -1199,6 +1214,7 @@ if curr_id:
         - 毛利率: {ctx_gm}
         - 營業利益率: {ctx_om}
         - 股東權益報酬率 (ROE): {ctx_roe}
+        - 負債權益比 (D/E Ratio): {ctx_de}
 
         【法人預估目標價】
         - 最高目標價: {hi_str}
