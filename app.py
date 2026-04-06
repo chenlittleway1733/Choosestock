@@ -174,7 +174,6 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
     
-    # 🚀 加入負債權益比 (D/E Ratio) 的強制搜尋
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
@@ -893,17 +892,25 @@ if curr_id:
             ai_fpe = curr_p / ai_f_eps_calc if ai_f_eps_calc and ai_f_eps_calc > 0 else None
             eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
             
-            orig_peg = pe_ratio / (earn_growth * 100) if pe_ratio and earn_growth and earn_growth > 0 else None
+            # 🚀 修復點：讓系統自己計算「真實隱含成長率」，不再被傳統資料庫誤導！
+            if eff_f_eps is not None and t_eps is not None and t_eps > 0:
+                real_cg = (eff_f_eps - t_eps) / t_eps
+            else:
+                real_cg = earn_growth
+            
+            orig_peg = pe_ratio / (real_cg * 100) if pe_ratio is not None and real_cg is not None and real_cg > 0 else None
+            
             ai_cg = (ai_f_eps_calc - ai_t_eps) / ai_t_eps if ai_t_eps and ai_t_eps > 0 and ai_f_eps_calc else ai_yoy
             ai_peg = ai_pe / (ai_cg * 100) if ai_pe and ai_cg and ai_cg > 0 else None
             
             eff_peg = orig_peg if orig_peg is not None else ai_peg
-            if earn_growth is not None and earn_growth <= 0: eff_peg = -999
+            if real_cg is not None and real_cg <= 0: eff_peg = -999
             
-            eg_str_disp = build_cmp_str(earn_growth, ai_yoy, 'pct', 'AI捉取')
-            eg_color = "#ff4d4d" if eff_eg and eff_eg > 0 else ("#00cc66" if eff_eg and eff_eg < 0 else "#fff")
+            # 更新畫面顯示為真實的反推成長率
+            eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', 'AI反推')
+            eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
             
-            orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if earn_growth is not None and earn_growth <= 0 else "N/A")
+            orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if real_cg is not None and real_cg <= 0 else "N/A")
             peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_peg:.2f}, AI反推)</span>" if ai_peg is not None else orig_peg_str
             
             orig_fpe_str = f"{sys_forward_pe:.1f}x" if sys_forward_pe is not None else "N/A"
@@ -918,7 +925,15 @@ if curr_id:
         
         rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
-        de_eval = " <span style='color:#ff4d4d; font-size:0.8rem; margin-left:5px;' title='大於100%視為高槓桿風險'>⚠️ 高槓桿</span>" if eff_de is not None and eff_de > 1.0 else (" <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;'>🛡️ 穩健</span>" if eff_de is not None and eff_de < 0.5 else "")
+        
+        if eff_de is None:
+            de_eval = ""
+        elif eff_de < 0.5:
+            de_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='小於50%財務極度穩健'>⭐ 優質</span>"
+        elif eff_de > 1.0:
+            de_eval = " <span style='color:#ff4d4d; font-size:0.8rem; margin-left:5px;' title='大於100%視為高槓桿風險'>⚠️ 高槓桿</span>"
+        else:
+            de_eval = " <span style='color:#FFD700; font-size:0.8rem; margin-left:5px;' title='50%~100%為資本密集產業常見合理區間'>🆗 合理</span>"
 
         # 🚀 在畫面上加入第 7 格：負債權益比
         fund_html = f"""
@@ -1184,6 +1199,7 @@ if curr_id:
         ctx_roe = p_fmt(roe, ai_roe, 'pct')
         ctx_de = p_fmt(sys_de, ai_de, 'pct')
         
+        # 確保隱藏提示詞中的 eg (成長率) 使用真實反推的值
         if use_custom_eps:
             ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
             ctx_peg = f"{eff_peg:.2f}" if eff_peg is not None else "N/A"
@@ -1191,13 +1207,13 @@ if curr_id:
             ctx_eg = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
         else:
             ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推')
-            orig_peg_num = orig_peg if orig_peg is not None else (-999 if earn_growth is not None and earn_growth <= 0 else None)
+            orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
             if orig_peg_num == -999:
                 ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
             else:
                 ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
             ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
-            ctx_eg = p_fmt(earn_growth, ai_yoy, 'pct', 'AI捉取')
+            ctx_eg = p_fmt(real_cg, ai_yoy, 'pct', 'AI推算')
 
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
@@ -1236,7 +1252,7 @@ if curr_id:
 
         col_ai1, col_ai2 = st.columns([1.2, 1])
         with col_ai1:
-            if st.button("🤖 啟提 AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
+            if st.button("🤖 啟動 AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
                 if not st.session_state.api_key: st.warning("請先於左側選單輸入您的 API Key。")
                 else:
                     with st.spinner(f"AI ({st.session_state.get('selected_model', 'gemini-2.5-flash')}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
