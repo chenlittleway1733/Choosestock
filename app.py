@@ -459,14 +459,12 @@ def get_inst_data(stock_id):
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         data = res.json()
         
-        # 確認 API 有正常回傳，且 data 裡面真的有東西
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
             if df.empty: return pd.DataFrame()
             
             df['date'] = pd.to_datetime(df['date'])
             
-            # 🚀 暴力防呆：處理各種可能的欄位缺失狀況
             if 'buy_sell' not in df.columns:
                 if 'buy' not in df.columns: df['buy'] = 0
                 if 'sell' not in df.columns: df['sell'] = 0
@@ -479,7 +477,6 @@ def get_inst_data(stock_id):
             pivot_df = df.pivot_table(index='date', columns='name', values='buy_sell', aggfunc='sum').fillna(0)
             res_df = pd.DataFrame(index=pivot_df.index)
             
-            # 模糊比對欄位名稱，避免中英文變更
             f_cols = [c for c in pivot_df.columns if '外資' in str(c) or 'Foreign' in str(c)]
             t_cols = [c for c in pivot_df.columns if '投信' in str(c) or 'Trust' in str(c)]
             d_cols = [c for c in pivot_df.columns if '自營商' in str(c) or 'Dealer' in str(c)]
@@ -487,10 +484,10 @@ def get_inst_data(stock_id):
             res_df['Foreign'] = pivot_df[f_cols].sum(axis=1) if f_cols else 0
             res_df['Trust'] = pivot_df[t_cols].sum(axis=1) if t_cols else 0
             res_df['Dealer'] = pivot_df[d_cols].sum(axis=1) if d_cols else 0
-            return res_df / 1000 # 轉換為張數
+            return res_df / 1000 
     except: pass
     
-    return pd.DataFrame() # 只要出錯一律安靜回傳空表
+    return pd.DataFrame()
 
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):
@@ -807,8 +804,6 @@ if curr_id:
             pb_ratio = s_float(df_per_bk['PBR'].iloc[-1])
             
         roe = s_float(info.get('returnOnEquity'))
-        
-        # 🚀 負債權益比 (Yahoo 預設為百分位數如 50 代表 50%)
         sys_de = s_float(info.get('debtToEquity'))
         if sys_de is not None: sys_de = sys_de / 100.0  
         
@@ -849,6 +844,15 @@ if curr_id:
         eff_om = op_margin if op_margin is not None else ai_om
         eff_roe = roe if roe is not None else ai_roe
         eff_de = sys_de if sys_de is not None else ai_de
+
+        # 🚀 財報時間差校正引擎 (杜絕 ROE 與 P/E, P/B 的數學矛盾)
+        # 透過會計恆等式 ROE = (P/B) / (P/E) 強制對齊時間基準
+        if eff_pe and eff_pe > 0 and eff_pb and eff_pb > 0:
+            eff_roe = eff_pb / eff_pe
+            roe = eff_roe # 覆寫系統原始變數，確保畫面顯示與底層計算一致
+            
+        if ai_pe and ai_pe > 0 and ai_pb and ai_pb > 0:
+            ai_roe = ai_pb / ai_pe
         
         # 🚀 智慧反推與有效 Forward EPS 決策
         ai_f_eps_calc = ai_f_eps
@@ -907,7 +911,7 @@ if curr_id:
             if real_cg is not None and real_cg <= 0: eff_peg = -999
             
             # 更新畫面顯示為真實的反推成長率
-            eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', 'AI反推')
+            eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', 'AI推算')
             eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
             
             orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if real_cg is not None and real_cg <= 0 else "N/A")
@@ -920,11 +924,13 @@ if curr_id:
 
         rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct')
         gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', 'AI捉取')
-        roe_str = build_cmp_str(roe, ai_roe, 'pct')
+        
+        # 標註 ROE 為推算數值
+        roe_str = build_cmp_str(roe, ai_roe, 'pct', 'AI推算')
         de_str = build_cmp_str(sys_de, ai_de, 'pct')
         
         rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
-        roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
+        roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳 (已透過恆等式校正)'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
         
         if eff_de is None:
             de_eval = ""
@@ -943,7 +949,7 @@ if curr_id:
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收年增率 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>預估獲利成長 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{eg_color};'>{eg_str_disp}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>毛利率 / 營益率</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{gm_om_str}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>ROE (權益報酬率)</div><div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{roe_str}{roe_eval}</div></div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>ROE (恆等式校正)</div><div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{roe_str}{roe_eval}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>負債權益比 (D/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{de_str}{de_eval}</div></div>
         </div>
         """
@@ -1207,13 +1213,19 @@ if curr_id:
             ctx_eg = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
         else:
             ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推')
-            orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
+            # 使用真實算出來的 real_cg 而不是傳統資料庫的 earningGrowth
+            if eff_f_eps is not None and t_eps is not None and t_eps > 0:
+                real_cg_for_prompt = (eff_f_eps - t_eps) / t_eps
+            else:
+                real_cg_for_prompt = earn_growth
+                
+            orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg_for_prompt is not None and real_cg_for_prompt <= 0 else None)
             if orig_peg_num == -999:
                 ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
             else:
                 ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
             ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
-            ctx_eg = p_fmt(real_cg, ai_yoy, 'pct', 'AI推算')
+            ctx_eg = p_fmt(real_cg_for_prompt, ai_yoy, 'pct', 'AI推算')
 
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
