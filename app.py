@@ -846,10 +846,9 @@ if curr_id:
         eff_de = sys_de if sys_de is not None else ai_de
 
         # 🚀 財報時間差校正引擎 (杜絕 ROE 與 P/E, P/B 的數學矛盾)
-        # 透過會計恆等式 ROE = (P/B) / (P/E) 強制對齊時間基準
         if eff_pe and eff_pe > 0 and eff_pb and eff_pb > 0:
             eff_roe = eff_pb / eff_pe
-            roe = eff_roe # 覆寫系統原始變數，確保畫面顯示與底層計算一致
+            roe = eff_roe 
             
         if ai_pe and ai_pe > 0 and ai_pb and ai_pb > 0:
             ai_roe = ai_pb / ai_pe
@@ -875,7 +874,18 @@ if curr_id:
             eff_f_eps = custom_eps
             eff_cg = (eff_f_eps - eff_t_eps) / eff_t_eps if eff_t_eps and eff_t_eps > 0 else None
             eff_forward_pe = curr_p / eff_f_eps if eff_f_eps > 0 else None
-            eff_peg = eff_pe / (eff_cg * 100) if eff_pe and eff_cg and eff_cg > 0 else None
+            
+            # 🚀 升級一：自訂版 Forward PEG
+            eff_peg = eff_forward_pe / (eff_cg * 100) if eff_forward_pe and eff_cg and eff_cg > 0 else None
+            
+            # 🚀 升級二與三：自訂版逆向估價與防護 (Cap)
+            if eff_f_eps is not None and eff_cg is not None and eff_cg > 0:
+                raw_mult = eff_cg * 100 * 1.0
+                capped_mult = min(raw_mult, 30.0)
+                sys_target_price_est = eff_f_eps * capped_mult
+                is_capped = raw_mult > 30.0
+            else:
+                sys_target_price_est = None; is_capped = False
             
             eg_str_disp = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
             eg_color = "#ff4d4d" if eff_cg and eff_cg > 0 else ("#00cc66" if eff_cg and eff_cg < 0 else "gray")
@@ -896,21 +906,31 @@ if curr_id:
             ai_fpe = curr_p / ai_f_eps_calc if ai_f_eps_calc and ai_f_eps_calc > 0 else None
             eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
             
-            # 🚀 修復點：讓系統自己計算「真實隱含成長率」，不再被傳統資料庫誤導！
+            # 🚀 取得真實隱含成長率
             if eff_f_eps is not None and t_eps is not None and t_eps > 0:
                 real_cg = (eff_f_eps - t_eps) / t_eps
             else:
                 real_cg = earn_growth
             
-            orig_peg = pe_ratio / (real_cg * 100) if pe_ratio is not None and real_cg is not None and real_cg > 0 else None
+            # 🚀 升級一：Forward PEG (前瞻本益成長比)
+            orig_peg = eff_forward_pe / (real_cg * 100) if eff_forward_pe is not None and real_cg is not None and real_cg > 0 else None
             
             ai_cg = (ai_f_eps_calc - ai_t_eps) / ai_t_eps if ai_t_eps and ai_t_eps > 0 and ai_f_eps_calc else ai_yoy
-            ai_peg = ai_pe / (ai_cg * 100) if ai_pe and ai_cg and ai_cg > 0 else None
+            ai_peg = ai_fpe / (ai_cg * 100) if ai_fpe and ai_cg and ai_cg > 0 else None
             
             eff_peg = orig_peg if orig_peg is not None else ai_peg
             if real_cg is not None and real_cg <= 0: eff_peg = -999
             
-            # 更新畫面顯示為真實的反推成長率
+            # 🚀 升級二與三：逆向工程估價與低基期失真防護 (Cap)
+            if eff_f_eps is not None and real_cg is not None and real_cg > 0:
+                raw_mult = real_cg * 100 * 1.0 # 預設目標 PEG 為 1.0
+                capped_mult = min(raw_mult, 30.0) # 封頂 30 倍
+                sys_target_price_est = eff_f_eps * capped_mult
+                is_capped = raw_mult > 30.0
+            else:
+                sys_target_price_est = None; is_capped = False
+            
+            # 更新畫面顯示
             eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', 'AI推算')
             eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
             
@@ -924,24 +944,17 @@ if curr_id:
 
         rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct')
         gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', 'AI捉取')
-        
-        # 標註 ROE 為推算數值
         roe_str = build_cmp_str(roe, ai_roe, 'pct', 'AI推算')
         de_str = build_cmp_str(sys_de, ai_de, 'pct')
         
         rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳 (已透過恆等式校正)'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
         
-        if eff_de is None:
-            de_eval = ""
-        elif eff_de < 0.5:
-            de_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='小於50%財務極度穩健'>⭐ 優質</span>"
-        elif eff_de > 1.0:
-            de_eval = " <span style='color:#ff4d4d; font-size:0.8rem; margin-left:5px;' title='大於100%視為高槓桿風險'>⚠️ 高槓桿</span>"
-        else:
-            de_eval = " <span style='color:#FFD700; font-size:0.8rem; margin-left:5px;' title='50%~100%為資本密集產業常見合理區間'>🆗 合理</span>"
+        if eff_de is None: de_eval = ""
+        elif eff_de < 0.5: de_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='小於50%財務極度穩健'>⭐ 優質</span>"
+        elif eff_de > 1.0: de_eval = " <span style='color:#ff4d4d; font-size:0.8rem; margin-left:5px;' title='大於100%視為高槓桿風險'>⚠️ 高槓桿</span>"
+        else: de_eval = " <span style='color:#FFD700; font-size:0.8rem; margin-left:5px;' title='50%~100%為資本密集產業常見合理區間'>🆗 合理</span>"
 
-        # 🚀 在畫面上加入第 7 格：負債權益比
         fund_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>歷史本益比 (P/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{pe_str}</div></div>
@@ -979,6 +992,9 @@ if curr_id:
             else: fpe_color, fpe_text = "#FFD700", "合理區間"
 
         pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
+        
+        # 🚀 畫面升級：加入逆向估價目標價顯示
+        target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🛡️ 逆向工程目標價: <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b>{' <span style='color:#ff4d4d;'>(已觸發30x防護)</span>' if is_capped else ''}</div>" if sys_target_price_est else ""
 
         val_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
@@ -997,9 +1013,10 @@ if curr_id:
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 本益成長比 (PEG)</div><div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_text}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 前瞻 PEG (Forward PEG)</div><div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_text}</div>
                 </div>
-                <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{peg_str_disp}</div>
+                <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{peg_str_disp}</div>
+                {target_price_html}
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
