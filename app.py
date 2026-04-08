@@ -862,28 +862,40 @@ if curr_id:
         if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
             sys_f_eps_calc = t_eps * (1 + earn_growth)
 
-        # 🚀 乾淨的雙欄位配置
-        col_eps1, col_eps2 = st.columns([1.2, 1.5])
+        # 🚀 終極估值大腦：引入 Forward PEG、動態天花板 (Cap) 與逆向工程估價
+        col_eps1, col_eps2, col_eps3, col_eps4 = st.columns([1, 1.2, 1.2, 1.2])
         with col_eps1: 
-            use_custom_eps = st.toggle("切換為「自訂 / 法人共識預估 EPS」", value=False)
+            use_custom_eps = st.toggle("自訂法人預估 EPS", value=False)
         with col_eps2:
             default_eps = ai_f_eps_calc if ai_f_eps_calc is not None else (sys_f_eps_calc if sys_f_eps_calc is not None else 1.0)
-            custom_eps = st.number_input("輸入國內法人共識 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
+            custom_eps = st.number_input("輸入法人預估 EPS", value=s_float(default_eps, 1.0), step=0.5, disabled=not use_custom_eps)
+        with col_eps3:
+            # 加入目標 PEG 情境調整
+            target_peg_adj = st.selectbox(
+                "🎯 估值情境 (目標 PEG)", 
+                [1.0, 1.2, 1.5], 
+                format_func=lambda x: "保守 (1.0x)" if x==1.0 else ("穩健 (1.2x)" if x==1.2 else "樂觀高空 (1.5x)"),
+                index=0,
+                help="教練密技：目標價逆推公式的乘數。大盤熱度高或作夢空間大時可調升至 1.5。"
+            )
+        with col_eps4:
+            # 加入低基期失真防護 (Cap)
+            target_pe_cap = st.number_input("⚙️ 本益比天花板 (Cap)", value=30.0, step=5.0, help="防禦低基期失真陷阱！當(成長率×目標PEG)飆破天際時，系統最多只會給到這個本益比上限。")
 
         if use_custom_eps:
             eff_f_eps = custom_eps
             eff_cg = (eff_f_eps - eff_t_eps) / eff_t_eps if eff_t_eps and eff_t_eps > 0 else None
             eff_forward_pe = curr_p / eff_f_eps if eff_f_eps > 0 else None
             
-            # 🚀 升級一：自訂版 Forward PEG
+            # 🚀 教練升級 1：前瞻 PEG (Forward PEG) = 前瞻 PE / 未來成長率
             eff_peg = eff_forward_pe / (eff_cg * 100) if eff_forward_pe and eff_cg and eff_cg > 0 else None
             
-            # 🚀 升級二與三：自訂版逆向估價與防護 (Cap)
+            # 🚀 教練升級 2 & 3：逆向工程估價 + 低基期失真防護 (Cap)
             if eff_f_eps is not None and eff_cg is not None and eff_cg > 0:
-                raw_mult = eff_cg * 100 * 1.0
-                capped_mult = min(raw_mult, 30.0)
+                raw_mult = (eff_cg * 100) * target_peg_adj
+                capped_mult = min(raw_mult, target_pe_cap)
                 sys_target_price_est = eff_f_eps * capped_mult
-                is_capped = raw_mult > 30.0
+                is_capped = raw_mult > target_pe_cap
             else:
                 sys_target_price_est = None; is_capped = False
             
@@ -906,13 +918,13 @@ if curr_id:
             ai_fpe = curr_p / ai_f_eps_calc if ai_f_eps_calc and ai_f_eps_calc > 0 else None
             eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
             
-            # 🚀 取得真實隱含成長率
+            # 取得真實隱含成長率
             if eff_f_eps is not None and t_eps is not None and t_eps > 0:
                 real_cg = (eff_f_eps - t_eps) / t_eps
             else:
                 real_cg = earn_growth
             
-            # 🚀 升級一：Forward PEG (前瞻本益成長比)
+            # 🚀 教練升級 1：前瞻 PEG (Forward PEG) = 前瞻 PE / 未來成長率
             orig_peg = eff_forward_pe / (real_cg * 100) if eff_forward_pe is not None and real_cg is not None and real_cg > 0 else None
             
             ai_cg = (ai_f_eps_calc - ai_t_eps) / ai_t_eps if ai_t_eps and ai_t_eps > 0 and ai_f_eps_calc else ai_yoy
@@ -921,12 +933,12 @@ if curr_id:
             eff_peg = orig_peg if orig_peg is not None else ai_peg
             if real_cg is not None and real_cg <= 0: eff_peg = -999
             
-            # 🚀 升級二與三：逆向工程估價與低基期失真防護 (Cap)
+            # 🚀 教練升級 2 & 3：逆向工程估價 + 低基期失真防護 (Cap)
             if eff_f_eps is not None and real_cg is not None and real_cg > 0:
-                raw_mult = real_cg * 100 * 1.0 # 預設目標 PEG 為 1.0
-                capped_mult = min(raw_mult, 30.0) # 封頂 30 倍
+                raw_mult = (real_cg * 100) * target_peg_adj
+                capped_mult = min(raw_mult, target_pe_cap)
                 sys_target_price_est = eff_f_eps * capped_mult
-                is_capped = raw_mult > 30.0
+                is_capped = raw_mult > target_pe_cap
             else:
                 sys_target_price_est = None; is_capped = False
             
@@ -993,8 +1005,19 @@ if curr_id:
 
         pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
         
-        # 🚀 畫面升級：加入逆向估價目標價顯示
-        target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🛡️ 逆向工程目標價: <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b>{' <span style='color:#ff4d4d;'>(已觸發30x防護)</span>' if is_capped else ''}</div>" if sys_target_price_est else ""
+        # 🚀 畫面大升級：印出教練的「合理高空價 (逆向工程推算)」與「低基期防護」
+        if sys_target_price_est:
+            cg_display = real_cg * 100 if real_cg else 0
+            cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>🚨 已啟動低基期防護 (最高封頂 {target_pe_cap:.0f} 倍)</span>" if is_capped else ""
+            target_price_html = f"""
+            <div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>
+                🎯 合理高空價 (逆向推算): <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b>
+                <br><small style='color:#ccc;'>公式: 預估EPS({eff_f_eps:.2f}) × min(成長率{cg_display:.1f} × 乘數{target_peg_adj}, Cap天花板{target_pe_cap:.0f})</small>
+                {cap_warning_html}
+            </div>
+            """
+        else:
+            target_price_html = ""
 
         val_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
