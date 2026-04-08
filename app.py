@@ -883,6 +883,10 @@ if curr_id:
         if use_custom_eps:
             eff_f_eps = custom_eps
             eff_cg = (eff_f_eps - eff_t_eps) / eff_t_eps if eff_t_eps and eff_t_eps > 0 else None
+            
+            # 🚀 修正點：統一變數名稱，讓後方繪圖程式認得自訂的成長率，避免當機！
+            real_cg = eff_cg 
+            
             eff_forward_pe = curr_p / eff_f_eps if eff_f_eps > 0 else None
             
             # 🚀 教練升級 1：前瞻 PEG (Forward PEG)
