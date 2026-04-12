@@ -178,10 +178,11 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     
     payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"googleSearch": {}}]}
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        # 🚀 升級放寬：給 AI 充分時間推演，設定為 60 秒
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            response = requests.post(fallback_url, headers=headers, json=payload, timeout=30)
+            response = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
         if response.status_code == 200:
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
@@ -230,7 +231,8 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
         "tools": [{"googleSearch": {}}]
     }
     try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
+        # 🚀 升級防呆：將 timeout 延長為 45 秒，避免查財報時斷線
+        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             
@@ -255,7 +257,8 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
         "systemInstruction": {"parts": [{"text": "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"}]}
     }
     try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
+        # 🚀 升級防呆：將 timeout 延長為 30 秒
+        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             
@@ -1373,6 +1376,10 @@ if curr_id:
             ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
             ctx_eg = p_fmt(real_cg_for_prompt, ai_yoy, 'pct', 'AI推算')
 
+        # 🚀 升級整合：將 Phase 3 的防禦力、營收快訊與逆向目標價餵給 AI 大腦
+        latest_mom_str = f"{df_rev_bk['MoM'].iloc[-1]:.2f}%" if df_rev_bk is not None and not df_rev_bk.empty else "無資料"
+        tp_est_str = f"{sys_target_price_est:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if sys_target_price_est else "無資料"
+
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
         - 最新收盤價: {curr_p} 元
@@ -1380,15 +1387,22 @@ if curr_id:
         - 前瞻本益比 (Forward P/E): {ctx_fpe}
         - 股價淨值比 (P/B): {ctx_pb}
         - 本益成長比 (PEG): {ctx_peg}
+        - 🎯 系統逆向推算合理高空價: {tp_est_str}
 
         【財務基本面動能 (原始數據 vs AI數據)】
         - EPS (目前 / 預估): {ctx_eps} 元
         - 營收年增率 (YoY): {ctx_rg}
+        - 最新單月營收月增率 (MoM): {latest_mom_str}
         - 預估獲利成長 (YoY): {ctx_eg}
         - 毛利率: {ctx_gm}
         - 營業利益率: {ctx_om}
         - 股東權益報酬率 (ROE): {ctx_roe}
         - 負債權益比 (D/E Ratio): {ctx_de}
+
+        【🛡️ 防禦力與財務健康檢測 (重要參考)】
+        - 預估殖利率: {dy_str}
+        - 自由現金流 (FCF): {fcf_str}
+        - 流動比率 (Current Ratio): {cr_str}
 
         【法人預估目標價】
         - 最高目標價: {hi_str}
@@ -1402,7 +1416,7 @@ if curr_id:
 1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
 2. 公司競爭優勢 (護城河、市占率、核心技術)
 3. 總體經濟與地緣政治系統性風險評估 (如中東局勢、通膨、關稅對該公司的近期影響)
-4. 具體的買賣點建議與操作策略 (請結合我提供的基本面、本益比、目標價潛在空間與技術型態，給出具體進出場評估或價位區間參考)
+4. 具體的買賣點建議與操作策略 (請結合基本面、系統逆推目標價、防禦力現金流與技術型態，給出具體進出場評估或價位區間參考)
 
 請深度分析台股 {c_name} ({curr_id}) 的產業前景、競爭優勢、系統性風險及買賣點策略。
 
