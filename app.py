@@ -18,6 +18,9 @@ import math
 # ==========================================
 st.set_page_config(page_title="way系統", layout="wide")
 
+# 🚀 終極防護罩：禁止瀏覽器強制啟動自動翻譯，避免 React 系統抓不到物件而崩潰
+st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
+
 # --- 產業對照表 ---
 SECTOR_MAP = {
     "Technology": "科技產業", "Semiconductors": "半導體業", "Consumer Electronics": "消費性電子",
@@ -878,7 +881,21 @@ if curr_id:
                 help="教練密技：目標價逆推公式的乘數。大盤熱度高或作夢空間大時可調升至 1.5。"
             )
         with col_eps4:
-            target_pe_cap = st.number_input("⚙️ 本益比天花板 (Cap)", value=30.0, step=5.0, help="防禦低基期失真陷阱！當(成長率×目標PEG)飆破天際時，系統最多只會給到這個本益比上限。")
+            # 🚀 教練進階：依據「毛利率 (護城河深度)」動態建議本益比天花板 (Cap)
+            suggested_cap = 30.0
+            cap_reason = "預設 30x (缺乏毛利率數據)"
+            if eff_gm is not None:
+                if eff_gm >= 0.50:
+                    suggested_cap, cap_reason = 50.0, "建議 50x (高毛利>50%: 軟體/IP/專利壟斷)"
+                elif eff_gm >= 0.30:
+                    suggested_cap, cap_reason = 35.0, "建議 35x (中高毛利>30%: 高階零組件/利基型)"
+                elif eff_gm >= 0.15:
+                    suggested_cap, cap_reason = 25.0, "建議 25x (穩健毛利>15%: 傳統優質硬體/代工)"
+                else:
+                    suggested_cap, cap_reason = 15.0, "建議 15x (低毛利<15%: 紅海競爭/純組裝)"
+                    
+            target_pe_cap = st.number_input("⚙️ 本益比天花板 (Cap)", value=float(suggested_cap), step=5.0, help="防禦低基期失真陷阱！系統已根據毛利率為您預設合理的極限本益比，您也可以手動微調。")
+            st.markdown(f"<div style='color:#00bfff; font-size:0.75rem; margin-top:-10px; line-height:1.2;'>💡 {cap_reason}</div>", unsafe_allow_html=True)
 
         if use_custom_eps:
             eff_f_eps = custom_eps
@@ -992,25 +1009,35 @@ if curr_id:
         elif eff_pb < 1.5: pb_color, pb_text = "#00cc66", "具資產保護"
         else: pb_color, pb_text = "#FFD700", "合理區間"
 
-        if eff_peg == -999: peg_color, peg_text = "gray", "分母為負，無意義"
-        elif eff_peg is None: peg_color, peg_text = "gray", "衰退或無數據"
-        else: 
-            if eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
-            elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
-            else: peg_color, peg_text = "#FFD700", "合理區間"
-
         if eff_forward_pe is None: fpe_color, fpe_text = "gray", "數據不足"
         else:
             if eff_forward_pe > 25: fpe_color, fpe_text = "#ff4d4d", "高成長期望"
             elif eff_forward_pe < 15: fpe_color, fpe_text = "#00cc66", "相對便宜"
             else: fpe_color, fpe_text = "#FFD700", "合理區間"
 
+        # 🚀 全新 PEG 認知矛盾防護引擎
+        if eff_peg == -999: peg_color, peg_text = "gray", "分母為負，無意義"
+        elif eff_peg is None: peg_color, peg_text = "gray", "衰退或無數據"
+        else: 
+            # 核心修正：如果「前瞻本益比」已經突破天花板，絕對不能再亮綠燈說低估！
+            if eff_forward_pe is not None and target_pe_cap is not None and eff_forward_pe > target_pe_cap:
+                peg_color, peg_text = "#ff8c00", "估值過熱(超越Cap)" # 橘黃色警告
+            elif eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
+            elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
+            else: peg_color, peg_text = "#FFD700", "合理區間"
+
         pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
         
         # 🚀 畫面大升級：修復破圖，以單行 HTML 呈現完美排版！
         if sys_target_price_est:
             cg_display = real_cg * 100 if real_cg else 0
-            cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>🚨 已啟動低基期防護 (最高封頂 {target_pe_cap:.0f} 倍)</span>" if is_capped else ""
+            if is_capped and curr_p > sys_target_price_est:
+                cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>🚨 股價超漲警示：目前前瞻 P/E ({eff_forward_pe:.1f}x) 已遠超安全天花板 ({target_pe_cap:.0f}x)，追高風報比極差！(若認可其高估值請調高 Cap)</span>"
+            elif is_capped:
+                cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>🚨 已啟動低基期防護 (最高封頂 {target_pe_cap:.0f} 倍)</span>"
+            else:
+                cap_warning_html = ""
+            
             target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理高空價 (逆向推算): <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b><br><small style='color:#ccc;'>公式: 預估EPS({eff_f_eps:.2f}) × min(成長率{cg_display:.1f} × 乘數{target_peg_adj}, Cap天花板{target_pe_cap:.0f})</small>{cap_warning_html}</div>"
         else:
             target_price_html = ""
@@ -1513,7 +1540,6 @@ if curr_id:
         </div>
         """, unsafe_allow_html=True)
         
-        # 🌟 將圖表從 2 層改為 3 層
         fig_k = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]])
         
         fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
