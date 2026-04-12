@@ -174,11 +174,17 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     api_key = api_key.strip()
     headers = {"Content-Type": "application/json"}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-    system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
+    
+    # 🚀 升級：嚴格要求 AI 輸出格式，避免截斷與錯字
+    system_prompt = (
+        "你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「權值股」與 3 檔「中小型股」。\n"
+        "必須嚴格回傳標準 JSON 格式，不可包含任何 Markdown 標記或多餘文字。\n"
+        '{"reasoning": "你的詳細分析與看好理由", "stocks": [{"id": "2330", "name": "台積電", "type": "權值股", "why": "原因"}, {"id": "3105", "name": "穩懋", "type": "中小型股", "why": "原因"}]}\n'
+        "確保 id 為純數字，type 必須是 '權值股' 或 '中小型股'。"
+    )
     
     payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"googleSearch": {}}]}
     try:
-        # 🚀 升級放寬：給 AI 充分時間推演，設定為 60 秒
         response = requests.post(url, headers=headers, json=payload, timeout=60)
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
@@ -187,13 +193,18 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
             
+            # 🚀 升級：增強 JSON 提取防呆，容許 AI 的小失誤
             s_idx = content.find('{')
             e_idx = content.rfind('}')
             if s_idx != -1 and e_idx != -1: 
                 clean_json = content[s_idx:e_idx+1]
-                grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
-                links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
-                return json.loads(clean_json), list(set(links))
+                try:
+                    parsed_data = json.loads(clean_json, strict=False)
+                    grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
+                    links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
+                    return parsed_data, list(set(links))
+                except json.JSONDecodeError as e:
+                    return f"AI 回傳的資料格式異常 ({str(e)})", []
             else:
                 return "AI 輸出的格式不符預期。", []
         else: return f"API 錯誤 ({response.status_code}): {response.text}", []
@@ -231,7 +242,6 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
         "tools": [{"googleSearch": {}}]
     }
     try:
-        # 🚀 升級防呆：將 timeout 延長為 45 秒，避免查財報時斷線
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -257,7 +267,6 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
         "systemInstruction": {"parts": [{"text": "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"}]}
     }
     try:
-        # 🚀 升級防呆：將 timeout 延長為 30 秒
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -349,7 +358,6 @@ def get_monthly_revenue(stock_id):
             df = df[df['date'] < current_month_start].sort_values('date').reset_index(drop=True)
             df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
             
-            # 🚀 升級：增加 MoM 計算，支援營收快訊
             if 'revenue_year_on_year_growth' in df.columns: df['YoY'] = pd.to_numeric(df['revenue_year_on_year_growth'], errors='coerce')
             else: df['YoY'] = df['revenue'].pct_change(periods=12) * 100
             
@@ -380,7 +388,6 @@ def get_pe_pb_data(stock_id):
                 df['date'] = pd.to_datetime(df['date'])
                 df['PER'] = pd.to_numeric(df['PER'], errors='coerce')
                 df['PBR'] = pd.to_numeric(df.get('PBR'), errors='coerce') 
-                # 🚀 升級：放寬過濾條件，容許 PER 虧損但 PBR 正常的股票繪製河流圖
                 return df.dropna(subset=['date']).reset_index(drop=True)
     except: pass
     return None
@@ -670,23 +677,36 @@ if st.session_state.topic_results == "LOADING":
             st.session_state.show_whale = False
             st.rerun()
         else:
-            st.error(f"AI 解析失敗。\n\n詳細原因：{data}"); st.session_state.topic_results = None
+            st.error(f"❌ AI 解析失敗或逾時無回應。\n\n詳細原因：{data}")
+            st.session_state.topic_results = None
 
+# 🚀 畫面大升級：將議題推演結果區塊加上吸睛面板與明確動線提示
 if isinstance(st.session_state.topic_results, dict):
     t = st.session_state.topic_results
-    st.markdown(f"### 💡 議題動態推演：【{t['topic']}】")
-    st.info(f"**AI 深度分析：**\n{t['data'].get('reasoning', '')}")
+    
+    st.success("✅ AI 議題推演完成！系統已為您捕捉以下關聯受惠股，點擊按鈕即可一鍵切換至該檔股票的戰情室面板！")
+    
+    st.markdown(f"""
+    <div style='background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%); padding: 20px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #FFD700;'>
+        <h3 style='color: white; margin-top: 0;'>💡 議題動態推演：【{t['topic']}】</h3>
+        <div style='color: #e0e0e0; font-size: 1.05rem; line-height: 1.6;'>{t['data'].get('reasoning', '無分析內容')}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("#### 🛡️ 潛力權值股")
-        for s in [x for x in t['data'].get('stocks', []) if x['type'] == "潛力"]:
-            st.button(f"{s['name']} ({s['id']})", on_click=reset_all_states_on_stock_change, args=(s['id'],), key=f"tp_{s['id']}", use_container_width=True)
-            st.caption(f"理由：{s['why']}")
+        st.markdown("#### 🛡️ 潛力權值股 (點擊切換)")
+        # 🚀 防呆捕捉：不管 AI 標籤怎麼亂拼，只要有包含關鍵字就抓進來
+        for s in [x for x in t['data'].get('stocks', []) if "權值" in x.get('type', '') or "潛力" in x.get('type', '')]:
+            st.button(f"📌 {s.get('name', '未知')} ({s.get('id', '')})", on_click=reset_all_states_on_stock_change, args=(s.get('id', ''),), key=f"tp_{s.get('id', '')}", use_container_width=True)
+            st.caption(f"理由：{s.get('why', '')}")
     with c2:
-        st.markdown("#### 🚀 爆發概念股")
-        for s in [x for x in t['data'].get('stocks', []) if x['type'] != "潛力"]:
-            st.button(f"{s['name']} ({s['id']})", on_click=reset_all_states_on_stock_change, args=(s['id'],), key=f"ts_{s['id']}", use_container_width=True)
-            st.caption(f"理由：{s['why']}")
+        st.markdown("#### 🚀 爆發中小型股 (點擊切換)")
+        # 🚀 防呆捕捉
+        for s in [x for x in t['data'].get('stocks', []) if "中小" in x.get('type', '') or "爆發" in x.get('type', '')]:
+            st.button(f"🔥 {s.get('name', '未知')} ({s.get('id', '')})", on_click=reset_all_states_on_stock_change, args=(s.get('id', ''),), key=f"ts_{s.get('id', '')}", use_container_width=True)
+            st.caption(f"理由：{s.get('why', '')}")
+            
     if t['links']:
         with st.expander("🔗 查看 AI 參考來源"):
             for link in t['links']: st.markdown(f"- [{link}]({link})")
@@ -791,7 +811,6 @@ if curr_id:
             latest_mom = df_rev_bk['MoM'].iloc[-1]
             max_rev_12m = df_rev_bk['Revenue'].max()
             
-            # 若月增率大於 15% 且本月營收為近一年最高，觸發警報！
             if latest_mom >= 15 and latest_rev >= max_rev_12m:
                 st.markdown(f"""
                 <div style='background: linear-gradient(90deg, #ff4d4d 0%, #ff8c00 100%); padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; color: white; font-weight: bold; display: flex; align-items: center; justify-content: space-between;'>
@@ -1197,6 +1216,11 @@ if curr_id:
         # 🚀 升級三：防禦力檢測面板 (高股息/自由現金流)
         st.markdown("#### 🛡️ 防禦力與財務健康檢測 (長線/存股必看)", unsafe_allow_html=True)
         div_yield = s_float(info.get('dividendYield')) or s_float(info.get('trailingAnnualDividendYield'))
+        
+        # 🛑 殖利率小數點防呆校正：yfinance 有時會直接回傳整數 (例如 4.65) 而非小數 (0.0465)
+        if div_yield is not None and div_yield > 0.3:  # 台股常態殖利率極少超過 30%，大於此數值視為格式錯置
+            div_yield = div_yield / 100.0
+
         fcf = s_float(info.get('freeCashflow'))
         current_ratio = s_float(info.get('currentRatio'))
 
