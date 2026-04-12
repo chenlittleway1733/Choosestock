@@ -176,7 +176,6 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
     
-    # 🚀 修復點：移除了會與 googleSearch 衝突的 responseMimeType 參數
     payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"googleSearch": {}}]}
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -225,7 +224,6 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
         "絕對不要輸出 markdown 標記或其他文字。"
     )
     
-    # 🚀 修復點：修正官方聯網語法 googleSearch，並移除衝突的 JSON 模式限制
     payload = {
         "contents": [{"parts": [{"text": f"請聯網搜尋台股 {stock_name} ({stock_id}) 最新財報新聞 (包含毛利率、營益率、ROE、負債比) 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -236,7 +234,6 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             
-            # 暴力大括號萃取法
             s_idx = text.find('{')
             e_idx = text.rfind('}')
             if s_idx != -1 and e_idx != -1:
@@ -349,16 +346,20 @@ def get_monthly_revenue(stock_id):
             df = df[df['date'] < current_month_start].sort_values('date').reset_index(drop=True)
             df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
             
+            # 🚀 升級：增加 MoM 計算，支援營收快訊
             if 'revenue_year_on_year_growth' in df.columns: df['YoY'] = pd.to_numeric(df['revenue_year_on_year_growth'], errors='coerce')
             else: df['YoY'] = df['revenue'].pct_change(periods=12) * 100
+            
+            df['MoM'] = df['revenue'].pct_change(periods=1) * 100
                 
             df['Month'] = df['date'].dt.strftime('%Y/%m')
             df['Revenue'] = df['revenue'] / 100000000 
-            final_df = df.dropna(subset=['YoY']).tail(12).copy()
+            final_df = df.dropna(subset=['YoY', 'MoM']).tail(12).copy()
             if not final_df.empty:
                 final_df['Revenue'] = final_df['Revenue'].round(2)
                 final_df['YoY'] = final_df['YoY'].round(2)
-                return final_df[['Month', 'Revenue', 'YoY']].reset_index(drop=True)
+                final_df['MoM'] = final_df['MoM'].round(2)
+                return final_df[['Month', 'Revenue', 'YoY', 'MoM']].reset_index(drop=True)
     except: pass
     return None
 
@@ -376,7 +377,8 @@ def get_pe_pb_data(stock_id):
                 df['date'] = pd.to_datetime(df['date'])
                 df['PER'] = pd.to_numeric(df['PER'], errors='coerce')
                 df['PBR'] = pd.to_numeric(df.get('PBR'), errors='coerce') 
-                return df[df['PER'] > 0].dropna(subset=['date', 'PER']).reset_index(drop=True)
+                # 🚀 升級：放寬過濾條件，容許 PER 虧損但 PBR 正常的股票繪製河流圖
+                return df.dropna(subset=['date']).reset_index(drop=True)
     except: pass
     return None
 
@@ -701,6 +703,7 @@ if curr_id:
         hist, info = get_stock_data(curr_id, st.session_state.fugle_key)
         if info is None: info = {}
         c_name = get_chinese_name(curr_id) or info.get('shortName', curr_id)
+        df_rev_bk = get_monthly_revenue(curr_id)
 
     if hist is not None and not hist.empty:
         
@@ -779,10 +782,24 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
+        # 🚀 升級四：營收驚喜快訊 (MoM 暴增警報)
+        if df_rev_bk is not None and not df_rev_bk.empty:
+            latest_rev = df_rev_bk['Revenue'].iloc[-1]
+            latest_mom = df_rev_bk['MoM'].iloc[-1]
+            max_rev_12m = df_rev_bk['Revenue'].max()
+            
+            # 若月增率大於 15% 且本月營收為近一年最高，觸發警報！
+            if latest_mom >= 15 and latest_rev >= max_rev_12m:
+                st.markdown(f"""
+                <div style='background: linear-gradient(90deg, #ff4d4d 0%, #ff8c00 100%); padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; color: white; font-weight: bold; display: flex; align-items: center; justify-content: space-between;'>
+                    <span style='font-size:1.1rem;'>🚨 【營收驚喜快訊】最新單月營收高達 {latest_rev} 億 (創近期新高)！月增率 (MoM) 飆升 {latest_mom}%！</span>
+                    <span style='font-size:1.5rem;'>🔥 強烈動能</span>
+                </div>
+                """, unsafe_allow_html=True)
+
         # ==========================================
         # 🌍 國際連動與動態時間趨勢推估
         # ==========================================
-        st.markdown("<br>", unsafe_allow_html=True)
         trend_data = get_global_market_trend()
         if trend_data:
             target_day_text = trend_data.get('target_day', '明日')
@@ -813,7 +830,6 @@ if curr_id:
             if st.button("🪄 啟動 AI 全方位校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新8大財報與估值指標，並與現有資料進行比對"):
                 with st.spinner("AI 正在各大財經庫檢索全方位數據..."):
                     fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key)
-                    # 🚀 新增真實錯誤判斷：如果抓回來的不是字典，代表抓取過程中有報錯！
                     if isinstance(fetched_data, dict):
                         st.session_state.ai_fetched_financials[curr_id] = fetched_data
                         st.rerun()
@@ -822,10 +838,8 @@ if curr_id:
                     else:
                         st.error("❌ AI 暫時無法找到確切數據 (解析失敗或無回應)")
                         
-        df_rev_bk = get_monthly_revenue(curr_id)
         df_per_bk = get_pe_pb_data(curr_id)
         
-        # 取得系統原始數據
         pe_ratio = s_float(info.get('trailingPE'))
         if (pe_ratio is None or pe_ratio > 1000) and df_per_bk is not None and not df_per_bk.empty:
             if (pd.Timestamp.today() - df_per_bk.iloc[-1]['date']).days < 30: pe_ratio = s_float(df_per_bk['PER'].iloc[-1])
@@ -851,7 +865,6 @@ if curr_id:
             
         sys_f_eps = s_float(info.get('forwardEps'))
         
-        # 取出 AI 校對數據字典
         ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
         ai_pe = s_float(ai_fin.get('pe'))
         ai_pb = s_float(ai_fin.get('pb'))
@@ -864,7 +877,6 @@ if curr_id:
         ai_de = s_float(ai_fin.get('debt_to_equity'))
         ai_target_price = s_float(ai_fin.get('target_price'))
         
-        # 決定有效數值 (Fallback to AI)
         eff_pe = pe_ratio if pe_ratio is not None else ai_pe
         eff_pb = pb_ratio if pb_ratio is not None else ai_pb
         eff_t_eps = t_eps if t_eps is not None else ai_t_eps
@@ -875,7 +887,6 @@ if curr_id:
         eff_roe = roe if roe is not None else ai_roe
         eff_de = sys_de if sys_de is not None else ai_de
 
-        # 🚀 財報時間差校正引擎 (杜絕 ROE 與 P/E, P/B 的數學矛盾)
         if eff_pe and eff_pe > 0 and eff_pb and eff_pb > 0:
             eff_roe = eff_pb / eff_pe
             roe = eff_roe 
@@ -883,7 +894,6 @@ if curr_id:
         if ai_pe and ai_pe > 0 and ai_pb and ai_pb > 0:
             ai_roe = ai_pb / ai_pe
         
-        # 🚀 智慧反推與有效 Forward EPS 決策
         ai_f_eps_calc = ai_f_eps
         if ai_f_eps_calc is None and eff_t_eps is not None and eff_eg is not None and -1 <= eff_eg <= 5:
             ai_f_eps_calc = eff_t_eps * (1 + eff_eg)
@@ -892,7 +902,6 @@ if curr_id:
         if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
             sys_f_eps_calc = t_eps * (1 + earn_growth)
 
-        # 🚀 終極估值大腦：引入 Forward PEG、動態天花板 (Cap) 與逆向工程估價
         col_eps1, col_eps2, col_eps3, col_eps4 = st.columns([1, 1.2, 1.2, 1.2])
         with col_eps1: 
             use_custom_eps = st.toggle("自訂法人預估 EPS", value=False)
@@ -908,25 +917,30 @@ if curr_id:
                 help="教練密技：目標價逆推公式的乘數。大盤熱度高或作夢空間大時可調升至 1.5。"
             )
         with col_eps4:
-            # 🚀 教練進階：依據「毛利率 (護城河深度)」動態建議本益比天花板 (Cap)
             suggested_cap = 30.0
-            cap_reason = "預設 30x (缺乏毛利率數據)"
+            cap_reason = "預設 30x (無毛利率數據)"
             if eff_gm is not None:
-                if eff_gm >= 0.50:
-                    suggested_cap, cap_reason = 50.0, "建議 50x (高毛利>50%: 軟體/IP/專利壟斷)"
-                elif eff_gm >= 0.30:
-                    suggested_cap, cap_reason = 35.0, "建議 35x (中高毛利>30%: 高階零組件/利基型)"
-                elif eff_gm >= 0.15:
-                    suggested_cap, cap_reason = 25.0, "建議 25x (穩健毛利>15%: 傳統優質硬體/代工)"
-                else:
-                    suggested_cap, cap_reason = 15.0, "建議 15x (低毛利<15%: 紅海競爭/純組裝)"
-                    
-            target_pe_cap = st.number_input("⚙️ 本益比天花板 (Cap)", value=float(suggested_cap), step=5.0, help="防禦低基期失真陷阱！系統已根據毛利率為您預設合理的極限本益比，您也可以手動微調。")
+                if eff_gm >= 0.50: suggested_cap, cap_reason = 50.0, "建議 50x (高毛利>50%: 軟體/IP/專利壟斷)"
+                elif eff_gm >= 0.30: suggested_cap, cap_reason = 35.0, "建議 35x (中高毛利>30%: 高階零組件/利基型)"
+                elif eff_gm >= 0.15: suggested_cap, cap_reason = 25.0, "建議 25x (穩健毛利>15%: 傳統優質硬體/代工)"
+                else: suggested_cap, cap_reason = 15.0, "建議 15x (低毛利<15%: 紅海競爭/純組裝)"
+            target_pe_cap = st.number_input("⚙️ 本益比天花板 (Cap)", value=float(suggested_cap), step=5.0, help="防禦低基期失真陷阱！系統已根據毛利率為您預設合理的極限本益比。")
             st.markdown(f"<div style='color:#00bfff; font-size:0.75rem; margin-top:-10px; line-height:1.2;'>💡 {cap_reason}</div>", unsafe_allow_html=True)
+
+        # 🚀 升級一：低基期防護旗標
+        is_base_normalized = False 
 
         if use_custom_eps:
             eff_f_eps = custom_eps
-            eff_cg = (eff_f_eps - eff_t_eps) / eff_t_eps if eff_t_eps and eff_t_eps > 0 else None
+            
+            # 🚀 執行低基期防護 (分母小於 0.5 強制設為 0.5)
+            if eff_t_eps is not None and 0 < eff_t_eps < 0.5:
+                safe_base_eps = 0.5
+                is_base_normalized = True
+            else:
+                safe_base_eps = eff_t_eps
+                
+            eff_cg = (eff_f_eps - safe_base_eps) / safe_base_eps if safe_base_eps and safe_base_eps > 0 else None
             real_cg = eff_cg 
             
             eff_forward_pe = curr_p / eff_f_eps if eff_f_eps > 0 else None
@@ -941,7 +955,9 @@ if curr_id:
                 sys_target_price_est = None; is_capped = False
             
             eg_str_disp = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
+            if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
             eg_color = "#ff4d4d" if eff_cg and eff_cg > 0 else ("#00cc66" if eff_cg and eff_cg < 0 else "gray")
+            
             eps_source_text = f"自訂法人共識 ({eff_f_eps:.2f}元)"
             peg_str_disp = f"{eff_peg:.2f}" if eff_peg is not None else "N/A"
             fpe_str = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
@@ -959,8 +975,14 @@ if curr_id:
             ai_fpe = curr_p / ai_f_eps_calc if ai_f_eps_calc and ai_f_eps_calc > 0 else None
             eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
             
+            # 🚀 執行低基期防護 (分母小於 0.5 強制設為 0.5)
             if eff_f_eps is not None and t_eps is not None and t_eps > 0:
-                real_cg = (eff_f_eps - t_eps) / t_eps
+                if t_eps < 0.5:
+                    safe_base_eps = 0.5
+                    is_base_normalized = True
+                else:
+                    safe_base_eps = t_eps
+                real_cg = (eff_f_eps - safe_base_eps) / safe_base_eps
             else:
                 real_cg = earn_growth
             
@@ -981,6 +1003,7 @@ if curr_id:
                 sys_target_price_est = None; is_capped = False
             
             eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', 'AI推算')
+            if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
             eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
             
             orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if real_cg is not None and real_cg <= 0 else "N/A")
@@ -1033,7 +1056,6 @@ if curr_id:
             elif eff_forward_pe < 15: fpe_color, fpe_text = "#00cc66", "相對便宜"
             else: fpe_color, fpe_text = "#FFD700", "合理區間"
 
-        # 🚀 全新 PEG 認知矛盾防護引擎
         if eff_peg == -999: peg_color, peg_text = "gray", "分母為負，無意義"
         elif eff_peg is None: peg_color, peg_text = "gray", "衰退或無數據"
         else: 
@@ -1047,12 +1069,13 @@ if curr_id:
         
         if sys_target_price_est:
             cg_display = real_cg * 100 if real_cg else 0
-            if is_capped and curr_p > sys_target_price_est:
-                cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>🚨 股價超漲警示：目前前瞻 P/E ({eff_forward_pe:.1f}x) 已遠超安全天花板 ({target_pe_cap:.0f}x)，追高風報比極差！(若認可其高估值請調高 Cap)</span>"
-            elif is_capped:
-                cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>🚨 已啟動低基期防護 (最高封頂 {target_pe_cap:.0f} 倍)</span>"
-            else:
-                cap_warning_html = ""
+            cap_warning_html = ""
+            if is_capped:
+                cap_msg = f"🚨 已觸發封頂防護 ({target_pe_cap:.0f}x)，「估值情境」被天花板壓制無效"
+                if curr_p > sys_target_price_est:
+                    cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}<br>股價超漲警示：前瞻 P/E ({eff_forward_pe:.1f}x) 遠超安全上限，追高風險大！</span>"
+                else:
+                    cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}</span>"
             
             target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理高空價 (逆向推算): <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b><br><small style='color:#ccc;'>公式: 預估EPS({eff_f_eps:.2f}) × min(成長率{cg_display:.1f} × 乘數{target_peg_adj}, Cap天花板{target_pe_cap:.0f})</small>{cap_warning_html}</div>"
         else:
@@ -1163,6 +1186,51 @@ if curr_id:
                 <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>{pos_icon} 供應鏈地位</div>
                 <div style='color:{pos_color}; font-weight:bold; margin-bottom:5px;'>{pos_title}</div>
                 <div style='color:#aaa; font-size:0.9rem; line-height:1.5;'>{pos_desc}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("---")
+        
+        # 🚀 升級三：防禦力檢測面板 (高股息/自由現金流)
+        st.markdown("#### 🛡️ 防禦力與財務健康檢測 (長線/存股必看)", unsafe_allow_html=True)
+        div_yield = s_float(info.get('dividendYield')) or s_float(info.get('trailingAnnualDividendYield'))
+        fcf = s_float(info.get('freeCashflow'))
+        current_ratio = s_float(info.get('currentRatio'))
+
+        dy_str = to_pct(div_yield)
+        if div_yield is None: dy_color, dy_eval = "gray", "無資料"
+        elif div_yield >= 0.05: dy_color, dy_eval = "#ff4d4d", "高息護體(>5%)"
+        elif div_yield >= 0.03: dy_color, dy_eval = "#FFD700", "穩健配息"
+        else: dy_color, dy_eval = "#00cc66", "殖利率偏低"
+
+        if fcf is None: fcf_str, fcf_color, fcf_eval = "無資料", "gray", "無資料"
+        elif fcf > 0: fcf_str, fcf_color, fcf_eval = f"{fcf/100000000:,.0f} 億", "#ff4d4d", "現金流健康"
+        else: fcf_str, fcf_color, fcf_eval = f"{fcf/100000000:,.0f} 億", "#00cc66", "⚠️ 留意燒錢風險"
+
+        if current_ratio is None: cr_str, cr_color, cr_eval = "無資料", "gray", "無資料"
+        elif current_ratio >= 1.5: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#ff4d4d", "短期無債務風險"
+        elif current_ratio >= 1.0: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#FFD700", "流動性及格"
+        else: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#00cc66", "⚠️ 流動性吃緊"
+
+        st.markdown(f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {dy_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>💰 預估殖利率</div><div style='background:{dy_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{dy_eval}</div>
+                </div>
+                <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{dy_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fcf_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>💵 自由現金流 (FCF)</div><div style='background:{fcf_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fcf_eval}</div>
+                </div>
+                <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{fcf_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cr_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>⚖️ 流動比率</div><div style='background:{cr_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cr_eval}</div>
+                </div>
+                <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{cr_str}</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1284,7 +1352,6 @@ if curr_id:
         ctx_roe = p_fmt(roe, ai_roe, 'pct')
         ctx_de = p_fmt(sys_de, ai_de, 'pct')
         
-        # 確保隱藏提示詞中的 eg (成長率) 使用真實反推的值
         if use_custom_eps:
             ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
             ctx_peg = f"{eff_peg:.2f}" if eff_peg is not None else "N/A"
@@ -1292,9 +1359,9 @@ if curr_id:
             ctx_eg = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
         else:
             ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推')
-            # 使用真實算出來的 real_cg 而不是傳統資料庫的 earningGrowth
             if eff_f_eps is not None and t_eps is not None and t_eps > 0:
-                real_cg_for_prompt = (eff_f_eps - t_eps) / t_eps
+                safe_base_for_prompt = max(t_eps, 0.5)
+                real_cg_for_prompt = (eff_f_eps - safe_base_for_prompt) / safe_base_for_prompt
             else:
                 real_cg_for_prompt = earn_growth
                 
@@ -1415,10 +1482,10 @@ if curr_id:
                 else: st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
             st.markdown("---")
 
-        # 本益比河流圖
+        # 🚀 升級二：雙河流圖 (Tabs) - 本益比河流圖 + 股價淨值比河流圖
         if df_per_bk is not None and not df_per_bk.empty:
-            st.markdown("### 🌊 近五年本益比河流圖 (P/E River)")
-            st.markdown("<small style='color:gray;'>*實戰價值：以最真實未平滑的財報數據繪製。一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
+            st.markdown("### 🌊 估值位階雙河流圖 (P/E & P/B River)")
+            st.markdown("<small style='color:gray;'>*實戰密技：『成長股』看本益比判斷潛力；『景氣循環股』(航運/鋼鐵/面板) 獲利不穩定，必須看淨值比(P/B)河流圖抄底！*</small>", unsafe_allow_html=True)
             
             h_reset = hist.copy().reset_index()
             if h_reset['Date'].dt.tz is not None: h_reset['Date'] = h_reset['Date'].dt.tz_localize(None)
@@ -1430,37 +1497,80 @@ if curr_id:
 
             merged = pd.merge(h_reset, d_per, left_on='Date_only', right_on='date_only', how='inner').sort_values('Date_only')
 
-            if not merged.empty and len(merged) > 60: 
-                merged['EPS_calc'] = merged['Close'] / merged['PER']
-                pe_quantiles = merged['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
-
-                fig_river = go.Figure()
-                b1 = merged['EPS_calc'] * pe_quantiles[0]
-                b2 = merged['EPS_calc'] * pe_quantiles[1]
-                b3 = merged['EPS_calc'] * pe_quantiles[2]
-                b4 = merged['EPS_calc'] * pe_quantiles[3]
-                b5 = merged['EPS_calc'] * pe_quantiles[4]
-
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b1, mode='lines', line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b2, mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b3, mode='lines', fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#0033cc', width=3), name='實際股價'))
-
-                current_pe = merged['PER'].iloc[-1]
-                current_price = merged['Close'].iloc[-1]
+            if not merged.empty: 
+                tab_pe, tab_pb = st.tabs(["🌊 本益比河流圖 (P/E River)", "⚓ 股價淨值比河流圖 (P/B River - 循環股剋星)"])
                 
-                if current_price <= b2.iloc[-1]: pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
-                elif current_price >= b5.iloc[-1]: pe_status, status_color = "🚨 突破歷史瘋狂區間！(極度高估)", "#ff4d4d"
-                elif current_price >= b4.iloc[-1]: pe_status, status_color = "⚠️ 處於歷史高估區間！(留意風險)", "#ff8c00"
-                else: pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
+                with tab_pe:
+                    merged_pe = merged[merged['PER'] > 0].copy()
+                    if len(merged_pe) > 60:
+                        merged_pe['EPS_calc'] = merged_pe['Close'] / merged_pe['PER']
+                        pe_quantiles = merged_pe['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
 
-                fig_river.update_layout(height=450, margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), hovermode="x unified")
-                fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#e0e0e0')
+                        fig_river = go.Figure()
+                        b1 = merged_pe['EPS_calc'] * pe_quantiles[0]
+                        b2 = merged_pe['EPS_calc'] * pe_quantiles[1]
+                        b3 = merged_pe['EPS_calc'] * pe_quantiles[2]
+                        b4 = merged_pe['EPS_calc'] * pe_quantiles[3]
+                        b5 = merged_pe['EPS_calc'] * pe_quantiles[4]
 
-                st.markdown(f"<div style='background:#f8f9fa; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px; color:#333;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x)</div>", unsafe_allow_html=True)
-                st.plotly_chart(fig_river, use_container_width=True)
+                        fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b1, mode='lines', line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
+                        fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b2, mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
+                        fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b3, mode='lines', fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
+                        fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
+                        fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
+                        fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=merged_pe['Close'], mode='lines', line=dict(color='#0033cc', width=3), name='實際股價'))
+
+                        current_pe = merged_pe['PER'].iloc[-1]
+                        current_price = merged_pe['Close'].iloc[-1]
+                        
+                        if current_price <= b2.iloc[-1]: pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
+                        elif current_price >= b5.iloc[-1]: pe_status, status_color = "🚨 突破歷史瘋狂區間！(極度高估)", "#ff4d4d"
+                        elif current_price >= b4.iloc[-1]: pe_status, status_color = "⚠️ 處於歷史高估區間！(留意風險)", "#ff8c00"
+                        else: pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
+
+                        fig_river.update_layout(height=450, margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), hovermode="x unified")
+                        fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#e0e0e0')
+
+                        st.markdown(f"<div style='background:#f8f9fa; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px; color:#333;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x)</div>", unsafe_allow_html=True)
+                        st.plotly_chart(fig_river, use_container_width=True)
+                    else:
+                        st.info("⚠️ 缺乏足夠的有效本益比數據 (通常因為過去常處於虧損狀態)，建議切換查看「股價淨值比河流圖」。")
+
+                with tab_pb:
+                    merged_pb = merged[merged['PBR'] > 0].copy()
+                    if len(merged_pb) > 60:
+                        merged_pb['BVPS_calc'] = merged_pb['Close'] / merged_pb['PBR']
+                        pb_quantiles = merged_pb['PBR'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
+
+                        fig_pb = go.Figure()
+                        pb1 = merged_pb['BVPS_calc'] * pb_quantiles[0]
+                        pb2 = merged_pb['BVPS_calc'] * pb_quantiles[1]
+                        pb3 = merged_pb['BVPS_calc'] * pb_quantiles[2]
+                        pb4 = merged_pb['BVPS_calc'] * pb_quantiles[3]
+                        pb5 = merged_pb['BVPS_calc'] * pb_quantiles[4]
+
+                        fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb1, mode='lines', line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pb_quantiles[0]:.2f}x)'))
+                        fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb2, mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pb_quantiles[1]:.2f}x)'))
+                        fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb3, mode='lines', fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pb_quantiles[2]:.2f}x)'))
+                        fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pb_quantiles[3]:.2f}x)'))
+                        fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pb_quantiles[4]:.2f}x)'))
+                        fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=merged_pb['Close'], mode='lines', line=dict(color='#0033cc', width=3), name='實際股價'))
+
+                        current_pb = merged_pb['PBR'].iloc[-1]
+                        current_price_pb = merged_pb['Close'].iloc[-1]
+                        
+                        if current_price_pb <= pb2.iloc[-1]: pb_status, status_color_pb = "⚓ 跌入歷史低估淨值區！(循環股潛在買點)", "#00cc66"
+                        elif current_price_pb >= pb5.iloc[-1]: pb_status, status_color_pb = "🚨 突破歷史瘋狂淨值區！(極度高估)", "#ff4d4d"
+                        elif current_price_pb >= pb4.iloc[-1]: pb_status, status_color_pb = "⚠️ 處於歷史高估淨值區！(留意風險)", "#ff8c00"
+                        else: pb_status, status_color_pb = "⚖️ 處於歷史合理淨值區", "#FFD700"
+
+                        fig_pb.update_layout(height=450, margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), hovermode="x unified")
+                        fig_pb.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#e0e0e0')
+
+                        st.markdown(f"<div style='background:#f8f9fa; border-left:4px solid {status_color_pb}; padding:10px; border-radius:5px; margin-bottom:10px; color:#333;'>目前位階推估：<b><span style='color:{status_color_pb};'>{pb_status}</span></b> (最新淨值比約 {current_pb:.2f}x)</div>", unsafe_allow_html=True)
+                        st.plotly_chart(fig_pb, use_container_width=True)
+                    else:
+                        st.info("缺乏足夠的淨值比數據。")
         st.markdown("---")
 
         # 🚀 專業技術線圖與 KD 指標
