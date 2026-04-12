@@ -169,6 +169,37 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     except: pass
     return pd.DataFrame()
 
+def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
+    if not api_key: return "ERROR: 未輸入金鑰", []
+    api_key = api_key.strip()
+    headers = {"Content-Type": "application/json"}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
+    
+    # 🚀 AI防呆強化：加入 JSON 強制輸出模式
+    payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        if response.status_code == 404 and model_name != "gemini-2.5-flash":
+            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+            response = requests.post(fallback_url, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            res_json = response.json()
+            content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            
+            # 🚀 暴力大括號萃取法
+            s_idx = content.find('{')
+            e_idx = content.rfind('}')
+            if s_idx != -1 and e_idx != -1: 
+                clean_json = content[s_idx:e_idx+1]
+                grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
+                links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
+                return json.loads(clean_json), list(set(links))
+            else:
+                return "AI 輸出的格式不符預期。", []
+        else: return f"API 錯誤 ({response.status_code})", []
+    except Exception as e: return f"連線異常: {str(e)}", []
+
 def get_financials_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
@@ -177,34 +208,43 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
     
-    system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
-    1. 「歷史本益比 (P/E)」
-    2. 「近四季或最新年度 EPS (Trailing EPS)」
-    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」(請優先找 {target_year} 年的預測值)
-    4. 「股價淨值比 (P/B)」
-    5. 「毛利率」
-    6. 「營益率」
-    7. 「ROE(股東權益報酬率)」(非常重要，請務必搜尋)
-    8. 「最新單月或累計營收年增率(YoY)」
-    9. 「國內外法人最新預估目標價 (Target Price)」(請找近期外資或投信給出的目標價平均或最新值)
-    10. 「負債權益比 (Debt-to-Equity Ratio)」(請務必搜尋，評估財務槓桿)
-
-    必須嚴格回傳包含上述 10 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
-    格式範例：
-    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "debt_to_equity": 0.45}}
-    絕對不要輸出 markdown 標記或其他文字。"""
+    # 🚀 修復點：將 f""" 替換為標準括號字串拼接，解決編輯器整片變綠的視覺 Bug
+    system_prompt = (
+        "你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：\n"
+        "1. 「歷史本益比 (P/E)」\n"
+        "2. 「近四季或最新年度 EPS (Trailing EPS)」\n"
+        f"3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」(請優先找 {target_year} 年的預測值)\n"
+        "4. 「股價淨值比 (P/B)」\n"
+        "5. 「毛利率」\n"
+        "6. 「營益率」\n"
+        "7. 「ROE(股東權益報酬率)」\n"
+        "8. 「最新單月或累計營收年增率(YoY)」\n"
+        "9. 「國內外法人最新預估目標價 (Target Price)」\n"
+        "10. 「負債權益比 (Debt-to-Equity Ratio)」\n\n"
+        "必須嚴格回傳 JSON 格式，百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。\n"
+        "格式範例：\n"
+        '{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "debt_to_equity": 0.45}\n'
+        "絕對不要輸出 markdown 標記或其他文字。"
+    )
     
+    # 🚀 AI防呆強化：加入 JSON 強制輸出模式
     payload = {
-        "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 (務必找出: 毛利率、營益率、ROE 股東權益報酬率、負債權益比) 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
+        "contents": [{"parts": [{"text": f"請聯網搜尋台股 {stock_name} ({stock_id}) 最新財報新聞 (包含毛利率、營益率、ROE、負債比) 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"google_search": {}}]
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"responseMimeType": "application/json"}
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            clean_text = re.sub(r'```json\n?|```', '', text).strip()
-            return json.loads(clean_text)
+            
+            # 🚀 暴力大括號萃取法
+            s_idx = text.find('{')
+            e_idx = text.rfind('}')
+            if s_idx != -1 and e_idx != -1:
+                clean_text = text[s_idx:e_idx+1]
+                return json.loads(clean_text)
     except: pass
     return None
 
@@ -212,13 +252,25 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
 def get_peers_from_ai(stock_name, stock_id, api_key):
     if not api_key: return []
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
-    payload = {"contents": [{"parts": [{"text": f"請尋找 {stock_name} ({stock_id}) 的同業競爭對手"}]}], "systemInstruction": {"parts": [{"text": "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"}]}}
+    
+    # 🚀 AI防呆強化：加入 JSON 強制輸出模式
+    payload = {
+        "contents": [{"parts": [{"text": f"請尋找台股 {stock_name} ({stock_id}) 的同業競爭對手"}]}], 
+        "systemInstruction": {"parts": [{"text": "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"}]},
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
         if res.status_code == 200:
-            clean_text = re.sub(r'```json\n?|```', '', res.json()['candidates'][0]['content']['parts'][0]['text']).strip()
-            peers = json.loads(clean_text)
-            if isinstance(peers, list): return [str(p) for p in peers][:4] 
+            text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            
+            # 🚀 暴力中括號萃取法 (陣列)
+            s_idx = text.find('[')
+            e_idx = text.rfind(']')
+            if s_idx != -1 and e_idx != -1:
+                clean_text = text[s_idx:e_idx+1]
+                peers = json.loads(clean_text)
+                if isinstance(peers, list): return [str(p) for p in peers][:4] 
     except: pass
     return []
 
@@ -240,31 +292,6 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
         elif res.status_code == 429: return "⏳ API 呼叫太頻繁，請稍候再試或切換回 Flash 模型。"
         else: return f"⚠️ API 連線失敗 (狀態碼: {res.status_code})"
     except Exception as e: return f"連線異常: {str(e)}"
-
-def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
-    if not api_key: return "ERROR: 未輸入金鑰", []
-    api_key = api_key.strip()
-    headers = {"Content-Type": "application/json"}
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-    system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
-    payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        if response.status_code == 404 and model_name != "gemini-2.5-flash":
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            response = requests.post(fallback_url, headers=headers, json=payload, timeout=30)
-        if response.status_code == 200:
-            res_json = response.json()
-            content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-            clean_json = re.sub(r'```json\n?|```', '', content).strip()
-            s_idx = clean_json.find('{')
-            e_idx = clean_json.rfind('}')
-            if s_idx != -1 and e_idx != -1: clean_json = clean_json[s_idx:e_idx+1]
-            grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
-            links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
-            return json.loads(clean_json), list(set(links))
-        else: return f"API 錯誤 ({response.status_code})", []
-    except Exception as e: return f"連線異常: {str(e)}", []
 
 # --- 🌍 動態判定今日/明日 ---
 @st.cache_data(ttl=900) 
@@ -900,16 +927,11 @@ if curr_id:
         if use_custom_eps:
             eff_f_eps = custom_eps
             eff_cg = (eff_f_eps - eff_t_eps) / eff_t_eps if eff_t_eps and eff_t_eps > 0 else None
-            
-            # 🚀 修正點：統一變數名稱，讓後方繪圖程式認得自訂的成長率，避免當機！
             real_cg = eff_cg 
             
             eff_forward_pe = curr_p / eff_f_eps if eff_f_eps > 0 else None
-            
-            # 🚀 教練升級 1：前瞻 PEG (Forward PEG)
             eff_peg = eff_forward_pe / (eff_cg * 100) if eff_forward_pe and eff_cg and eff_cg > 0 else None
             
-            # 🚀 教練升級 2 & 3：逆向工程估價 + 低基期失真防護 (Cap)
             if eff_f_eps is not None and eff_cg is not None and eff_cg > 0:
                 raw_mult = (eff_cg * 100) * target_peg_adj
                 capped_mult = min(raw_mult, target_pe_cap)
@@ -937,13 +959,11 @@ if curr_id:
             ai_fpe = curr_p / ai_f_eps_calc if ai_f_eps_calc and ai_f_eps_calc > 0 else None
             eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
             
-            # 取得真實隱含成長率
             if eff_f_eps is not None and t_eps is not None and t_eps > 0:
                 real_cg = (eff_f_eps - t_eps) / t_eps
             else:
                 real_cg = earn_growth
             
-            # 🚀 教練升級 1：前瞻 PEG (Forward PEG)
             orig_peg = eff_forward_pe / (real_cg * 100) if eff_forward_pe is not None and real_cg is not None and real_cg > 0 else None
             
             ai_cg = (ai_f_eps_calc - ai_t_eps) / ai_t_eps if ai_t_eps and ai_t_eps > 0 and ai_f_eps_calc else ai_yoy
@@ -952,7 +972,6 @@ if curr_id:
             eff_peg = orig_peg if orig_peg is not None else ai_peg
             if real_cg is not None and real_cg <= 0: eff_peg = -999
             
-            # 🚀 教練升級 2 & 3：逆向工程估價 + 低基期失真防護 (Cap)
             if eff_f_eps is not None and real_cg is not None and real_cg > 0:
                 raw_mult = (real_cg * 100) * target_peg_adj
                 capped_mult = min(raw_mult, target_pe_cap)
@@ -961,7 +980,6 @@ if curr_id:
             else:
                 sys_target_price_est = None; is_capped = False
             
-            # 更新畫面顯示
             eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', 'AI推算')
             eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
             
@@ -1019,16 +1037,14 @@ if curr_id:
         if eff_peg == -999: peg_color, peg_text = "gray", "分母為負，無意義"
         elif eff_peg is None: peg_color, peg_text = "gray", "衰退或無數據"
         else: 
-            # 核心修正：如果「前瞻本益比」已經突破天花板，絕對不能再亮綠燈說低估！
             if eff_forward_pe is not None and target_pe_cap is not None and eff_forward_pe > target_pe_cap:
-                peg_color, peg_text = "#ff8c00", "估值過熱(超越Cap)" # 橘黃色警告
+                peg_color, peg_text = "#ff8c00", "估值過熱(超越Cap)" 
             elif eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
             elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
             else: peg_color, peg_text = "#FFD700", "合理區間"
 
         pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
         
-        # 🚀 畫面大升級：修復破圖，以單行 HTML 呈現完美排版！
         if sys_target_price_est:
             cg_display = real_cg * 100 if real_cg else 0
             if is_capped and curr_p > sys_target_price_est:
@@ -1276,7 +1292,6 @@ if curr_id:
             ctx_eg = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
         else:
             ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推')
-            # 使用真實算出來的 real_cg 而不是傳統資料庫的 earningGrowth
             if eff_f_eps is not None and t_eps is not None and t_eps > 0:
                 real_cg_for_prompt = (eff_f_eps - t_eps) / t_eps
             else:
