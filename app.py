@@ -176,8 +176,8 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
     
-    # 🚀 AI防呆強化：加入 JSON 強制輸出模式
-    payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
+    # 🚀 修復點：移除了會與 googleSearch 衝突的 responseMimeType 參數
+    payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"googleSearch": {}}]}
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
@@ -187,7 +187,6 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
             
-            # 🚀 暴力大括號萃取法
             s_idx = content.find('{')
             e_idx = content.rfind('}')
             if s_idx != -1 and e_idx != -1: 
@@ -197,18 +196,17 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
                 return json.loads(clean_json), list(set(links))
             else:
                 return "AI 輸出的格式不符預期。", []
-        else: return f"API 錯誤 ({response.status_code})", []
+        else: return f"API 錯誤 ({response.status_code}): {response.text}", []
     except Exception as e: return f"連線異常: {str(e)}", []
 
 def get_financials_from_ai(stock_name, stock_id, api_key):
-    if not api_key: return None
+    if not api_key: return "未設定 API Key"
     api_key = api_key.strip()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
     
-    # 🚀 修復點：將 f""" 替換為標準括號字串拼接，解決編輯器整片變綠的視覺 Bug
     system_prompt = (
         "你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：\n"
         "1. 「歷史本益比 (P/E)」\n"
@@ -227,44 +225,43 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
         "絕對不要輸出 markdown 標記或其他文字。"
     )
     
-    # 🚀 AI防呆強化：加入 JSON 強制輸出模式
+    # 🚀 修復點：修正官方聯網語法 googleSearch，並移除衝突的 JSON 模式限制
     payload = {
         "contents": [{"parts": [{"text": f"請聯網搜尋台股 {stock_name} ({stock_id}) 最新財報新聞 (包含毛利率、營益率、ROE、負債比) 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"google_search": {}}],
-        "generationConfig": {"responseMimeType": "application/json"}
+        "tools": [{"googleSearch": {}}]
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             
-            # 🚀 暴力大括號萃取法
+            # 暴力大括號萃取法
             s_idx = text.find('{')
             e_idx = text.rfind('}')
             if s_idx != -1 and e_idx != -1:
                 clean_text = text[s_idx:e_idx+1]
                 return json.loads(clean_text)
-    except: pass
-    return None
+            return "解析失敗：AI 未輸出有效的 JSON 結構"
+        else:
+            return f"API 錯誤碼 {res.status_code}: {res.text}"
+    except Exception as e:
+        return f"連線異常: {str(e)}"
 
 @st.cache_data(ttl=86400)
 def get_peers_from_ai(stock_name, stock_id, api_key):
     if not api_key: return []
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
     
-    # 🚀 AI防呆強化：加入 JSON 強制輸出模式
     payload = {
         "contents": [{"parts": [{"text": f"請尋找台股 {stock_name} ({stock_id}) 的同業競爭對手"}]}], 
-        "systemInstruction": {"parts": [{"text": "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"}]},
-        "generationConfig": {"responseMimeType": "application/json"}
+        "systemInstruction": {"parts": [{"text": "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"}]}
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             
-            # 🚀 暴力中括號萃取法 (陣列)
             s_idx = text.find('[')
             e_idx = text.rfind(']')
             if s_idx != -1 and e_idx != -1:
@@ -278,7 +275,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
     if not api_key: return "ERROR: 未輸入金鑰"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
     system_prompt = """你是一位精通台股的資深產業分析師與操盤手。請針對目標公司的最新動態、財報與法說會提供分析。必須包含：1. 產業前景、2. 競爭優勢、3. 總體經濟與地緣政治系統風險評估(如中東局勢、通膨、關稅對該公司的近期影響)、4. 具體買賣點策略。請用 Markdown 格式與 Emoji。不要輸出 HTML。"""
-    payload = {"contents": [{"parts": [{"text": f"請深度分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}]}
+    payload = {"contents": [{"parts": [{"text": f"請深度分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"googleSearch": {}}]}
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
         fallback_msg = ""
@@ -816,11 +813,14 @@ if curr_id:
             if st.button("🪄 啟動 AI 全方位校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新8大財報與估值指標，並與現有資料進行比對"):
                 with st.spinner("AI 正在各大財經庫檢索全方位數據..."):
                     fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key)
-                    if fetched_data:
+                    # 🚀 新增真實錯誤判斷：如果抓回來的不是字典，代表抓取過程中有報錯！
+                    if isinstance(fetched_data, dict):
                         st.session_state.ai_fetched_financials[curr_id] = fetched_data
                         st.rerun()
+                    elif isinstance(fetched_data, str):
+                        st.error(f"❌ AI 執行失敗：{fetched_data}")
                     else:
-                        st.error("AI 暫時無法找到確切數據")
+                        st.error("❌ AI 暫時無法找到確切數據 (解析失敗或無回應)")
                         
         df_rev_bk = get_monthly_revenue(curr_id)
         df_per_bk = get_pe_pb_data(curr_id)
@@ -1292,6 +1292,7 @@ if curr_id:
             ctx_eg = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
         else:
             ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推')
+            # 使用真實算出來的 real_cg 而不是傳統資料庫的 earningGrowth
             if eff_f_eps is not None and t_eps is not None and t_eps > 0:
                 real_cg_for_prompt = (eff_f_eps - t_eps) / t_eps
             else:
