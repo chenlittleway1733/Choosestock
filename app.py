@@ -390,12 +390,32 @@ def get_pe_pb_data(stock_id):
     except: pass
     return None
 
+# 🚀 升級：最強網頁解析備用大腦，精準潛入 JSON 結構抓取數據，不怕 HTML 變更
 def get_fallback_info(stock_id):
     info = {}
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, timeout=5)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        res = requests.get(url, headers=headers, timeout=5)
         text = res.text
+        
+        # 1. 暴力解析隱藏 JSON
+        json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', text)
+        if json_match:
+            data_str = json_match.group(1)
+            def ext_val(key, is_pct=False):
+                m = re.search(f'"{key}"\s*:\s*"?([+-]?\d+(?:\.\d+)?)"?', data_str)
+                if m:
+                    val = float(m.group(1))
+                    return val / 100.0 if is_pct else val
+                return None
+            
+            info['trailingPE'] = ext_val('peRatio') or ext_val('trailingPE')
+            info['priceToBook'] = ext_val('pbRatio') or ext_val('priceToBook')
+            info['trailingEps'] = ext_val('eps') or ext_val('trailingEps')
+            info['dividendYield'] = ext_val('dividendYield', True)
+
+        # 2. 傳統模糊比對做為第二重備用
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
             if idx != -1:
@@ -409,12 +429,15 @@ def get_fallback_info(stock_id):
                     except: pass
             return None
 
-        info['trailingPE'] = fuzzy_ext('本益比')
-        info['priceToBook'] = fuzzy_ext('股價淨值比')
-        info['trailingEps'] = fuzzy_ext('EPS')
+        if 'trailingPE' not in info or not info['trailingPE']: info['trailingPE'] = fuzzy_ext('本益比')
+        if 'priceToBook' not in info or not info['priceToBook']: info['priceToBook'] = fuzzy_ext('股價淨值比')
+        if 'trailingEps' not in info or not info['trailingEps']: info['trailingEps'] = fuzzy_ext('EPS')
+        if 'dividendYield' not in info or not info['dividendYield']: info['dividendYield'] = fuzzy_ext('殖利率', True)
+        
         info['grossMargins'] = fuzzy_ext('毛利率', True) or fuzzy_ext('營業毛利率', True)
         info['operatingMargins'] = fuzzy_ext('營業利益率', True) or fuzzy_ext('營益率', True)
         info['returnOnEquity'] = fuzzy_ext('ROE', True) or fuzzy_ext('權益報酬率', True)
+        
         sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text)
         if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
     except: pass
@@ -459,7 +482,7 @@ def get_stock_data(stock_id, fugle_key=""):
         fallback = get_fallback_info(stock_id)
         for k, v in fallback.items():
             if v is not None:
-                if k not in info_data or info_data[k] is None or str(info_data[k]).lower() == 'nan':
+                if k not in info_data or not info_data[k] or str(info_data[k]).lower() == 'nan':
                     info_data[k] = v
         return hist, info_data
     return None, None
@@ -884,6 +907,10 @@ if curr_id:
             t_eps = curr_p / pe_ratio
             
         sys_f_eps = s_float(info.get('forwardEps'))
+
+        # 🚨 終極防護網：當基礎資料全面消失時，提示使用者使用 AI 補齊
+        if pe_ratio is None and t_eps is None and not st.session_state.ai_fetched_financials.get(curr_id):
+            st.warning("⚠️ **系統提示**：偵測到免費財務資料庫 (Yahoo/FinMind) 拒絕連線或已達每小時請求上限，導致基礎財報反白。這正是 AI 模組發揮作用的時刻！請點擊上方【🪄 啟動 AI 全方位校對與補齊財報】強制聯網抓取最新估值數據。")
         
         ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
         ai_pe = s_float(ai_fin.get('pe'))
@@ -1022,7 +1049,6 @@ if curr_id:
             eff_peg = orig_peg if orig_peg is not None else ai_peg
             if real_cg is not None and real_cg <= 0: eff_peg = -999
             
-            # 🚀 升級一：修改運算邏輯，精準切分 PEG 估值與極限高空價
             if eff_f_eps is not None and real_cg is not None and real_cg > 0:
                 raw_mult = (real_cg * 100) * target_peg_adj
                 capped_mult = min(raw_mult, target_pe_cap)
@@ -1098,7 +1124,6 @@ if curr_id:
 
         pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
         
-        # 🚀 升級一：超清晰的極限高空價與底層變數除錯日誌
         if sys_target_price_est:
             cap_warning_html = ""
             if is_capped:
@@ -1156,11 +1181,9 @@ if curr_id:
         st.markdown("#### 🚨 系統異常風險偵測 (Anomaly Detection)", unsafe_allow_html=True)
         anomaly_html = ""
 
-        # 1. PB 溢價警示 (山太士妖股剋星)
         if eff_pb is not None and eff_pb > 10:
             anomaly_html += f"<div style='background:linear-gradient(90deg, #8b0000 0%, #ff4d4d 100%); color:white; padding:12px; border-radius:8px; margin-bottom:10px; font-weight:bold;'>🔥【極度溢價警示】 股價淨值比 (P/B) 高達 {eff_pb:.1f} 倍，已脫離台股歷史常態評價，隨時有均值回歸的暴跌風險！</div>"
 
-        # 2. 營收量價背離警示
         if df_rev_bk is not None and len(df_rev_bk) >= 2:
             last_mom = df_rev_bk['MoM'].iloc[-1]
             prev_mom = df_rev_bk['MoM'].iloc[-2]
@@ -1175,7 +1198,6 @@ if curr_id:
         st.markdown(anomaly_html, unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 升級防禦力檢測面板 (高股息/自由現金流)
         st.markdown("#### 🛡️ 防禦力與財務健康檢測 (長線/存股必看)", unsafe_allow_html=True)
         div_yield = s_float(info.get('dividendYield')) or s_float(info.get('trailingAnnualDividendYield'))
         
@@ -1408,7 +1430,7 @@ if curr_id:
 
         col_ai1, col_ai2 = st.columns([1.2, 1])
         with col_ai1:
-            if st.button("🤖 啟動 AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
+            if st.button("🤖 啟 পণ্ডিত AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
                 if not st.session_state.api_key: st.warning("請先於左側選單輸入您的 API Key。")
                 else:
                     with st.spinner(f"AI ({st.session_state.get('selected_model', 'gemini-2.5-flash')}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
