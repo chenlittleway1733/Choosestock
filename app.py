@@ -175,7 +175,6 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     headers = {"Content-Type": "application/json"}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     
-    # 🚀 升級：嚴格要求 AI 輸出格式，避免截斷與錯字
     system_prompt = (
         "你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「權值股」與 3 檔「中小型股」。\n"
         "必須嚴格回傳標準 JSON 格式，不可包含任何 Markdown 標記或多餘文字。\n"
@@ -193,7 +192,6 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
             
-            # 🚀 升級：增強 JSON 提取防呆，容許 AI 的小失誤
             s_idx = content.find('{')
             e_idx = content.rfind('}')
             if s_idx != -1 and e_idx != -1: 
@@ -680,7 +678,6 @@ if st.session_state.topic_results == "LOADING":
             st.error(f"❌ AI 解析失敗或逾時無回應。\n\n詳細原因：{data}")
             st.session_state.topic_results = None
 
-# 🚀 畫面大升級：將議題推演結果區塊加上吸睛面板與明確動線提示
 if isinstance(st.session_state.topic_results, dict):
     t = st.session_state.topic_results
     
@@ -696,13 +693,11 @@ if isinstance(st.session_state.topic_results, dict):
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("#### 🛡️ 潛力權值股 (點擊切換)")
-        # 🚀 防呆捕捉：不管 AI 標籤怎麼亂拼，只要有包含關鍵字就抓進來
         for s in [x for x in t['data'].get('stocks', []) if "權值" in x.get('type', '') or "潛力" in x.get('type', '')]:
             st.button(f"📌 {s.get('name', '未知')} ({s.get('id', '')})", on_click=reset_all_states_on_stock_change, args=(s.get('id', ''),), key=f"tp_{s.get('id', '')}", use_container_width=True)
             st.caption(f"理由：{s.get('why', '')}")
     with c2:
         st.markdown("#### 🚀 爆發中小型股 (點擊切換)")
-        # 🚀 防呆捕捉
         for s in [x for x in t['data'].get('stocks', []) if "中小" in x.get('type', '') or "爆發" in x.get('type', '')]:
             st.button(f"🔥 {s.get('name', '未知')} ({s.get('id', '')})", on_click=reset_all_states_on_stock_change, args=(s.get('id', ''),), key=f"ts_{s.get('id', '')}", use_container_width=True)
             st.caption(f"理由：{s.get('why', '')}")
@@ -805,16 +800,19 @@ if curr_id:
         """
         st.markdown(quote_html, unsafe_allow_html=True)
 
-        # 🚀 升級四：營收驚喜快訊 (MoM 暴增警報)
+        # 🚀 升級二：營收驚喜快訊與強制月份提示
         if df_rev_bk is not None and not df_rev_bk.empty:
             latest_rev = df_rev_bk['Revenue'].iloc[-1]
             latest_mom = df_rev_bk['MoM'].iloc[-1]
+            latest_month = df_rev_bk['Month'].iloc[-1]
             max_rev_12m = df_rev_bk['Revenue'].max()
+            
+            st.markdown(f"<div style='text-align:right; color:#aaa; font-size:0.9rem;'>⏳ 系統目前抓取到最新的營收月份為：<b>{latest_month}</b> (若與公開發布有落差，請點擊 AI 校對)</div>", unsafe_allow_html=True)
             
             if latest_mom >= 15 and latest_rev >= max_rev_12m:
                 st.markdown(f"""
                 <div style='background: linear-gradient(90deg, #ff4d4d 0%, #ff8c00 100%); padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; color: white; font-weight: bold; display: flex; align-items: center; justify-content: space-between;'>
-                    <span style='font-size:1.1rem;'>🚨 【營收驚喜快訊】最新單月營收高達 {latest_rev} 億 (創近期新高)！月增率 (MoM) 飆升 {latest_mom}%！</span>
+                    <span style='font-size:1.1rem;'>🚨 【營收驚喜快訊】{latest_month} 單月營收高達 {latest_rev} 億 (創近期新高)！月增率 (MoM) 飆升 {latest_mom}%！</span>
                     <span style='font-size:1.5rem;'>🔥 強烈動能</span>
                 </div>
                 """, unsafe_allow_html=True)
@@ -942,20 +940,26 @@ if curr_id:
             suggested_cap = 30.0
             cap_reason = "預設 30x (無毛利率數據)"
             if eff_gm is not None:
-                if eff_gm >= 0.50: suggested_cap, cap_reason = 50.0, "建議 50x (高毛利>50%: 軟體/IP/專利壟斷)"
-                elif eff_gm >= 0.30: suggested_cap, cap_reason = 35.0, "建議 35x (中高毛利>30%: 高階零組件/利基型)"
-                elif eff_gm >= 0.15: suggested_cap, cap_reason = 25.0, "建議 25x (穩健毛利>15%: 傳統優質硬體/代工)"
+                if eff_gm >= 0.50: suggested_cap, cap_reason = 40.0, "建議 40x (高毛利>50%: 軟體/IP/專利壟斷)"
+                elif eff_gm >= 0.30: suggested_cap, cap_reason = 30.0, "建議 30x (中高毛利>30%: 高階零組件/利基型)"
+                elif eff_gm >= 0.15: suggested_cap, cap_reason = 20.0, "建議 20x (穩健毛利>15%: 傳統優質硬體/代工)"
                 else: suggested_cap, cap_reason = 15.0, "建議 15x (低毛利<15%: 紅海競爭/純組裝)"
-            target_pe_cap = st.number_input("⚙️ 本益比天花板 (Cap)", value=float(suggested_cap), step=5.0, help="防禦低基期失真陷阱！系統已根據毛利率為您預設合理的極限本益比。")
+            
+            # 🚀 升級三：動態本益比天花板 (AI/題材權重庫)
+            summary_text = info.get('longBusinessSummary', '') + c_name + info.get('industry', '') + sector_disp
+            ai_keywords = ["AI", "伺服器", "CoWoS", "矽光子", "散熱", "CPO", "先進封裝", "半導體設備", "水冷", "ASIC", "資料中心", "輝達", "Nvidia"]
+            if any(kw.lower() in summary_text.lower() for kw in ai_keywords):
+                suggested_cap += 15.0
+                cap_reason += "<br>🚀 <span style='color:#ff4d4d;'>偵測到 AI/先進製程題材，Cap 上調 +15x</span>"
+                
+            target_pe_cap = st.number_input("⚙️ 動態本益比天花板 (Cap)", value=float(suggested_cap), step=5.0, help="防禦低基期失真陷阱！系統已根據毛利率與產業題材自動調整合理的極限本益比。")
             st.markdown(f"<div style='color:#00bfff; font-size:0.75rem; margin-top:-10px; line-height:1.2;'>💡 {cap_reason}</div>", unsafe_allow_html=True)
 
-        # 🚀 升級一：低基期防護旗標
         is_base_normalized = False 
 
         if use_custom_eps:
             eff_f_eps = custom_eps
             
-            # 🚀 執行低基期防護 (分母小於 0.5 強制設為 0.5)
             if eff_t_eps is not None and 0 < eff_t_eps < 0.5:
                 safe_base_eps = 0.5
                 is_base_normalized = True
@@ -968,6 +972,7 @@ if curr_id:
             eff_forward_pe = curr_p / eff_f_eps if eff_f_eps > 0 else None
             eff_peg = eff_forward_pe / (eff_cg * 100) if eff_forward_pe and eff_cg and eff_cg > 0 else None
             
+            # 🚀 升級一：修改運算邏輯，精準切分 PEG 估值與極限高空價
             if eff_f_eps is not None and eff_cg is not None and eff_cg > 0:
                 raw_mult = (eff_cg * 100) * target_peg_adj
                 capped_mult = min(raw_mult, target_pe_cap)
@@ -975,6 +980,8 @@ if curr_id:
                 is_capped = raw_mult > target_pe_cap
             else:
                 sys_target_price_est = None; is_capped = False
+                
+            extreme_target_price = eff_f_eps * target_pe_cap if eff_f_eps is not None else None
             
             eg_str_disp = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
             if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
@@ -997,7 +1004,6 @@ if curr_id:
             ai_fpe = curr_p / ai_f_eps_calc if ai_f_eps_calc and ai_f_eps_calc > 0 else None
             eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
             
-            # 🚀 執行低基期防護 (分母小於 0.5 強制設為 0.5)
             if eff_f_eps is not None and t_eps is not None and t_eps > 0:
                 if t_eps < 0.5:
                     safe_base_eps = 0.5
@@ -1016,6 +1022,7 @@ if curr_id:
             eff_peg = orig_peg if orig_peg is not None else ai_peg
             if real_cg is not None and real_cg <= 0: eff_peg = -999
             
+            # 🚀 升級一：修改運算邏輯，精準切分 PEG 估值與極限高空價
             if eff_f_eps is not None and real_cg is not None and real_cg > 0:
                 raw_mult = (real_cg * 100) * target_peg_adj
                 capped_mult = min(raw_mult, target_pe_cap)
@@ -1023,6 +1030,8 @@ if curr_id:
                 is_capped = raw_mult > target_pe_cap
             else:
                 sys_target_price_est = None; is_capped = False
+                
+            extreme_target_price = eff_f_eps * target_pe_cap if eff_f_eps is not None else None
             
             eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', 'AI推算')
             if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
@@ -1089,17 +1098,24 @@ if curr_id:
 
         pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
         
+        # 🚀 升級一：超清晰的極限高空價與底層變數除錯日誌
         if sys_target_price_est:
-            cg_display = real_cg * 100 if real_cg else 0
             cap_warning_html = ""
             if is_capped:
-                cap_msg = f"🚨 已觸發封頂防護 ({target_pe_cap:.0f}x)，「估值情境」被天花板壓制無效"
-                if curr_p > sys_target_price_est:
-                    cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}<br>股價超漲警示：前瞻 P/E ({eff_forward_pe:.1f}x) 遠超安全上限，追高風險大！</span>"
+                cap_msg = f"🚨 已觸發封頂防護 ({target_pe_cap:.0f}x)，PEG 推算被天花板壓制"
+                if curr_p > extreme_target_price:
+                    cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}<br>股價超漲警示：目前股價已超越極限高空價，追高風險極大！</span>"
                 else:
                     cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}</span>"
             
-            target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理高空價 (逆向推算): <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b><br><small style='color:#ccc;'>公式: 預估EPS({eff_f_eps:.2f}) × min(成長率{cg_display:.1f} × 乘數{target_peg_adj}, Cap天花板{target_pe_cap:.0f})</small>{cap_warning_html}</div>"
+            target_price_html = f"""<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>
+            🎯 合理估值 (PEG 推算): <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b><br>
+            🚀 <span style='color:#ff4d4d; font-weight:bold;'>極限高空價 (Forward EPS × Cap): <span style='font-size:1.2rem;'>{extreme_target_price:.1f}元</span></span><br>
+            <div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'>
+                <small style='color:#00bfff;'>🐛 [底層運算除錯] 抓取 EPS: {eff_f_eps:.2f} | 使用 Cap: {target_pe_cap:.0f}x</small>
+            </div>
+            {cap_warning_html}
+            </div>"""
         else:
             target_price_html = ""
 
@@ -1135,90 +1151,35 @@ if curr_id:
         """
         st.markdown(val_html, unsafe_allow_html=True)
         st.markdown("---")
-
-        # ==========================================
-        # 🚀 月營收圖表
-        # ==========================================
-        if df_rev_bk is not None and not df_rev_bk.empty:
-            st.markdown("#### 📊 近一年月營收與成長動能趨勢 (真實數據)")
-            st.markdown("<small style='color:gray;'>*數據來源：自動抓取最新公告之每月營收與年增率 (YoY)*</small>", unsafe_allow_html=True)
-
-            fig_rev = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_rev.add_trace(go.Bar(x=df_rev_bk['Month'], y=df_rev_bk['Revenue'], name="單月營收 (億)", marker_color='#3498db', opacity=0.8, hovertemplate="營收: %{y} 億<extra></extra>"), secondary_y=False)
-            fig_rev.add_trace(go.Scatter(x=df_rev_bk['Month'], y=df_rev_bk['YoY'], name="YoY (%)", mode='lines+markers', line=dict(color='#ff4d4d', width=3), marker=dict(size=8, symbol='circle'), hovertemplate="YoY: %{y}%<extra></extra>"), secondary_y=True)
-
-            fig_rev.update_layout(
-                height=400, template="plotly_dark", hovermode="x unified",
-                margin=dict(l=10, r=10, t=50, b=10),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
-            )
-            fig_rev.update_yaxes(title_text="營收金額 (億)", secondary_y=False, showgrid=False)
-            fig_rev.update_yaxes(title_text="年增率 YoY (%)", secondary_y=True, showgrid=True, gridcolor='#333', zeroline=True, zerolinewidth=1, zerolinecolor='#555')
-            fig_rev.update_xaxes(type='category')
-
-            st.plotly_chart(fig_rev, use_container_width=True)
-            st.markdown("---")
-
-        # ==========================================
-        # 🚀 產業前景與競爭優勢評估 (Moat / Trend cards)
-        # ==========================================
-        st.markdown("#### 🌟 產業前景與競爭優勢評估", unsafe_allow_html=True)
-        st.markdown("<small style='color:gray;'>*註：下方為客觀數據推導。您可點擊 AI 按鈕進行聯網深度檢索與買賣點分析。*</small>", unsafe_allow_html=True)
-
-        hot_industries = ['Semiconductor', 'Software', 'Hardware', 'Electronic', 'IT Services', 'Communication', 'Technology']
-        is_hot = any(hot in sector_disp for hot in hot_industries) or any(hot in info.get('industry', '未知') for hot in hot_industries)
         
-        if is_hot:
-            trend_icon, trend_title, trend_desc, trend_color = "🚀", "長線成長大趨勢", f"所屬板塊 ({info.get('industry', '未知')}) 涵蓋高階運算、AI 應用或資料中心等剛性需求，具備長期市場成長潛力。", "#ff4d4d"
-        else:
-            trend_icon, trend_title, trend_desc, trend_color = "🏭", "穩定或景氣循環產業", f"所屬板塊 ({info.get('industry', '未知')}) 發展相對成熟，需特別留意整體景氣波動或公司的特殊利基點。", "#FFD700"
+        # 🚀 升級四：極端風險 (Anomaly) 警示燈號
+        st.markdown("#### 🚨 系統異常風險偵測 (Anomaly Detection)", unsafe_allow_html=True)
+        anomaly_html = ""
 
-        if eff_gm is None:
-            moat_icon, moat_title, moat_desc, moat_color = "❓", "數據不足", "缺乏毛利率數據無法精確評估。", "gray"
-        elif eff_gm >= 0.40:
-            moat_icon, moat_title, moat_desc, moat_color = "🏰", "極寬廣 (強大護城河)", f"毛利率高達 {eff_gm*100:.1f}%！顯示公司具備極高的技術門檻、專利佈局或客戶轉換成本，對手極難搶奪市佔率。", "#ff4d4d"
-        elif eff_gm >= 0.20:
-            moat_icon, moat_title, moat_desc, moat_color = "🛡️", "中等壁壘", f"毛利率 {eff_gm*100:.1f}%。具備一定的技術領先或營運規模，存在競爭壁壘。", "#FFD700"
-        else:
-            moat_icon, moat_title, moat_desc, moat_color = "⚔️", "競爭激烈 (低護城河)", f"毛利率僅 {eff_gm*100:.1f}%。產品同質性偏高，容易落入價格戰，無法輕易阻擋對手跨入。", "#00cc66"
+        # 1. PB 溢價警示 (山太士妖股剋星)
+        if eff_pb is not None and eff_pb > 10:
+            anomaly_html += f"<div style='background:linear-gradient(90deg, #8b0000 0%, #ff4d4d 100%); color:white; padding:12px; border-radius:8px; margin-bottom:10px; font-weight:bold;'>🔥【極度溢價警示】 股價淨值比 (P/B) 高達 {eff_pb:.1f} 倍，已脫離台股歷史常態評價，隨時有均值回歸的暴跌風險！</div>"
 
-        if eff_om is None:
-            pos_icon, pos_title, pos_desc, pos_color = "❓", "數據不足", "缺乏營益率數據無法精確評估。", "gray"
-        elif eff_om >= 0.15:
-            pos_icon, pos_title, pos_desc, pos_color = "👑", "核心主導者 (具定價權)", f"營益率高達 {eff_om*100:.1f}%。在產業鏈中掌握關鍵零組件、設備或 IP 設計，景氣波動時具備高度抗跌能力與話語權。", "#ff4d4d"
-        elif eff_om >= 0.05:
-            pos_icon, pos_title, pos_desc, pos_color = "⚙️", "關鍵供應商", f"營益率 {eff_om*100:.1f}%。在整體供應鏈中扮演不可或缺的一環，營運與定價能力相對穩健。", "#FFD700"
-        else:
-            pos_icon, pos_title, pos_desc, pos_color = "📦", "弱勢地位 (低階代工/組裝)", f"營益率僅 {eff_om*100:.1f}%。毛利微薄且被成本擠壓，在供應鏈中缺乏定價權，極易受原物料上漲與終端砍單衝擊。", "#00cc66"
+        # 2. 營收量價背離警示
+        if df_rev_bk is not None and len(df_rev_bk) >= 2:
+            last_mom = df_rev_bk['MoM'].iloc[-1]
+            prev_mom = df_rev_bk['MoM'].iloc[-2]
+            recent_high_120 = hist['High'].tail(120).max()
+            price_near_high = curr_p >= (recent_high_120 * 0.9)
+            if last_mom < 0 and prev_mom < 0 and price_near_high:
+                 anomaly_html += f"<div style='background:linear-gradient(90deg, #b8860b 0%, #ff8c00 100%); color:white; padding:12px; border-radius:8px; margin-bottom:10px; font-weight:bold;'>🚸【量價背離風險】 近兩月營收連續衰退 (最新 MoM: {last_mom}%)，但股價仍高掛在近半年高檔區，請嚴防主力拉高出貨！</div>"
 
-        st.markdown(f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {trend_color};'>
-                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>{trend_icon} 市場趨勢</div>
-                <div style='color:{trend_color}; font-weight:bold; margin-bottom:5px;'>{trend_title}</div>
-                <div style='color:#aaa; font-size:0.9rem; line-height:1.5;'>{trend_desc}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {moat_color};'>
-                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>{moat_icon} 護城河 (競爭壁壘)</div>
-                <div style='color:{moat_color}; font-weight:bold; margin-bottom:5px;'>{moat_title}</div>
-                <div style='color:#aaa; font-size:0.9rem; line-height:1.5;'>{moat_desc}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pos_color};'>
-                <div style='font-size:1.1rem; font-weight:bold; color:#fff; margin-bottom:8px;'>{pos_icon} 供應鏈地位</div>
-                <div style='color:{pos_color}; font-weight:bold; margin-bottom:5px;'>{pos_title}</div>
-                <div style='color:#aaa; font-size:0.9rem; line-height:1.5;'>{pos_desc}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        if anomaly_html == "":
+            anomaly_html = "<div style='background:#1e1e1e; color:#00cc66; padding:12px; border-radius:8px; border:1px solid #333;'>✅ 目前未偵測到極端高估 (P/B>10) 或營收背離風險，數據處於相對常態範圍。</div>"
+
+        st.markdown(anomaly_html, unsafe_allow_html=True)
         st.markdown("---")
-        
-        # 🚀 升級三：防禦力檢測面板 (高股息/自由現金流)
+
+        # 🚀 升級防禦力檢測面板 (高股息/自由現金流)
         st.markdown("#### 🛡️ 防禦力與財務健康檢測 (長線/存股必看)", unsafe_allow_html=True)
         div_yield = s_float(info.get('dividendYield')) or s_float(info.get('trailingAnnualDividendYield'))
         
-        # 🛑 殖利率小數點防呆校正：yfinance 有時會直接回傳整數 (例如 4.65) 而非小數 (0.0465)
-        if div_yield is not None and div_yield > 0.3:  # 台股常態殖利率極少超過 30%，大於此數值視為格式錯置
+        if div_yield is not None and div_yield > 0.3:  
             div_yield = div_yield / 100.0
 
         fcf = s_float(info.get('freeCashflow'))
@@ -1400,9 +1361,8 @@ if curr_id:
             ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
             ctx_eg = p_fmt(real_cg_for_prompt, ai_yoy, 'pct', 'AI推算')
 
-        # 🚀 升級整合：將 Phase 3 的防禦力、營收快訊與逆向目標價餵給 AI 大腦
         latest_mom_str = f"{df_rev_bk['MoM'].iloc[-1]:.2f}%" if df_rev_bk is not None and not df_rev_bk.empty else "無資料"
-        tp_est_str = f"{sys_target_price_est:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if sys_target_price_est else "無資料"
+        tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
 
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
@@ -1411,7 +1371,7 @@ if curr_id:
         - 前瞻本益比 (Forward P/E): {ctx_fpe}
         - 股價淨值比 (P/B): {ctx_pb}
         - 本益成長比 (PEG): {ctx_peg}
-        - 🎯 系統逆向推算合理高空價: {tp_est_str}
+        - 🎯 系統逆向推算極限高空價: {tp_est_str}
 
         【財務基本面動能 (原始數據 vs AI數據)】
         - EPS (目前 / 預估): {ctx_eps} 元
