@@ -103,6 +103,19 @@ def toggle_watchlist(code, name):
     with open("stocklist.txt", "w", encoding="utf-8") as f:
         f.writelines(new_lines)
 
+def get_streak(series):
+    streak = 0
+    for val in reversed(series.tolist()):
+        if val > 0:
+            if streak >= 0: streak += 1
+            else: break
+        elif val < 0:
+            if streak <= 0: streak -= 1
+            else: break
+        else:
+            break
+    return streak
+
 # ==========================================
 # 2. Session State 初始化 & 狀態管理
 # ==========================================
@@ -168,8 +181,6 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
-    
-    # 🚀 升級：要求 AI 回報「資料所屬年月或季度」，確保使用者知道資料的新舊
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
@@ -181,13 +192,12 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     8. 「最新單月或累計營收年增率(YoY)」
     9. 「國內外法人最新預估目標價 (Target Price)」
     10. 「負債權益比 (Debt-to-Equity Ratio)」
-    11. 「最新資料所屬年月或季度 (Data Period)」(請註明找到的營收或EPS所屬期間，例如 "2024/03" 或 "2023Q4")
+    11. 「最新資料所屬年月或季度 (Data Period)」
 
     必須嚴格回傳包含上述 11 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     格式範例：
     {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "debt_to_equity": 0.45, "data_period": "2024/03"}}
     絕對不要輸出 markdown 標記或其他文字。"""
-    
     payload = {
         "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 (務必找出: 毛利率、營益率、ROE 股東權益報酬率、負債權益比) 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -298,7 +308,6 @@ def get_global_market_trend():
 
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id, fm_key=""):
-    # 🚀 強制覆蓋機制：第一優先爬取 Yahoo 最新隱藏 JSON 數據 (更新最快)
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
         y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
@@ -317,7 +326,6 @@ def get_monthly_revenue(stock_id, fm_key=""):
                     }])
     except: pass
     
-    # 備用機制：若 Yahoo 失敗，則使用 FinMind 數據
     try:
         today = datetime.date.today()
         start_str = f"{today.year - 2}-{today.month:02d}-01"
@@ -364,41 +372,90 @@ def get_pe_pb_data(stock_id, fm_key=""):
     except: pass
     return None
 
+# 🚀 升級突破 2：加入 Piotroski F-Score 綜合健康跑分運算引擎
 @st.cache_data(ttl=43200)
-def get_finmind_margins(stock_id, fm_key=""):
+def get_finmind_financial_health(stock_id, fm_key=""):
     try:
         today = datetime.date.today()
-        start_str = f"{today.year - 1}-01-01"
+        start_str = f"{today.year - 2}-01-01" # 撈取近兩年資料進行 YoY 比對
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockFinancialStatements&data_id={stock_id}&start_date={start_str}"
         if fm_key: url += f"&token={fm_key}"
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=15)
         data = res.json()
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
             if df.empty: return {}
-            latest_date = df['date'].max()
-            df_latest = df[df['date'] == latest_date]
-            vals = {str(row['type']).strip(): row['value'] for _, row in df_latest.iterrows()}
             
-            def get_val(*keys):
+            df['date'] = pd.to_datetime(df['date'])
+            dates = sorted(df['date'].unique())
+            latest_date = dates[-1]
+            prev_date = dates[-5] if len(dates) >= 5 else (dates[0] if len(dates)>1 else latest_date)
+            
+            df_latest = df[df['date'] == latest_date]
+            df_prev = df[df['date'] == prev_date]
+            
+            vals_l = {str(row['type']).strip(): row['value'] for _, row in df_latest.iterrows()}
+            vals_p = {str(row['type']).strip(): row['value'] for _, row in df_prev.iterrows()}
+            
+            def get_val(v_dict, *keys):
                 for k in keys:
-                    for v_key in vals.keys():
-                        if k in v_key: 
-                            return vals[v_key]
-                return None
+                    for v_key in v_dict.keys():
+                        if k in v_key:
+                            try: return float(v_dict[v_key])
+                            except: pass
+                return 0.0
                 
-            rev = get_val('營業收入', '淨收益', '收益')
-            gp = get_val('營業毛利', '毛利')
-            op = get_val('營業利益')
-            debt = get_val('負債總')
-            eq = get_val('權益總')
+            rev_l = get_val(vals_l, '營業收入', '淨收益', '收益')
+            gp_l = get_val(vals_l, '營業毛利', '毛利')
+            op_l = get_val(vals_l, '營業利益')
+            ni_l = get_val(vals_l, '本期淨利', '淨利')
+            ta_l = get_val(vals_l, '資產總', '資產')
+            tl_l = get_val(vals_l, '負債總')
+            eq_l = get_val(vals_l, '權益總')
+            ca_l = get_val(vals_l, '流動資產')
+            cl_l = get_val(vals_l, '流動負債')
+            ltd_l = get_val(vals_l, '非流動負債', '長期借款')
+            cfo_l = get_val(vals_l, '營業活動之淨現金流入', '營業活動之現金流量')
+            if cfo_l == 0: cfo_l = op_l # 若無現流表則用營業利益暫代
+            shares_l = get_val(vals_l, '普通股股本', '股本')
+            
+            rev_p = get_val(vals_p, '營業收入', '淨收益', '收益')
+            gp_p = get_val(vals_p, '營業毛利', '毛利')
+            ni_p = get_val(vals_p, '本期淨利', '淨利')
+            ta_p = get_val(vals_p, '資產總', '資產')
+            ca_p = get_val(vals_p, '流動資產')
+            cl_p = get_val(vals_p, '流動負債')
+            ltd_p = get_val(vals_p, '非流動負債', '長期借款')
+            shares_p = get_val(vals_p, '普通股股本', '股本')
             
             res_dict = {}
-            if rev and rev > 0:
-                if gp is not None: res_dict['grossMargins'] = gp / rev
-                if op is not None: res_dict['operatingMargins'] = op / rev
-            if debt is not None and eq and eq > 0:
-                res_dict['debtToEquity'] = debt / eq
+            if rev_l > 0:
+                res_dict['grossMargins'] = gp_l / rev_l
+                res_dict['operatingMargins'] = op_l / rev_l
+            if eq_l > 0:
+                res_dict['debtToEquity'] = tl_l / eq_l
+                
+            # 計算 F-Score 9 大指標
+            f_score = 0
+            if ta_l > 0 and ta_p > 0:
+                roa_l, roa_p = ni_l / ta_l, ni_p / ta_p
+                if roa_l > 0: f_score += 1                 # 1. 獲利性: ROA > 0
+                if cfo_l > 0: f_score += 1                 # 2. 獲利性: 營業現金流 > 0
+                if roa_l > roa_p: f_score += 1             # 3. 獲利性: ROA 成長
+                if cfo_l > ni_l: f_score += 1              # 4. 獲利性: 營業現金流 > 淨利 (無虛增利潤)
+                if (ltd_l / ta_l) < (ltd_p / ta_p): f_score += 1  # 5. 安全性: 長期負債比下降
+                cr_l = (ca_l / cl_l) if cl_l > 0 else 0
+                cr_p = (ca_p / cl_p) if cl_p > 0 else 0
+                if cr_l > cr_p: f_score += 1               # 6. 安全性: 流動比率提升
+                if shares_l <= shares_p and shares_l > 0: f_score += 1 # 7. 安全性: 無發行新股稀釋
+                gm_l = (gp_l / rev_l) if rev_l > 0 else 0
+                gm_p = (gp_p / rev_p) if rev_p > 0 else 0
+                if gm_l > gm_p: f_score += 1               # 8. 成長性: 毛利率提升
+                at_l = rev_l / ta_l
+                at_p = rev_p / ta_p
+                if at_l > at_p: f_score += 1               # 9. 成長性: 資產週轉率提升
+                
+            res_dict['f_score'] = f_score
             return res_dict
     except: pass
     return {}
@@ -930,9 +987,8 @@ if curr_id:
                         
         df_rev_bk = get_monthly_revenue(curr_id, st.session_state.finmind_key)
         df_per_bk = get_pe_pb_data(curr_id, st.session_state.finmind_key)
-        fm_margins = get_finmind_margins(curr_id, st.session_state.finmind_key)
+        fm_health = get_finmind_financial_health(curr_id, st.session_state.finmind_key)
         
-        # 🚀 提取系統判定的最新資料月份 (時間戳記)
         latest_rev_month = df_rev_bk['Month'].iloc[-1] if df_rev_bk is not None and not df_rev_bk.empty else "無資料"
         latest_mom_val = s_float(df_rev_bk['MoM'].iloc[-1]) if df_rev_bk is not None and not df_rev_bk.empty else None
         
@@ -950,9 +1006,9 @@ if curr_id:
         gross_margin = s_float(info.get('grossMargins'))
         op_margin = s_float(info.get('operatingMargins'))
         
-        if gross_margin is None: gross_margin = fm_margins.get('grossMargins')
-        if op_margin is None: op_margin = fm_margins.get('operatingMargins')
-        if sys_de is None: sys_de = fm_margins.get('debtToEquity')
+        if gross_margin is None: gross_margin = fm_health.get('grossMargins')
+        if op_margin is None: op_margin = fm_health.get('operatingMargins')
+        if sys_de is None: sys_de = fm_health.get('debtToEquity')
         
         rev_growth = s_float(info.get('revenueGrowth'))
         if rev_growth is None and df_rev_bk is not None and not df_rev_bk.empty:
@@ -980,7 +1036,6 @@ if curr_id:
         ai_de = s_float(ai_fin.get('debt_to_equity'))
         ai_target_price = s_float(ai_fin.get('target_price'))
         
-        # 🚀 取得 AI 找回資料的時間戳記
         raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
         ai_suffix = f"AI({raw_ai_period})" if raw_ai_period else "AI捉取"
         
@@ -1203,7 +1258,6 @@ if curr_id:
         """
         st.markdown(clean_html(val_html), unsafe_allow_html=True)
         
-        # 🚀 升級：將 MoM 加入基本面表格，並在標題明確標示資料月份
         mom_color = "#ff4d4d" if latest_mom_val is not None and latest_mom_val > 0 else ("#00cc66" if latest_mom_val is not None and latest_mom_val < 0 else "#fff")
         mom_str_disp = f"<br><span style='font-size:1rem; color:{mom_color};'>MoM: {latest_mom_val:.2f}%</span>" if latest_mom_val is not None else ""
 
@@ -1263,9 +1317,20 @@ if curr_id:
         elif current_ratio >= 1.5: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#ff4d4d", "短期無債務風險"
         elif current_ratio >= 1.0: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#FFD700", "流動性及格"
         else: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#00cc66", "⚠️ 流動性吃緊"
+        
+        # 🚀 升級突破 2：Piotroski F-Score 前端儀表板顯示
+        f_score_val = fm_health.get('f_score')
+        if f_score_val is None: 
+            fs_str, fs_color, fs_eval = "無資料", "gray", "資料不足"
+        elif f_score_val >= 7: 
+            fs_str, fs_color, fs_eval = f"{f_score_val} 分", "#ff4d4d", "⭐ 體質極優"
+        elif f_score_val >= 5: 
+            fs_str, fs_color, fs_eval = f"{f_score_val} 分", "#FFD700", "🆗 體質及格"
+        else: 
+            fs_str, fs_color, fs_eval = f"{f_score_val} 分", "#00cc66", "🚨 孱弱/高風險"
 
         dfens_html = f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom:20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {dy_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
                     <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>💰 預估殖利率</div><div style='background:{dy_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{dy_eval}</div>
@@ -1274,7 +1339,7 @@ if curr_id:
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fcf_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>💵 自由現金流 (FCF)</div><div style='background:{fcf_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fcf_eval}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>💵 自由現金流</div><div style='background:{fcf_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fcf_eval}</div>
                 </div>
                 <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{fcf_str}</div>
             </div>
@@ -1283,6 +1348,12 @@ if curr_id:
                     <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>⚖️ 流動比率</div><div style='background:{cr_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cr_eval}</div>
                 </div>
                 <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{cr_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fs_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🩺 F-Score 健康跑分</div><div style='background:{fs_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fs_eval}</div>
+                </div>
+                <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{fs_str}</div>
             </div>
         </div>
         """
@@ -1320,9 +1391,60 @@ if curr_id:
              st.markdown("---")
 
         # ==========================================
+        # 🚀 升級突破 1：主力籌碼追蹤雷達 (聰明錢流向)
+        # ==========================================
+        st.markdown("#### 📡 主力籌碼追蹤雷達 (聰明錢動向與背離陷阱)", unsafe_allow_html=True)
+        inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
+        
+        if not inst_df.empty:
+            f_streak = get_streak(inst_df['Foreign'])
+            t_streak = get_streak(inst_df['Trust'])
+            f_10d = inst_df['Foreign'].tail(10).sum()
+            t_10d = inst_df['Trust'].tail(10).sum()
+            
+            f_status = f"連買 {f_streak} 天 🔥" if f_streak > 0 else (f"連賣 {-f_streak} 天 ⚠️" if f_streak < 0 else "無連續動向")
+            t_status = f"連買 {t_streak} 天 🔥" if t_streak > 0 else (f"連賣 {-t_streak} 天 ⚠️" if t_streak < 0 else "無連續動向")
+            
+            f_color = "#ff4d4d" if f_10d > 0 else "#00cc66"
+            t_color = "#ff4d4d" if t_10d > 0 else "#00cc66"
+            
+            trap_warning = ""
+            # 陷阱邏輯：如果 EPS 成長為正，但外資+投信 10 日內狂倒貨超過千張
+            if (eff_eg is not None and eff_eg > 0) and ((f_10d + t_10d) < -1000):
+                trap_warning = "<div style='background:linear-gradient(90deg, #8b0000 0%, #ff4d4d 100%); color:white; padding:12px; border-radius:8px; margin-top:10px; font-weight:bold;'>🚨 【高危陷阱警示】基本面看似亮眼，但外資/投信近 10 日聯手倒貨超過千張！請提防主力趁利多逢高出貨！</div>"
+            # 順風車邏輯：主力連續買超大於3天且總量龐大
+            elif (f_streak >= 3 or t_streak >= 3) and ((f_10d + t_10d) > 1000):
+                trap_warning = "<div style='background:linear-gradient(90deg, #006400 0%, #00cc66 100%); color:white; padding:12px; border-radius:8px; margin-top:10px; font-weight:bold;'>🚀 【聰明錢上車】三大法人近期連買且大幅建倉，籌碼動能強勁，極具波段上攻潛力！</div>"
+            else:
+                trap_warning = "<div style='background:#1e1e1e; color:#aaa; padding:12px; border-radius:8px; border:1px solid #333; margin-top:10px;'>目前三大法人買賣超動向無極端異常訊號。</div>"
+
+            radar_html = f"""
+            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:10px;'>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {f_color};'>
+                    <div style='color:#aaa; font-size:0.9rem;'>外資近 10 日淨買賣</div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:{f_color};'>{f_10d:,.0f} 張</div>
+                    <div style='font-size:1rem; font-weight:bold; color:#fff; margin-top:5px;'>動向: {f_status}</div>
+                </div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {t_color};'>
+                    <div style='color:#aaa; font-size:0.9rem;'>投信近 10 日淨買賣</div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:{t_color};'>{t_10d:,.0f} 張</div>
+                    <div style='font-size:1rem; font-weight:bold; color:#fff; margin-top:5px;'>動向: {t_status}</div>
+                </div>
+            </div>
+            {trap_warning}
+            """
+            st.markdown(clean_html(radar_html), unsafe_allow_html=True)
+        else:
+            if not st.session_state.finmind_key:
+                st.warning("⚠️ 系統無法獲取主力籌碼雷達。請至左側上傳 `key.txt` 匯入 FinMind 金鑰以解除限制。")
+            else:
+                st.warning("⚠️ 此檔股票近期無三大法人買賣超數據，無法啟動籌碼雷達。")
+        st.markdown("---")
+
+        # ==========================================
         # 🚀 籌碼面與股權結構分析
         # ==========================================
-        st.markdown("#### 🐳 籌碼面與股權結構分析", unsafe_allow_html=True)
+        st.markdown("#### 🐳 內部人與控盤主力推估", unsafe_allow_html=True)
         insider_pct = s_float(info.get('heldPercentInsiders'))
         inst_pct = s_float(info.get('heldPercentInstitutions'))
         shares_out = s_float(info.get('sharesOutstanding'))
@@ -1348,7 +1470,7 @@ if curr_id:
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 三大法人持股率</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 外資/機構總持股率</div>
                     <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
                 </div>
                 <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
@@ -1400,6 +1522,7 @@ if curr_id:
         - 營業利益率: {op_margin} / AI抓取: {ai_om}
         - 股東權益報酬率 (ROE): {roe} / AI抓取: {ai_roe}
         - 負債權益比 (D/E Ratio): {sys_de}
+        - 🩺 Piotroski F-Score 健康跑分: {f_score_val} / 9 分
 
         【🛡️ 防禦力與財務健康檢測 (重要參考)】
         - 預估殖利率: {dy_str}
@@ -1500,7 +1623,7 @@ if curr_id:
             st.markdown("---")
 
         # ==========================================
-        # 🌊 雙河流圖 (Tabs)
+        # 🌊 雙河流圖 (Tabs) 
         # ==========================================
         if df_per_bk is not None and not df_per_bk.empty:
             st.markdown("### 🌊 估值位階雙河流圖 (P/E & P/B River)")
@@ -1627,20 +1750,16 @@ if curr_id:
         
         plot_df = full_df.tail(120).copy()
         
-        inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
         if not inst_df.empty:
             temp_dates = pd.to_datetime(plot_df.index).normalize()
-            inst_df.index = pd.to_datetime(inst_df.index).normalize()
+            inst_df_aligned = inst_df.copy()
+            inst_df_aligned.index = pd.to_datetime(inst_df_aligned.index).normalize()
             
-            plot_df['Foreign'] = temp_dates.map(inst_df['Foreign']).fillna(0)
-            plot_df['Trust'] = temp_dates.map(inst_df['Trust']).fillna(0)
-            plot_df['Dealer'] = temp_dates.map(inst_df['Dealer']).fillna(0)
+            plot_df['Foreign'] = temp_dates.map(inst_df_aligned['Foreign']).fillna(0)
+            plot_df['Trust'] = temp_dates.map(inst_df_aligned['Trust']).fillna(0)
+            plot_df['Dealer'] = temp_dates.map(inst_df_aligned['Dealer']).fillna(0)
         else:
             plot_df['Foreign'] = 0; plot_df['Trust'] = 0; plot_df['Dealer'] = 0
-            if st.session_state.finmind_key:
-                st.warning("⚠️ 此檔股票近期無三大法人買賣超數據，或資料庫暫時無回應，下方籌碼圖暫以 0 顯示。 (您的金鑰有效，純粹是資料庫空值)")
-            else:
-                st.warning("⚠️ 系統無法獲取三大法人買賣超數據。(原因：免費資料庫 FinMind 限制每小時 300 次請求。您目前使用的是**雲端共享 IP**，因此額度容易被他人耗盡。解決方案：請在左側選單上傳 key.txt 匯入金鑰解除限制，目前下方籌碼暫以 0 顯示。)")
             
         last_close = plot_df['Close'].iloc[-1]
         ma5_last = plot_df['MA5'].iloc[-1]
