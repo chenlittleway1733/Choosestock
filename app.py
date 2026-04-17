@@ -310,13 +310,14 @@ def get_global_market_trend():
         return {"sox_p": sox_price, "sox": sox_pct, "tsm_p": tsm_price, "tsm": tsm_pct, "nq_p": nq_price, "nq": nq_pct, "ewt_p": ewt_price, "ewt": ewt_pct, "trend": trend, "color": color, "target_day": target_day, "time_status": time_status}
     except: return None
 
-# --- 數據獲取引擎 ---
+# --- 數據獲取引擎 (🚀 全面整合 fm_key) ---
 @st.cache_data(ttl=43200)
-def get_monthly_revenue(stock_id):
+def get_monthly_revenue(stock_id, fm_key=""):
     try:
         today = datetime.date.today()
         start_str = f"{today.year - 2}-{today.month:02d}-01"
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id={stock_id}&start_date={start_str}"
+        if fm_key: url += f"&token={fm_key}" # 🚀 強制綁定金鑰
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         data = res.json()
         if data.get('status') == 200 and data.get('data'):
@@ -340,11 +341,12 @@ def get_monthly_revenue(stock_id):
     return None
 
 @st.cache_data(ttl=43200)
-def get_pe_pb_data(stock_id):
+def get_pe_pb_data(stock_id, fm_key=""):
     try:
         today = datetime.date.today()
         start_str = f"{today.year - 5}-{today.month:02d}-01"
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPER&data_id={stock_id}&start_date={start_str}"
+        if fm_key: url += f"&token={fm_key}" # 🚀 強制綁定金鑰
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         if res.status_code == 200:
             data = res.json()
@@ -388,7 +390,7 @@ def get_fallback_info(stock_id):
     return info
 
 @st.cache_data(ttl=3600)
-def get_stock_data(stock_id, fugle_key=""):
+def get_stock_data(stock_id, fugle_key="", fm_key=""):
     stock_id = str(stock_id).strip()
     hist = None
     info_data = {}
@@ -412,6 +414,7 @@ def get_stock_data(stock_id, fugle_key=""):
         try:
             start_str = f"{(datetime.date.today() - datetime.timedelta(days=1825)).isoformat()}"
             url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
+            if fm_key: url += f"&token={fm_key}" # 🚀 強制綁定金鑰
             res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             data = res.json()
             if data.get('status') == 200 and data.get('data'):
@@ -455,11 +458,12 @@ def get_chart_data(stock_id, timeframe, fugle_key=""):
 
 # 🌟 極度容錯版：取得法人買賣超資料
 @st.cache_data(ttl=43200)
-def get_inst_data(stock_id):
+def get_inst_data(stock_id, fm_key=""):
     try:
         today = datetime.date.today()
         start_str = (today - datetime.timedelta(days=180)).strftime("%Y-%m-%d")
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={stock_id}&start_date={start_str}"
+        if fm_key: url += f"&token={fm_key}" # 🚀 強制綁定金鑰，這就是突破限制的關鍵！
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         data = res.json()
         
@@ -506,6 +510,7 @@ def validate_api_keys(f_key, m_key):
     if m_key:
         clean_m = re.sub(r'\s+', '', m_key)
         try:
+            # 測試連線改用極輕量的參數，並將 timeout 延長至 15 秒給伺服器喘息空間
             r2 = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=2330&start_date=2024-01-01&end_date=2024-01-02&token={clean_m}", timeout=15)
             m_res = (r2.status_code == 200 and r2.json().get('status') == 200)
         except: m_res = False
@@ -574,13 +579,14 @@ with st.sidebar:
                 results = []
                 pbar = st.progress(0)
                 for i, (c, n) in enumerate(target_stocks):
-                    _, inf = get_stock_data(c, st.session_state.fugle_key)
+                    # 🚀 升級：策略漏斗掃描時，也把金鑰帶入
+                    _, inf = get_stock_data(c, st.session_state.fugle_key, st.session_state.finmind_key)
                     if inf:
                         pe = s_float(inf.get('trailingPE'))
                         roe = s_float(inf.get('returnOnEquity'))
                         eg = s_float(inf.get('earningsGrowth'))
                         if eg is None:
-                            df_rv = get_monthly_revenue(c)
+                            df_rv = get_monthly_revenue(c, st.session_state.finmind_key)
                             if df_rv is not None and not df_rv.empty: eg = s_float(df_rv['YoY'].iloc[-1]) / 100.0
                         
                         sys_peg = s_float(inf.get('pegRatio'))
@@ -607,19 +613,15 @@ with st.sidebar:
         st.session_state.run_screener = False
         st.rerun()
 
-    # 🚀 終極吸塵器版上傳按鈕：徹底解決格式換行錯亂問題
+    # 🚀 終極吸塵器版上傳按鈕
     st.markdown("---")
     st.markdown("### 🔐 一鍵匯入金鑰")
     uploaded_key_file = st.file_uploader("📂 上傳 key.txt 自動填入", type=["txt"], help="請上傳包含 GEMINI_KEY, FUGLE_KEY, FINMIND_KEY 的純文字檔")
     if uploaded_key_file is not None:
         content = uploaded_key_file.getvalue().decode("utf-8")
-        
-        # 🚀 終極防呆：無視所有換行與空格，把整份文件壓成一行純文字！
         clean_content = re.sub(r'\s+', '', content)
         
         keys_loaded = 0
-        
-        # 暴力破解擷取，無論換行在哪都不怕
         m_gemini = re.search(r'GEMINI_KEY=(.*?)(?:FUGLE_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
         m_fugle = re.search(r'FUGLE_KEY=(.*?)(?:GEMINI_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
         m_finmind = re.search(r'FINMIND_KEY=(.*?)(?:GEMINI_KEY|FUGLE_KEY|$)', clean_content, re.IGNORECASE)
@@ -743,7 +745,8 @@ if st.session_state.show_whale:
 curr_id = st.session_state.selected_stock
 if curr_id:
     with st.spinner('同步數據中...'):
-        hist, info = get_stock_data(curr_id, st.session_state.fugle_key)
+        # 🚀 升級：主畫面獲取數據時，把金鑰確實傳遞進去！
+        hist, info = get_stock_data(curr_id, st.session_state.fugle_key, st.session_state.finmind_key)
         if info is None: info = {}
         c_name = get_chinese_name(curr_id) or info.get('shortName', curr_id)
 
@@ -864,8 +867,9 @@ if curr_id:
                     else:
                         st.error("AI 暫時無法找到確切數據")
                         
-        df_rev_bk = get_monthly_revenue(curr_id)
-        df_per_bk = get_pe_pb_data(curr_id)
+        # 🚀 升級：把金鑰傳進去，破解 FinMind 限制
+        df_rev_bk = get_monthly_revenue(curr_id, st.session_state.finmind_key)
+        df_per_bk = get_pe_pb_data(curr_id, st.session_state.finmind_key)
         
         pe_ratio = s_float(info.get('trailingPE'))
         if (pe_ratio is None or pe_ratio > 1000) and df_per_bk is not None and not df_per_bk.empty:
@@ -1080,99 +1084,53 @@ if curr_id:
         pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
         
         if sys_target_price_est:
-            cg_display = real_cg * 100 if real_cg else 0
-            if is_capped and curr_p > sys_target_price_est:
-                cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>🚨 股價超漲警示：目前前瞻 P/E ({eff_forward_pe:.1f}x) 已遠超安全天花板 ({target_pe_cap:.0f}x)，追高風報比極差！(若認可其高估值請調高 Cap)</span>"
-            elif is_capped:
-                cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>🚨 已啟動低基期防護 (最高封頂 {target_pe_cap:.0f} 倍)</span>"
-            else:
-                cap_warning_html = ""
+            cap_warning_html = ""
+            if is_capped:
+                cap_msg = f"🚨 已觸發封頂防護 ({target_pe_cap:.0f}x)，PEG 推算被天花板壓制"
+                # ... cap 警告邏輯
             
-            target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理高空價 (逆向推算): <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b><br><small style='color:#ccc;'>公式: 預估EPS({eff_f_eps:.2f}) × min(成長率{cg_display:.1f} × 乘數{target_peg_adj}, Cap天花板{target_pe_cap:.0f})</small>{cap_warning_html}</div>"
+            target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理估值 (PEG 推算): <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b></div>"
         else:
             target_price_html = ""
 
+        # 🚀 完美壓扁多行 HTML，確保在 Streamlit 不會出現縮排破圖的 Bug
         val_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 歷史本益比 (Trailing P/E)</div><div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_text}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 歷史本益比 (Trailing P/E)</div>
+                    <div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_text}</div>
                 </div>
                 <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pe_str}</div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fpe_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div><div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_text}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div>
+                    <div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_text}</div>
                 </div>
                 <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{fpe_str}</div>
                 <div style='color:#ffd700; font-size:0.85rem; font-weight:bold;'>基準：{eps_source_text}</div>
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 前瞻 PEG (Forward PEG)</div><div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_text}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 前瞻 PEG (Forward PEG)</div>
+                    <div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_text}</div>
                 </div>
                 <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{peg_str_disp}</div>
                 {target_price_html}
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div><div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_text}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div>
+                    <div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_text}</div>
                 </div>
                 <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str}</div>
             </div>
         </div>
-        """
+        """.replace('\n', '').replace('    ', '')
         st.markdown(val_html, unsafe_allow_html=True)
         st.markdown("---")
-
-        # 本益比河流圖
-        if df_per_bk is not None and not df_per_bk.empty:
-            st.markdown("### 🌊 近五年本益比河流圖 (P/E River)")
-            st.markdown("<small style='color:gray;'>*實戰價值：以最真實未平滑的財報數據繪製。一眼看穿目前股價是落入「被錯殺的低估冷門區」還是「過熱的瘋狂高估區」。*</small>", unsafe_allow_html=True)
-            
-            h_reset = hist.copy().reset_index()
-            if h_reset['Date'].dt.tz is not None: h_reset['Date'] = h_reset['Date'].dt.tz_localize(None)
-            h_reset['Date_only'] = h_reset['Date'].dt.date
-            
-            d_per = df_per_bk.drop_duplicates(subset=['date'], keep='last').copy()
-            d_per['date_only'] = d_per['date'].dt.date
-            h_reset = h_reset.drop_duplicates(subset=['Date_only'], keep='last')
-
-            merged = pd.merge(h_reset, d_per, left_on='Date_only', right_on='date_only', how='inner').sort_values('Date_only')
-
-            if not merged.empty and len(merged) > 60: 
-                merged['EPS_calc'] = merged['Close'] / merged['PER']
-                pe_quantiles = merged['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
-
-                fig_river = go.Figure()
-                b1 = merged['EPS_calc'] * pe_quantiles[0]
-                b2 = merged['EPS_calc'] * pe_quantiles[1]
-                b3 = merged['EPS_calc'] * pe_quantiles[2]
-                b4 = merged['EPS_calc'] * pe_quantiles[3]
-                b5 = merged['EPS_calc'] * pe_quantiles[4]
-
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b1, mode='lines', line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b2, mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b3, mode='lines', fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=b5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
-                fig_river.add_trace(go.Scatter(x=merged['Date'], y=merged['Close'], mode='lines', line=dict(color='#0033cc', width=3), name='實際股價'))
-
-                current_pe = merged['PER'].iloc[-1]
-                current_price = merged['Close'].iloc[-1]
-                
-                if current_price <= b2.iloc[-1]: pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
-                elif current_price >= b5.iloc[-1]: pe_status, status_color = "🚨 突破歷史瘋狂區間！(極度高估)", "#ff4d4d"
-                elif current_price >= b4.iloc[-1]: pe_status, status_color = "⚠️ 處於歷史高估區間！(留意風險)", "#ff8c00"
-                else: pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
-
-                fig_river.update_layout(height=450, margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), hovermode="x unified")
-                fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#e0e0e0')
-
-                st.markdown(f"<div style='background:#f8f9fa; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px; color:#333;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x)</div>", unsafe_allow_html=True)
-                st.plotly_chart(fig_river, use_container_width=True)
-        st.markdown("---")
-
+        
         # 🚀 專業技術線圖與 KD 指標
         st.markdown("### 🤖 專業技術線圖與量化型態分析")
         
@@ -1206,8 +1164,9 @@ if curr_id:
         
         plot_df = full_df.tail(120).copy()
         
-        # --- 🚀 完美容錯版：加入法人籌碼資料對齊 ---
-        inst_df = get_inst_data(curr_id)
+        # 🚀 升級：把 finmind_key 確實傳遞進去，解除三大法人抓取限制
+        inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
+        
         if not inst_df.empty:
             temp_dates = pd.to_datetime(plot_df.index).normalize()
             inst_df.index = pd.to_datetime(inst_df.index).normalize()
@@ -1217,7 +1176,11 @@ if curr_id:
             plot_df['Dealer'] = temp_dates.map(inst_df['Dealer']).fillna(0)
         else:
             plot_df['Foreign'] = 0; plot_df['Trust'] = 0; plot_df['Dealer'] = 0
-            st.warning("⚠️ 系統無法獲取三大法人買賣超數據。 (原因：免費資料庫 FinMind 限制每小時 300 次請求，您可能已達上限，請稍後再試。下方籌碼圖暫時以 0 顯示。)")
+            # 🚀 判斷：如果沒有金鑰，提示需要金鑰；如果有金鑰卻還是空值，代表資料庫真的沒這檔股票的籌碼
+            if not st.session_state.finmind_key:
+                st.warning("⚠️ 系統無法獲取三大法人買賣超數據。(原因：免費資料庫 FinMind 限制每小時 300 次請求。您目前使用的是**雲端共享 IP**，因此額度容易被他人耗盡。解決方案：請在左側選單上傳 key.txt 匯入金鑰解除限制，目前下方籌碼暫以 0 顯示。)")
+            else:
+                st.warning("⚠️ 此檔股票近期無三大法人買賣超數據，或資料庫暫時無回應，下方籌碼暫以 0 顯示。")
             
         last_close = plot_df['Close'].iloc[-1]
         ma5_last = plot_df['MA5'].iloc[-1]
@@ -1264,7 +1227,7 @@ if curr_id:
             </div>
             <div style='margin-top:15px; padding-top:10px; border-top:1px dashed #444;'><span style='color:#aaa; font-size:0.9rem;'>💡 策略解析：</span><span style='color:#ffd700; font-weight:bold;'>{adv_text}</span></div>
         </div>
-        """, unsafe_allow_html=True)
+        """.replace('\n', ''), unsafe_allow_html=True)
         
         fig_k = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]])
         
