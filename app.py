@@ -308,6 +308,7 @@ def get_global_market_trend():
 
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id, fm_key=""):
+    # 🚀 升級突破 1：修復「日期錯位 Bug」 - JSON 深度解析引擎
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
         y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
@@ -315,16 +316,30 @@ def get_monthly_revenue(stock_id, fm_key=""):
             json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
             if json_match:
                 raw_json = json_match.group(1)
-                mom_m = re.search(r'"月增率",\s*"value":\s*"([+-]?\d+\.?\d*)"', raw_json)
-                yoy_m = re.search(r'"年增率",\s*"value":\s*"([+-]?\d+\.?\d*)"', raw_json)
-                rev_m = re.search(r'"單月營收",\s*"value":\s*"(\d+,?\d*)"', raw_json)
-                mon_m = re.search(r'"yearMonth":\s*"(\d{4}/\d{2})"', raw_json)
-                if mom_m and yoy_m and rev_m and mon_m:
-                    return pd.DataFrame([{
-                        'Month': mon_m.group(1), 'Revenue': round(float(rev_m.group(1).replace(',', '')) / 100000, 2), 
-                        'YoY': float(yoy_m.group(1)), 'MoM': float(mom_m.group(1))
-                    }])
-    except: pass
+                
+                # 解決錯位的方法：不靠全域 Regex，直接將結構切塊 (Block by Block)
+                blocks = re.split(r'"yearMonth"', raw_json)[1:] 
+                for block in blocks:
+                    mon_m = re.search(r'^\s*:\s*"(\d{4}/\d{2})"', block)
+                    if not mon_m: continue
+                    mon = mon_m.group(1)
+                    
+                    # 確保所有數據都在同一個月份的區塊內，保證絕對對齊！
+                    rev_m = re.search(r'"單月營收",\s*"value":\s*"([^"]+)"', block)
+                    yoy_m = re.search(r'"年增率",\s*"value":\s*"([^"]+)"', block)
+                    mom_m = re.search(r'"月增率",\s*"value":\s*"([^"]+)"', block)
+                    
+                    if rev_m and yoy_m and mom_m:
+                        try:
+                            rev = float(rev_m.group(1).replace(',', '')) / 100000
+                            yoy = float(yoy_m.group(1).replace('%', '').replace(',', ''))
+                            mom = float(mom_m.group(1).replace('%', '').replace(',', ''))
+                            return pd.DataFrame([{
+                                'Month': mon, 'Revenue': round(rev, 2), 'YoY': yoy, 'MoM': mom
+                            }])
+                        except: pass
+    except Exception as e: 
+        print(f"Yahoo 營收對齊引擎失敗: {e}")
     
     try:
         today = datetime.date.today()
@@ -372,12 +387,12 @@ def get_pe_pb_data(stock_id, fm_key=""):
     except: pass
     return None
 
-# 🚀 升級突破 2：加入 Piotroski F-Score 綜合健康跑分運算引擎
 @st.cache_data(ttl=43200)
 def get_finmind_financial_health(stock_id, fm_key=""):
+    # 🚀 升級突破 2：修復 0 分的 F-Score 冤案 (加入嚴格 Exception Handling)
     try:
         today = datetime.date.today()
-        start_str = f"{today.year - 2}-01-01" # 撈取近兩年資料進行 YoY 比對
+        start_str = f"{today.year - 2}-01-01" 
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockFinancialStatements&data_id={stock_id}&start_date={start_str}"
         if fm_key: url += f"&token={fm_key}"
         res = requests.get(url, timeout=15)
@@ -401,7 +416,9 @@ def get_finmind_financial_health(stock_id, fm_key=""):
                 for k in keys:
                     for v_key in v_dict.keys():
                         if k in v_key:
-                            try: return float(v_dict[v_key])
+                            try: 
+                                val_str = str(v_dict[v_key]).replace(',', '').replace('%', '')
+                                return float(val_str)
                             except: pass
                 return 0.0
                 
@@ -409,25 +426,30 @@ def get_finmind_financial_health(stock_id, fm_key=""):
             gp_l = get_val(vals_l, '營業毛利', '毛利')
             op_l = get_val(vals_l, '營業利益')
             ni_l = get_val(vals_l, '本期淨利', '淨利')
-            ta_l = get_val(vals_l, '資產總', '資產')
+            ta_l = get_val(vals_l, '資產總計', '資產總額', '資產')
             tl_l = get_val(vals_l, '負債總')
             eq_l = get_val(vals_l, '權益總')
             ca_l = get_val(vals_l, '流動資產')
             cl_l = get_val(vals_l, '流動負債')
             ltd_l = get_val(vals_l, '非流動負債', '長期借款')
-            cfo_l = get_val(vals_l, '營業活動之淨現金流入', '營業活動之現金流量')
-            if cfo_l == 0: cfo_l = op_l # 若無現流表則用營業利益暫代
+            cfo_l = get_val(vals_l, '營業活動之淨現金流入', '營業活動之現金流量', '營業活動之淨現金')
+            if cfo_l == 0: cfo_l = op_l 
             shares_l = get_val(vals_l, '普通股股本', '股本')
             
             rev_p = get_val(vals_p, '營業收入', '淨收益', '收益')
             gp_p = get_val(vals_p, '營業毛利', '毛利')
             ni_p = get_val(vals_p, '本期淨利', '淨利')
-            ta_p = get_val(vals_p, '資產總', '資產')
+            ta_p = get_val(vals_p, '資產總計', '資產總額', '資產')
             ca_p = get_val(vals_p, '流動資產')
             cl_p = get_val(vals_p, '流動負債')
             ltd_p = get_val(vals_p, '非流動負債', '長期借款')
             shares_p = get_val(vals_p, '普通股股本', '股本')
             
+            # 🛑 關鍵防呆：如果拿不到總資產，代表財報有缺漏，直接回傳空字典，讓系統顯示「無資料」而不是 0 分！
+            if ta_l <= 0 or ta_p <= 0:
+                print(f"[{stock_id}] F-Score 計算中止：總資產資料取得為 0 (可能因 API 資料殘缺)。")
+                return {}
+
             res_dict = {}
             if rev_l > 0:
                 res_dict['grossMargins'] = gp_l / rev_l
@@ -435,29 +457,29 @@ def get_finmind_financial_health(stock_id, fm_key=""):
             if eq_l > 0:
                 res_dict['debtToEquity'] = tl_l / eq_l
                 
-            # 計算 F-Score 9 大指標
             f_score = 0
             if ta_l > 0 and ta_p > 0:
                 roa_l, roa_p = ni_l / ta_l, ni_p / ta_p
-                if roa_l > 0: f_score += 1                 # 1. 獲利性: ROA > 0
-                if cfo_l > 0: f_score += 1                 # 2. 獲利性: 營業現金流 > 0
-                if roa_l > roa_p: f_score += 1             # 3. 獲利性: ROA 成長
-                if cfo_l > ni_l: f_score += 1              # 4. 獲利性: 營業現金流 > 淨利 (無虛增利潤)
-                if (ltd_l / ta_l) < (ltd_p / ta_p): f_score += 1  # 5. 安全性: 長期負債比下降
+                if roa_l > 0: f_score += 1                 
+                if cfo_l > 0: f_score += 1                 
+                if roa_l > roa_p: f_score += 1             
+                if cfo_l > ni_l: f_score += 1              
+                if (ltd_l / ta_l) < (ltd_p / ta_p): f_score += 1  
                 cr_l = (ca_l / cl_l) if cl_l > 0 else 0
                 cr_p = (ca_p / cl_p) if cl_p > 0 else 0
-                if cr_l > cr_p: f_score += 1               # 6. 安全性: 流動比率提升
-                if shares_l <= shares_p and shares_l > 0: f_score += 1 # 7. 安全性: 無發行新股稀釋
+                if cr_l > cr_p: f_score += 1               
+                if shares_l <= shares_p and shares_l > 0: f_score += 1 
                 gm_l = (gp_l / rev_l) if rev_l > 0 else 0
                 gm_p = (gp_p / rev_p) if rev_p > 0 else 0
-                if gm_l > gm_p: f_score += 1               # 8. 成長性: 毛利率提升
+                if gm_l > gm_p: f_score += 1               
                 at_l = rev_l / ta_l
                 at_p = rev_p / ta_p
-                if at_l > at_p: f_score += 1               # 9. 成長性: 資產週轉率提升
+                if at_l > at_p: f_score += 1               
                 
             res_dict['f_score'] = f_score
             return res_dict
-    except: pass
+    except Exception as e: 
+        print(f"F-Score 引擎錯誤: {e}")
     return {}
 
 def get_fallback_info(stock_id):
@@ -1301,6 +1323,9 @@ if curr_id:
         if div_yield is not None and div_yield > 0.3: div_yield = div_yield / 100.0
 
         fcf = s_float(info.get('freeCashflow'))
+        # 如果 Yahoo 沒給自由現金流，嘗試用營業現金流 (cfo_l) 作為替代顯示
+        if fcf is None and fm_health.get('cfo_l'): fcf = fm_health.get('cfo_l')
+            
         current_ratio = s_float(info.get('currentRatio'))
 
         dy_str = to_pct(div_yield)
@@ -1318,7 +1343,6 @@ if curr_id:
         elif current_ratio >= 1.0: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#FFD700", "流動性及格"
         else: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#00cc66", "⚠️ 流動性吃緊"
         
-        # 🚀 升級突破 2：Piotroski F-Score 前端儀表板顯示
         f_score_val = fm_health.get('f_score')
         if f_score_val is None: 
             fs_str, fs_color, fs_eval = "無資料", "gray", "資料不足"
@@ -1339,7 +1363,7 @@ if curr_id:
             </div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fcf_color};'>
                 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>💵 自由現金流</div><div style='background:{fcf_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fcf_eval}</div>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>💵 自由/營業現金流</div><div style='background:{fcf_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fcf_eval}</div>
                 </div>
                 <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{fcf_str}</div>
             </div>
@@ -1409,10 +1433,8 @@ if curr_id:
             t_color = "#ff4d4d" if t_10d > 0 else "#00cc66"
             
             trap_warning = ""
-            # 陷阱邏輯：如果 EPS 成長為正，但外資+投信 10 日內狂倒貨超過千張
             if (eff_eg is not None and eff_eg > 0) and ((f_10d + t_10d) < -1000):
                 trap_warning = "<div style='background:linear-gradient(90deg, #8b0000 0%, #ff4d4d 100%); color:white; padding:12px; border-radius:8px; margin-top:10px; font-weight:bold;'>🚨 【高危陷阱警示】基本面看似亮眼，但外資/投信近 10 日聯手倒貨超過千張！請提防主力趁利多逢高出貨！</div>"
-            # 順風車邏輯：主力連續買超大於3天且總量龐大
             elif (f_streak >= 3 or t_streak >= 3) and ((f_10d + t_10d) > 1000):
                 trap_warning = "<div style='background:linear-gradient(90deg, #006400 0%, #00cc66 100%); color:white; padding:12px; border-radius:8px; margin-top:10px; font-weight:bold;'>🚀 【聰明錢上車】三大法人近期連買且大幅建倉，籌碼動能強勁，極具波段上攻潛力！</div>"
             else:
@@ -1503,25 +1525,70 @@ if curr_id:
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
         ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price else "未捕捉到"
 
-        # 🚀 顯示給 AI 時的背景資料也標示月份，讓它推論更精準
+        def p_fmt(orig, ai_val, fmt="pct", suffix="AI捉取"):
+            s = to_val_str(orig, fmt)
+            if ai_val is not None and not pd.isna(ai_val):
+                s += f" ({to_val_str(float(ai_val), fmt)}, {suffix})"
+            return s
+            
+        def p_dual(o1, o2, a1, a2, suffix="AI捉取"):
+            s = f"{to_val_str(o1, 'num')} / {to_val_str(o2, 'num')}"
+            if (a1 is not None and not pd.isna(a1)) or (a2 is not None and not pd.isna(a2)):
+                sa1 = to_val_str(float(a1) if a1 is not None else None, 'num')
+                sa2 = to_val_str(float(a2) if a2 is not None else None, 'num')
+                s += f" ({sa1} / {sa2}, {suffix})"
+            return s
+
+        ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
+        ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
+        ctx_rg = p_fmt(rev_growth, ai_yoy, 'pct')
+        ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
+        ctx_om = p_fmt(op_margin, ai_om, 'pct')
+        ctx_roe = p_fmt(roe, ai_roe, 'pct')
+        ctx_de = p_fmt(sys_de, ai_de, 'pct')
+        
+        if use_custom_eps:
+            ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
+            ctx_peg = f"{eff_peg:.2f}" if eff_peg is not None else "N/A"
+            ctx_eps = p_dual(t_eps, eff_f_eps, ai_t_eps, None, 'AI捉取')
+            ctx_eg = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
+        else:
+            ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推')
+            if eff_f_eps is not None and t_eps is not None and t_eps > 0:
+                safe_base_for_prompt = max(t_eps, 0.5)
+                real_cg_for_prompt = (eff_f_eps - safe_base_for_prompt) / safe_base_for_prompt
+            else:
+                real_cg_for_prompt = earn_growth
+                
+            orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg_for_prompt is not None and real_cg_for_prompt <= 0 else None)
+            if orig_peg_num == -999:
+                ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
+            else:
+                ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
+            ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
+            ctx_eg = p_fmt(real_cg_for_prompt, ai_yoy, 'pct', 'AI推算')
+
+        latest_mom_str = f"{df_rev_bk['MoM'].iloc[-1]:.2f}%" if df_rev_bk is not None and not df_rev_bk.empty else "無資料"
+        tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
+
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
         - 最新收盤價: {curr_p} 元
-        - 歷史本益比 (Trailing P/E): {pe_ratio} / AI抓取: {ai_pe}
-        - 前瞻本益比 (Forward P/E): {eff_forward_pe}
-        - 股價淨值比 (P/B): {pb_ratio} / AI抓取: {ai_pb}
-        - 本益成長比 (PEG): {eff_peg}
-        - 🎯 系統逆向推算極限高空價: {extreme_target_price}
+        - 歷史本益比 (Trailing P/E): {ctx_pe}
+        - 前瞻本益比 (Forward P/E): {ctx_fpe}
+        - 股價淨值比 (P/B): {ctx_pb}
+        - 本益成長比 (PEG): {ctx_peg}
+        - 🎯 系統逆向推算極限高空價: {tp_est_str}
 
         【財務基本面動能 (原始數據 vs AI數據)】
-        - EPS (目前 / 預估): {t_eps} / {eff_f_eps} 元
-        - 營收年增率 (YoY) [{latest_rev_month}]: {rev_growth}
-        - 最新單月營收月增率 (MoM) [{latest_rev_month}]: {latest_mom_val}%
-        - 預估獲利成長 (YoY): {eff_eg}
-        - 毛利率: {gross_margin} / AI抓取: {ai_gm}
-        - 營業利益率: {op_margin} / AI抓取: {ai_om}
-        - 股東權益報酬率 (ROE): {roe} / AI抓取: {ai_roe}
-        - 負債權益比 (D/E Ratio): {sys_de}
+        - EPS (目前 / 預估): {ctx_eps} 元
+        - 營收年增率 (YoY) [{latest_rev_month}]: {ctx_rg}
+        - 最新單月營收月增率 (MoM) [{latest_rev_month}]: {latest_mom_str}
+        - 預估獲利成長 (YoY): {ctx_eg}
+        - 毛利率: {ctx_gm}
+        - 營業利益率: {ctx_om}
+        - 股東權益報酬率 (ROE): {ctx_roe}
+        - 負債權益比 (D/E Ratio): {ctx_de}
         - 🩺 Piotroski F-Score 健康跑分: {f_score_val} / 9 分
 
         【🛡️ 防禦力與財務健康檢測 (重要參考)】
@@ -1532,6 +1599,7 @@ if curr_id:
         【法人預估目標價】
         - 最高目標價: {hi_str}
         - 平均目標價: {me_str}
+        - 最低保底價: {lo_str}
         - AI 最新聯網目標價 ({ai_suffix}): {ai_tp_str}
         """
         
@@ -1750,6 +1818,7 @@ if curr_id:
         
         plot_df = full_df.tail(120).copy()
         
+        inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
         if not inst_df.empty:
             temp_dates = pd.to_datetime(plot_df.index).normalize()
             inst_df_aligned = inst_df.copy()
@@ -1760,6 +1829,10 @@ if curr_id:
             plot_df['Dealer'] = temp_dates.map(inst_df_aligned['Dealer']).fillna(0)
         else:
             plot_df['Foreign'] = 0; plot_df['Trust'] = 0; plot_df['Dealer'] = 0
+            if st.session_state.finmind_key:
+                st.warning("⚠️ 此檔股票近期無三大法人買賣超數據，或資料庫暫時無回應，下方籌碼圖暫以 0 顯示。 (您的金鑰有效，純粹是資料庫空值)")
+            else:
+                st.warning("⚠️ 系統無法獲取三大法人買賣超數據。(原因：免費資料庫 FinMind 限制每小時 300 次請求。您目前使用的是**雲端共享 IP**，因此額度容易被他人耗盡。解決方案：請在左側選單上傳 key.txt 匯入金鑰解除限制，目前下方籌碼暫以 0 顯示。)")
             
         last_close = plot_df['Close'].iloc[-1]
         ma5_last = plot_df['MA5'].iloc[-1]
