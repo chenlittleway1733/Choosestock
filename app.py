@@ -168,10 +168,12 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
+    
+    # 🚀 升級：要求 AI 回報「資料所屬年月或季度」，確保使用者知道資料的新舊
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
-    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」(請優先找 {target_year} 年的預測值)
+    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」
     4. 「股價淨值比 (P/B)」
     5. 「毛利率」
     6. 「營益率」
@@ -179,10 +181,13 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     8. 「最新單月或累計營收年增率(YoY)」
     9. 「國內外法人最新預估目標價 (Target Price)」
     10. 「負債權益比 (Debt-to-Equity Ratio)」
-    必須嚴格回傳包含上述 10 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
+    11. 「最新資料所屬年月或季度 (Data Period)」(請註明找到的營收或EPS所屬期間，例如 "2024/03" 或 "2023Q4")
+
+    必須嚴格回傳包含上述 11 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     格式範例：
-    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "debt_to_equity": 0.45}}
+    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "debt_to_equity": 0.45, "data_period": "2024/03"}}
     絕對不要輸出 markdown 標記或其他文字。"""
+    
     payload = {
         "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 (務必找出: 毛利率、營益率、ROE 股東權益報酬率、負債權益比) 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -293,6 +298,7 @@ def get_global_market_trend():
 
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id, fm_key=""):
+    # 🚀 強制覆蓋機制：第一優先爬取 Yahoo 最新隱藏 JSON 數據 (更新最快)
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
         y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
@@ -311,6 +317,7 @@ def get_monthly_revenue(stock_id, fm_key=""):
                     }])
     except: pass
     
+    # 備用機制：若 Yahoo 失敗，則使用 FinMind 數據
     try:
         today = datetime.date.today()
         start_str = f"{today.year - 2}-{today.month:02d}-01"
@@ -357,7 +364,6 @@ def get_pe_pb_data(stock_id, fm_key=""):
     except: pass
     return None
 
-# 🚀 升級突破：FinMind 財報救援引擎 (自動模糊比對會計科目，破解台積電 N/A 盲區)
 @st.cache_data(ttl=43200)
 def get_finmind_margins(stock_id, fm_key=""):
     try:
@@ -377,7 +383,7 @@ def get_finmind_margins(stock_id, fm_key=""):
             def get_val(*keys):
                 for k in keys:
                     for v_key in vals.keys():
-                        if k in v_key: # 採用模糊比對，不管叫「營業收入」還是「營業收入淨額」通通抓得到！
+                        if k in v_key: 
                             return vals[v_key]
                 return None
                 
@@ -926,6 +932,10 @@ if curr_id:
         df_per_bk = get_pe_pb_data(curr_id, st.session_state.finmind_key)
         fm_margins = get_finmind_margins(curr_id, st.session_state.finmind_key)
         
+        # 🚀 提取系統判定的最新資料月份 (時間戳記)
+        latest_rev_month = df_rev_bk['Month'].iloc[-1] if df_rev_bk is not None and not df_rev_bk.empty else "無資料"
+        latest_mom_val = s_float(df_rev_bk['MoM'].iloc[-1]) if df_rev_bk is not None and not df_rev_bk.empty else None
+        
         pe_ratio = s_float(info.get('trailingPE'))
         if (pe_ratio is None or pe_ratio > 1000) and df_per_bk is not None and not df_per_bk.empty:
             if (pd.Timestamp.today() - df_per_bk.iloc[-1]['date']).days < 30: pe_ratio = s_float(df_per_bk['PER'].iloc[-1])
@@ -940,7 +950,6 @@ if curr_id:
         gross_margin = s_float(info.get('grossMargins'))
         op_margin = s_float(info.get('operatingMargins'))
         
-        # 如果 Yahoo 沒給資料，強制用 FinMind 的會計運算結果補上！
         if gross_margin is None: gross_margin = fm_margins.get('grossMargins')
         if op_margin is None: op_margin = fm_margins.get('operatingMargins')
         if sys_de is None: sys_de = fm_margins.get('debtToEquity')
@@ -970,6 +979,10 @@ if curr_id:
         ai_roe = s_float(ai_fin.get('roe'))
         ai_de = s_float(ai_fin.get('debt_to_equity'))
         ai_target_price = s_float(ai_fin.get('target_price'))
+        
+        # 🚀 取得 AI 找回資料的時間戳記
+        raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
+        ai_suffix = f"AI({raw_ai_period})" if raw_ai_period else "AI捉取"
         
         eff_pe = pe_ratio if pe_ratio is not None else ai_pe
         eff_pb = pb_ratio if pb_ratio is not None else ai_pb
@@ -1058,12 +1071,12 @@ if curr_id:
             eps_source_text = f"自訂法人共識 ({eff_f_eps:.2f}元)"
             peg_str_disp = f"{eff_peg:.2f}" if eff_peg is not None else "N/A"
             fpe_str = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
-            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x')
-            f_eps_display = build_cmp_dual_str(t_eps, eff_f_eps, ai_t_eps, None, 'num', 'num', 'AI捉取')
+            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_suffix)
+            f_eps_display = build_cmp_dual_str(t_eps, eff_f_eps, ai_t_eps, None, 'num', 'num', ai_suffix)
         else:
             eff_f_eps = sys_f_eps_calc if sys_f_eps_calc is not None else ai_f_eps_calc
             eps_source_text = f"海外系統或反推 ({eff_f_eps:.2f}元)" if eff_f_eps is not None else "系統預估 (無資料)"
-            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推/捉')
+            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', ai_suffix)
             
             sys_forward_pe = s_float(info.get('forwardPE'))
             if sys_forward_pe is None and eff_f_eps is not None and eff_f_eps > 0: sys_forward_pe = curr_p / eff_f_eps
@@ -1095,22 +1108,22 @@ if curr_id:
                 
             extreme_target_price = sys_target_price_est
             
-            eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', 'AI推算')
-            if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟ٹی低基期防護(分母=0.5)</span>"
+            eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', ai_suffix)
+            if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
             eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
             
             orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if real_cg is not None and real_cg <= 0 else "N/A")
-            peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_peg:.2f}, AI反推)</span>" if ai_peg is not None else orig_peg_str
+            peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_peg:.2f}, {ai_suffix})</span>" if ai_peg is not None else orig_peg_str
             
             orig_fpe_str = f"{sys_forward_pe:.1f}x" if sys_forward_pe is not None else "N/A"
-            fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_fpe:.1f}x, AI反推)</span>" if ai_fpe is not None else orig_fpe_str
+            fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_fpe:.1f}x, {ai_suffix})</span>" if ai_fpe is not None else orig_fpe_str
             
-            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x')
+            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_suffix)
 
-        rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct')
-        gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', 'AI捉取')
-        roe_str = build_cmp_str(roe, ai_roe, 'pct', 'AI推算')
-        de_str = build_cmp_str(sys_de, ai_de, 'pct')
+        rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct', ai_suffix)
+        gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', ai_suffix)
+        roe_str = build_cmp_str(roe, ai_roe, 'pct', ai_suffix)
+        de_str = build_cmp_str(sys_de, ai_de, 'pct', ai_suffix)
         
         rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳 (已透過恆等式校正)'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
@@ -1145,7 +1158,7 @@ if curr_id:
             elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
             else: peg_color, peg_text = "#FFD700", "合理區間"
 
-        pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
+        pb_str = build_cmp_str(pb_ratio, ai_pb, 'x', ai_suffix)
         
         if sys_target_price_est:
             cap_warning_html = ""
@@ -1190,11 +1203,15 @@ if curr_id:
         """
         st.markdown(clean_html(val_html), unsafe_allow_html=True)
         
+        # 🚀 升級：將 MoM 加入基本面表格，並在標題明確標示資料月份
+        mom_color = "#ff4d4d" if latest_mom_val is not None and latest_mom_val > 0 else ("#00cc66" if latest_mom_val is not None and latest_mom_val < 0 else "#fff")
+        mom_str_disp = f"<br><span style='font-size:1rem; color:{mom_color};'>MoM: {latest_mom_val:.2f}%</span>" if latest_mom_val is not None else ""
+
         fund_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>歷史本益比 (P/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{pe_str}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>EPS (目前 / 預估)</div><div style='font-size:1.3rem; font-weight:bold; color:#FFD700;'>{f_eps_display}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收年增率 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}</div></div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收成長率<br><span style='font-size:0.75rem; color:#888;'>({latest_rev_month})</span></div><div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}{mom_str_disp}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>預估獲利成長 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{eg_color};'>{eg_str_disp}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>毛利率 / 營益率</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{gm_om_str}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>ROE (恆等式校正)</div><div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{roe_str}{roe_eval}</div></div>
@@ -1288,15 +1305,15 @@ if curr_id:
             upside = ((me_val / curr_p) - 1) * 100 if curr_p else 0
             v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
             v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo_val:.1f}</b></div>", unsafe_allow_html=True)
-            if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元")
+            if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元 ({ai_suffix})")
             st.markdown("---")
         elif hi_val is not None:
              st.info(f"系統法人最高預期：**{hi_val:.1f}**")
-             if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元")
+             if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元 ({ai_suffix})")
              st.markdown("---")
         elif ai_target_price:
              upside_ai = ((ai_target_price / curr_p) - 1) * 100 if curr_p else 0
-             st.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>🤖 AI 聯網捕捉最新目標價</small><br><b>{ai_target_price:.1f}</b><br><small>潛在空間: {upside_ai:+.1f}%</small></div>", unsafe_allow_html=True)
+             st.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>🤖 AI 聯網捕捉最新目標價 ({ai_suffix})</small><br><b>{ai_target_price:.1f}</b><br><small>潛在空間: {upside_ai:+.1f}%</small></div>", unsafe_allow_html=True)
              st.markdown("---")
         else:
              st.markdown("<span style='color:gray;'>系統與 AI 目前皆無明確的法人目標價資料。</span>", unsafe_allow_html=True)
@@ -1357,77 +1374,32 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 AI 綜合產業報告與打包提示詞 (重新回歸！)
+        # 🚀 AI 綜合產業報告與打包提示詞
         # ==========================================
         hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
         ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price else "未捕捉到"
 
-        def p_fmt(orig, ai_val, fmt="pct", suffix="AI捉取"):
-            s = to_val_str(orig, fmt)
-            if ai_val is not None and not pd.isna(ai_val):
-                s += f" ({to_val_str(float(ai_val), fmt)}, {suffix})"
-            return s
-            
-        def p_dual(o1, o2, a1, a2, suffix="AI捉取"):
-            s = f"{to_val_str(o1, 'num')} / {to_val_str(o2, 'num')}"
-            if (a1 is not None and not pd.isna(a1)) or (a2 is not None and not pd.isna(a2)):
-                sa1 = to_val_str(float(a1) if a1 is not None else None, 'num')
-                sa2 = to_val_str(float(a2) if a2 is not None else None, 'num')
-                s += f" ({sa1} / {sa2}, {suffix})"
-            return s
-
-        ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
-        ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
-        ctx_rg = p_fmt(rev_growth, ai_yoy, 'pct')
-        ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
-        ctx_om = p_fmt(op_margin, ai_om, 'pct')
-        ctx_roe = p_fmt(roe, ai_roe, 'pct')
-        ctx_de = p_fmt(sys_de, ai_de, 'pct')
-        
-        if use_custom_eps:
-            ctx_fpe = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
-            ctx_peg = f"{eff_peg:.2f}" if eff_peg is not None else "N/A"
-            ctx_eps = p_dual(t_eps, eff_f_eps, ai_t_eps, None, 'AI捉取')
-            ctx_eg = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
-        else:
-            ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推')
-            if eff_f_eps is not None and t_eps is not None and t_eps > 0:
-                safe_base_for_prompt = max(t_eps, 0.5)
-                real_cg_for_prompt = (eff_f_eps - safe_base_for_prompt) / safe_base_for_prompt
-            else:
-                real_cg_for_prompt = earn_growth
-                
-            orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg_for_prompt is not None and real_cg_for_prompt <= 0 else None)
-            if orig_peg_num == -999:
-                ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
-            else:
-                ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
-            ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
-            ctx_eg = p_fmt(real_cg_for_prompt, ai_yoy, 'pct', 'AI推算')
-
-        latest_mom_str = f"{df_rev_bk['MoM'].iloc[-1]:.2f}%" if df_rev_bk is not None and not df_rev_bk.empty else "無資料"
-        tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
-
+        # 🚀 顯示給 AI 時的背景資料也標示月份，讓它推論更精準
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
         - 最新收盤價: {curr_p} 元
-        - 歷史本益比 (Trailing P/E): {ctx_pe}
-        - 前瞻本益比 (Forward P/E): {ctx_fpe}
-        - 股價淨值比 (P/B): {ctx_pb}
-        - 本益成長比 (PEG): {ctx_peg}
-        - 🎯 系統逆向推算極限高空價: {tp_est_str}
+        - 歷史本益比 (Trailing P/E): {pe_ratio} / AI抓取: {ai_pe}
+        - 前瞻本益比 (Forward P/E): {eff_forward_pe}
+        - 股價淨值比 (P/B): {pb_ratio} / AI抓取: {ai_pb}
+        - 本益成長比 (PEG): {eff_peg}
+        - 🎯 系統逆向推算極限高空價: {extreme_target_price}
 
         【財務基本面動能 (原始數據 vs AI數據)】
-        - EPS (目前 / 預估): {ctx_eps} 元
-        - 營收年增率 (YoY): {ctx_rg}
-        - 最新單月營收月增率 (MoM): {latest_mom_str}
-        - 預估獲利成長 (YoY): {ctx_eg}
-        - 毛利率: {ctx_gm}
-        - 營業利益率: {ctx_om}
-        - 股東權益報酬率 (ROE): {ctx_roe}
-        - 負債權益比 (D/E Ratio): {ctx_de}
+        - EPS (目前 / 預估): {t_eps} / {eff_f_eps} 元
+        - 營收年增率 (YoY) [{latest_rev_month}]: {rev_growth}
+        - 最新單月營收月增率 (MoM) [{latest_rev_month}]: {latest_mom_val}%
+        - 預估獲利成長 (YoY): {eff_eg}
+        - 毛利率: {gross_margin} / AI抓取: {ai_gm}
+        - 營業利益率: {op_margin} / AI抓取: {ai_om}
+        - 股東權益報酬率 (ROE): {roe} / AI抓取: {ai_roe}
+        - 負債權益比 (D/E Ratio): {sys_de}
 
         【🛡️ 防禦力與財務健康檢測 (重要參考)】
         - 預估殖利率: {dy_str}
@@ -1437,8 +1409,7 @@ if curr_id:
         【法人預估目標價】
         - 最高目標價: {hi_str}
         - 平均目標價: {me_str}
-        - 最低保底價: {lo_str}
-        - AI 聯網捕捉最新目標價: {ai_tp_str}
+        - AI 最新聯網目標價 ({ai_suffix}): {ai_tp_str}
         """
         
         full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
@@ -1481,7 +1452,7 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # ⚔️ 產業同業 PK (重新回歸！)
+        # ⚔️ 產業同業 PK
         # ==========================================
         if st.session_state.show_pk:
             st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
@@ -1529,7 +1500,7 @@ if curr_id:
             st.markdown("---")
 
         # ==========================================
-        # 🌊 雙河流圖 (Tabs) - 本益比河流圖 + 股價淨值比河流圖 (重新回歸！)
+        # 🌊 雙河流圖 (Tabs)
         # ==========================================
         if df_per_bk is not None and not df_per_bk.empty:
             st.markdown("### 🌊 估值位階雙河流圖 (P/E & P/B River)")
