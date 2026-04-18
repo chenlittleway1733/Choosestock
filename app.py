@@ -308,7 +308,6 @@ def get_global_market_trend():
 
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id, fm_key=""):
-    # 🚀 升級突破 1：修復「日期錯位 Bug」 - JSON 深度解析引擎
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
         y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
@@ -316,19 +315,14 @@ def get_monthly_revenue(stock_id, fm_key=""):
             json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
             if json_match:
                 raw_json = json_match.group(1)
-                
-                # 解決錯位的方法：不靠全域 Regex，直接將結構切塊 (Block by Block)
                 blocks = re.split(r'"yearMonth"', raw_json)[1:] 
                 for block in blocks:
                     mon_m = re.search(r'^\s*:\s*"(\d{4}/\d{2})"', block)
                     if not mon_m: continue
                     mon = mon_m.group(1)
-                    
-                    # 確保所有數據都在同一個月份的區塊內，保證絕對對齊！
                     rev_m = re.search(r'"單月營收",\s*"value":\s*"([^"]+)"', block)
                     yoy_m = re.search(r'"年增率",\s*"value":\s*"([^"]+)"', block)
                     mom_m = re.search(r'"月增率",\s*"value":\s*"([^"]+)"', block)
-                    
                     if rev_m and yoy_m and mom_m:
                         try:
                             rev = float(rev_m.group(1).replace(',', '')) / 100000
@@ -389,7 +383,6 @@ def get_pe_pb_data(stock_id, fm_key=""):
 
 @st.cache_data(ttl=43200)
 def get_finmind_financial_health(stock_id, fm_key=""):
-    # 🚀 升級突破 2：修復 0 分的 F-Score 冤案 (加入嚴格 Exception Handling)
     try:
         today = datetime.date.today()
         start_str = f"{today.year - 2}-01-01" 
@@ -445,7 +438,6 @@ def get_finmind_financial_health(stock_id, fm_key=""):
             ltd_p = get_val(vals_p, '非流動負債', '長期借款')
             shares_p = get_val(vals_p, '普通股股本', '股本')
             
-            # 🛑 關鍵防呆：如果拿不到總資產，代表財報有缺漏，直接回傳空字典，讓系統顯示「無資料」而不是 0 分！
             if ta_l <= 0 or ta_p <= 0:
                 print(f"[{stock_id}] F-Score 計算中止：總資產資料取得為 0 (可能因 API 資料殘缺)。")
                 return {}
@@ -748,6 +740,7 @@ with st.sidebar:
         st.session_state.run_screener = False
         st.rerun()
 
+    # 🚀 終極吸塵器版上傳按鈕 (完整在此保留！)
     st.markdown("---")
     st.markdown("### 🔐 一鍵匯入金鑰")
     uploaded_key_file = st.file_uploader("📂 上傳 key.txt 自動填入", type=["txt"], help="請上傳包含 GEMINI_KEY, FUGLE_KEY, FINMIND_KEY 的純文字檔")
@@ -1323,7 +1316,6 @@ if curr_id:
         if div_yield is not None and div_yield > 0.3: div_yield = div_yield / 100.0
 
         fcf = s_float(info.get('freeCashflow'))
-        # 如果 Yahoo 沒給自由現金流，嘗試用營業現金流 (cfo_l) 作為替代顯示
         if fcf is None and fm_health.get('cfo_l'): fcf = fm_health.get('cfo_l')
             
         current_ratio = s_float(info.get('currentRatio'))
