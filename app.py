@@ -740,7 +740,7 @@ with st.sidebar:
         st.session_state.run_screener = False
         st.rerun()
 
-    # 🚀 終極吸塵器版上傳按鈕 (完整在此保留！)
+    # 🚀 一鍵匯入金鑰功能 (在這裡！)
     st.markdown("---")
     st.markdown("### 🔐 一鍵匯入金鑰")
     uploaded_key_file = st.file_uploader("📂 上傳 key.txt 自動填入", type=["txt"], help="請上傳包含 GEMINI_KEY, FUGLE_KEY, FINMIND_KEY 的純文字檔")
@@ -1407,7 +1407,7 @@ if curr_id:
              st.markdown("---")
 
         # ==========================================
-        # 🚀 升級突破 1：主力籌碼追蹤雷達 (聰明錢流向)
+        # 🚀 升級突破 1：主力籌碼追蹤雷達
         # ==========================================
         st.markdown("#### 📡 主力籌碼追蹤雷達 (聰明錢動向與背離陷阱)", unsafe_allow_html=True)
         inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
