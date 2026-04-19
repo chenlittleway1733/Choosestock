@@ -16,7 +16,7 @@ import math
 # ==========================================
 # 0. 網頁基本設定
 # ==========================================
-st.set_page_config(page_title="way系統", layout="wide")
+st.set_page_config(page_title="way—系統", layout="wide")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
 # --- 產業對照表 ---
