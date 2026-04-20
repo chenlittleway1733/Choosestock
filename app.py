@@ -72,7 +72,6 @@ def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI捉取"
     return s
 
 def clean_html(html_str):
-    # 🚀 終極 HTML 壓縮機：強制把所有斷行和多餘空白壓成一行，徹底解決破圖問題！
     return re.sub(r'[\r\n\t]+', ' ', html_str).strip()
 
 def get_watchlist():
@@ -208,7 +207,6 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
         "tools": [{"google_search": {}}]
     }
     try:
-        # 🚀 終極超時修復：強制給予 60 秒等待，解決 read timeout=20 問題！
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -261,7 +259,7 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
     payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60) # 🚀 確保為 60 秒
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             response = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
@@ -278,7 +276,6 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
         else: return f"API 錯誤 ({response.status_code})", []
     except Exception as e: return f"連線異常: {str(e)}", []
 
-# --- 🌍 動態判定今日/明日 ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -321,7 +318,6 @@ def get_global_market_trend():
         return {"sox_p": sox_price, "sox": sox_pct, "tsm_p": tsm_price, "tsm": tsm_pct, "nq_p": nq_price, "nq": nq_pct, "ewt_p": ewt_price, "ewt": ewt_pct, "trend": trend, "color": color, "target_day": target_day, "time_status": time_status}
     except: return None
 
-# --- 數據獲取引擎 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id, fm_key=""):
     try:
@@ -331,17 +327,25 @@ def get_monthly_revenue(stock_id, fm_key=""):
             json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
             if json_match:
                 raw_json = json_match.group(1)
-                mom_m = re.search(r'"月增率",\s*"value":\s*"([+-]?\d+\.?\d*)"', raw_json)
-                yoy_m = re.search(r'"年增率",\s*"value":\s*"([+-]?\d+\.?\d*)"', raw_json)
-                rev_m = re.search(r'"單月營收",\s*"value":\s*"(\d+,?\d*)"', raw_json)
-                mon_m = re.search(r'"yearMonth":\s*"(\d{4}/\d{2})"', raw_json)
-                if mom_m and yoy_m and rev_m and mon_m:
-                    return pd.DataFrame([{
-                        'Month': mon_m.group(1),
-                        'Revenue': round(float(rev_m.group(1).replace(',', '')) / 100000, 2), 
-                        'YoY': float(yoy_m.group(1)), 'MoM': float(mom_m.group(1))
-                    }])
-    except: pass
+                blocks = re.split(r'"yearMonth"', raw_json)[1:] 
+                for block in blocks:
+                    mon_m = re.search(r'^\s*:\s*"(\d{4}/\d{2})"', block)
+                    if not mon_m: continue
+                    mon = mon_m.group(1)
+                    rev_m = re.search(r'"單月營收",\s*"value":\s*"([^"]+)"', block)
+                    yoy_m = re.search(r'"年增率",\s*"value":\s*"([^"]+)"', block)
+                    mom_m = re.search(r'"月增率",\s*"value":\s*"([^"]+)"', block)
+                    if rev_m and yoy_m and mom_m:
+                        try:
+                            rev = float(rev_m.group(1).replace(',', '')) / 100000
+                            yoy = float(yoy_m.group(1).replace('%', '').replace(',', ''))
+                            mom = float(mom_m.group(1).replace('%', '').replace(',', ''))
+                            return pd.DataFrame([{
+                                'Month': mon, 'Revenue': round(rev, 2), 'YoY': yoy, 'MoM': mom
+                            }])
+                        except: pass
+    except Exception as e: 
+        pass
     
     try:
         today = datetime.date.today()
@@ -389,6 +393,100 @@ def get_pe_pb_data(stock_id, fm_key=""):
     except: pass
     return None
 
+# 🚀 終極 F-Score 財務防禦力跑分引擎 (已加裝例外處理)
+@st.cache_data(ttl=43200)
+def get_finmind_financial_health(stock_id, fm_key=""):
+    try:
+        today = datetime.date.today()
+        start_str = f"{today.year - 2}-01-01" 
+        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockFinancialStatements&data_id={stock_id}&start_date={start_str}"
+        if fm_key: url += f"&token={fm_key}"
+        res = requests.get(url, timeout=15)
+        data = res.json()
+        if data.get('status') == 200 and data.get('data'):
+            df = pd.DataFrame(data['data'])
+            if df.empty: return {}
+            
+            df['date'] = pd.to_datetime(df['date'])
+            dates = sorted(df['date'].unique())
+            latest_date = dates[-1]
+            prev_date = dates[-5] if len(dates) >= 5 else (dates[0] if len(dates)>1 else latest_date)
+            
+            df_latest = df[df['date'] == latest_date]
+            df_prev = df[df['date'] == prev_date]
+            
+            vals_l = {str(row['type']).strip(): row['value'] for _, row in df_latest.iterrows()}
+            vals_p = {str(row['type']).strip(): row['value'] for _, row in df_prev.iterrows()}
+            
+            def get_val(v_dict, *keys):
+                for k in keys:
+                    for v_key in v_dict.keys():
+                        if k in v_key:
+                            try: 
+                                val_str = str(v_dict[v_key]).replace(',', '').replace('%', '')
+                                return float(val_str)
+                            except: pass
+                return 0.0
+                
+            rev_l = get_val(vals_l, '營業收入', '淨收益', '收益')
+            gp_l = get_val(vals_l, '營業毛利', '毛利')
+            op_l = get_val(vals_l, '營業利益')
+            ni_l = get_val(vals_l, '本期淨利', '淨利')
+            ta_l = get_val(vals_l, '資產總計', '資產總額', '資產')
+            tl_l = get_val(vals_l, '負債總')
+            eq_l = get_val(vals_l, '權益總')
+            ca_l = get_val(vals_l, '流動資產')
+            cl_l = get_val(vals_l, '流動負債')
+            ltd_l = get_val(vals_l, '非流動負債', '長期借款')
+            cfo_l = get_val(vals_l, '營業活動之淨現金流入', '營業活動之現金流量', '營業活動之淨現金')
+            if cfo_l == 0: cfo_l = op_l 
+            shares_l = get_val(vals_l, '普通股股本', '股本')
+            
+            rev_p = get_val(vals_p, '營業收入', '淨收益', '收益')
+            gp_p = get_val(vals_p, '營業毛利', '毛利')
+            ni_p = get_val(vals_p, '本期淨利', '淨利')
+            ta_p = get_val(vals_p, '資產總計', '資產總額', '資產')
+            ca_p = get_val(vals_p, '流動資產')
+            cl_p = get_val(vals_p, '流動負債')
+            ltd_p = get_val(vals_p, '非流動負債', '長期借款')
+            shares_p = get_val(vals_p, '普通股股本', '股本')
+            
+            # 若無資產資料，直接回傳空字典，不給 0 分冤枉分數
+            if ta_l <= 0 or ta_p <= 0:
+                return {}
+
+            res_dict = {}
+            if rev_l > 0:
+                res_dict['grossMargins'] = gp_l / rev_l
+                res_dict['operatingMargins'] = op_l / rev_l
+            if eq_l > 0:
+                res_dict['debtToEquity'] = tl_l / eq_l
+                
+            f_score = 0
+            if ta_l > 0 and ta_p > 0:
+                roa_l, roa_p = ni_l / ta_l, ni_p / ta_p
+                if roa_l > 0: f_score += 1                 
+                if cfo_l > 0: f_score += 1                 
+                if roa_l > roa_p: f_score += 1             
+                if cfo_l > ni_l: f_score += 1              
+                if (ltd_l / ta_l) < (ltd_p / ta_p): f_score += 1  
+                cr_l = (ca_l / cl_l) if cl_l > 0 else 0
+                cr_p = (ca_p / cl_p) if cl_p > 0 else 0
+                if cr_l > cr_p: f_score += 1               
+                if shares_l <= shares_p and shares_l > 0: f_score += 1 
+                gm_l = (gp_l / rev_l) if rev_l > 0 else 0
+                gm_p = (gp_p / rev_p) if rev_p > 0 else 0
+                if gm_l > gm_p: f_score += 1               
+                at_l = rev_l / ta_l
+                at_p = rev_p / ta_p
+                if at_l > at_p: f_score += 1               
+                
+            res_dict['f_score'] = f_score
+            return res_dict
+    except Exception as e: 
+        pass
+    return {}
+
 def get_fallback_info(stock_id):
     info = {}
     try:
@@ -401,7 +499,7 @@ def get_fallback_info(stock_id):
         if json_match:
             data_str = json_match.group(1)
             def ext_val(key, is_pct=False):
-                m = re.search(f'"{key}"\s*:\s*"?([+-]?\d+(?:\.\d+)?)"?', data_str)
+                m = re.search(rf'"{key}"\s*:\s*(?:{{"raw"\s*:\s*)?"?([+-]?\d+(?:\.\d+)?)"?', data_str)
                 if m:
                     val = float(m.group(1))
                     return val / 100.0 if is_pct else val
@@ -529,7 +627,6 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
                     'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
                     'Close': [rt_price], 'Volume': [rt_vol]
                 }, index=[today_date])
-                # 🚀 刪除這行會導致 KeyError 的欄位對齊： new_row = new_row[hist.columns]
                 hist = pd.concat([hist, new_row])
             elif hist.index[-1].date() == today_date.date():
                 hist.loc[hist.index[-1], 'Close'] = rt_price
@@ -625,7 +722,6 @@ def get_chart_data(stock_id, timeframe, fugle_key=""):
         elif timeframe == "月線": df, _ = inject_realtime_data(df, stock_id, "M")
     return df
 
-# 🌟 取得法人買賣超資料 (修復邏輯，並印出 debug)
 @st.cache_data(ttl=43200)
 def get_inst_data(stock_id, fm_key=""):
     try:
@@ -662,10 +758,7 @@ def get_inst_data(stock_id, fm_key=""):
                 res_df['Trust'] = pivot_df[t_cols].sum(axis=1) if t_cols else 0
                 res_df['Dealer'] = pivot_df[d_cols].sum(axis=1) if d_cols else 0
                 return res_df / 1000 
-            else:
-                pass
-    except Exception as e: 
-        pass
+    except: pass
     return pd.DataFrame()
 
 @st.cache_data(ttl=60)
@@ -1182,7 +1275,7 @@ if curr_id:
             extreme_target_price = eff_f_eps * target_pe_cap if eff_f_eps is not None else None
             
             eg_str_disp = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
-            if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟ٹی低基期防護(分母=0.5)</span>"
+            if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
             eg_color = "#ff4d4d" if eff_cg and eff_cg > 0 else ("#00cc66" if eff_cg and eff_cg < 0 else "gray")
             
             eps_source_text = f"自訂法人共識 ({eff_f_eps:.2f}元)"
@@ -1354,7 +1447,7 @@ if curr_id:
             recent_high_120 = hist['High'].tail(120).max()
             price_near_high = curr_p >= (recent_high_120 * 0.9)
             if last_mom < 0 and prev_mom < 0 and price_near_high:
-                 anomaly_html += f"<div style='background:linear-gradient(90deg, #b8860b 0%, #ff8c00 100%); color:white; padding:12px; border-radius:8px; margin-bottom:10px; font-weight:bold;'>🚸【量價背離風險】 近兩月營收連續衰退 (最新 MoM: {last_mom}%)，但股價仍高掛在近半年高檔區，請嚴防主力拉高出貨！</div>"
+                 anomaly_html += f"<div style='background:linear-gradient(90deg, #b8860b 0%, #ff8c00 100%); color:white; padding:12px; border-radius:8px; margin-bottom:10px; font-weight:bold;'>🚸【量價背離風險】 近兩月營收連續衰退 (最新 MoM: {last_mom:.2f}%)，但股價仍高掛在近半年高檔區，請嚴防主力拉高出貨！</div>"
 
         if anomaly_html == "":
             anomaly_html = "<div style='background:#1e1e1e; color:#00cc66; padding:12px; border-radius:8px; border:1px solid #333;'>✅ 目前未偵測到極端高估 (P/B>10) 或營收背離風險，數據處於相對常態範圍。</div>"
@@ -1657,7 +1750,7 @@ if curr_id:
 
         col_ai1, col_ai2 = st.columns([1.2, 1])
         with col_ai1:
-            if st.button("🤖 啟 পণ্ডিত AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
+            if st.button("🤖 啟動 AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
                 if not st.session_state.api_key: st.warning("請先於左側選單輸入您的 API Key。")
                 else:
                     with st.spinner(f"AI ({st.session_state.get('selected_model', 'gemini-2.5-flash')}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
