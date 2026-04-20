@@ -16,7 +16,7 @@ import math
 # ==========================================
 # 0. 網頁基本設定
 # ==========================================
-st.set_page_config(page_title="way系統1.0", layout="wide")
+st.set_page_config(page_title="way系統", layout="wide")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
 # --- 產業對照表 ---
@@ -473,13 +473,18 @@ def get_finmind_financial_health(stock_id, fm_key=""):
         print(f"F-Score 引擎錯誤: {e}")
     return {}
 
-# 🚀 終極即時報價攔截引擎 (官方 API 零延遲)
-@st.cache_data(ttl=60)
+# 🚀 終極突破：零延遲即時報價引擎 (TWSE官方API + Yahoo即時網頁雙軌備援)
+@st.cache_data(ttl=30)
 def get_realtime_data(stock_id):
     rt_data = {}
+    # 策略 1: 台灣證券交易所 (TWSE) 官方盤中 API，100% 零延遲
     try:
+        session = requests.Session()
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        # 必須先取得 Session 才能成功呼叫 API
+        session.get("https://mis.twse.com.tw/stock/index.jsp", headers=headers, timeout=5)
         url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw|otc_{stock_id}.tw"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        res = session.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             data = res.json()
             msg_array = data.get('msgArray', [])
@@ -490,42 +495,47 @@ def get_realtime_data(stock_id):
                     try: return float(v)
                     except: return None
                 
-                rt_price = p_f(info.get('z'))
-                prev_close = p_f(info.get('y'))
-                
-                if rt_price is None: rt_price = prev_close
+                rt_price = p_f(info.get('z')) # 最新成交價
+                if rt_price is None: rt_price = p_f(info.get('y')) # 盤前顯示昨收
                 
                 if rt_price is not None:
                     rt_data['realtime_price'] = rt_price
-                    rt_data['realtime_prev_close'] = prev_close
+                    rt_data['realtime_prev_close'] = p_f(info.get('y'))
                     rt_data['realtime_open'] = p_f(info.get('o')) or rt_price
                     rt_data['realtime_high'] = p_f(info.get('h')) or rt_price
                     rt_data['realtime_low'] = p_f(info.get('l')) or rt_price
                     rt_data['realtime_volume'] = p_f(info.get('v'))
                     return rt_data
-    except Exception as e: print(f"TWSE API Error: {e}")
+    except Exception as e: 
+        print(f"TWSE API 連線異常: {e}")
 
-    for ext in [".TW", ".TWO"]:
-        try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{stock_id}{ext}?interval=1d&range=1d"
-            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                result = data.get('chart', {}).get('result', [])
-                if result:
-                    meta = result[0].get('meta', {})
-                    rt_price = meta.get('regularMarketPrice')
-                    if rt_price is not None:
-                        rt_data['realtime_price'] = rt_price
-                        rt_data['realtime_prev_close'] = meta.get('chartPreviousClose')
-                        rt_data['realtime_open'] = rt_price
-                        rt_data['realtime_high'] = rt_price
-                        rt_data['realtime_low'] = rt_price
-                        rt_data['realtime_volume'] = 0
-                        return rt_data
-        except: pass
+    # 策略 2: 若 TWSE 忙碌，啟動 Yahoo 網頁即時爬蟲 (免 Cookie 阻擋)
+    try:
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            text = res.text
+            def ext_v(field):
+                m = re.search(rf'"{field}"\s*:\s*(?:{{"raw"\s*:\s*)?([+-]?\d+(?:\.\d+)?)', text)
+                if m: return float(m.group(1))
+                return None
+            
+            p = ext_v('regularMarketPrice')
+            if p is not None:
+                rt_data['realtime_price'] = p
+                rt_data['realtime_prev_close'] = ext_v('regularMarketPreviousClose')
+                rt_data['realtime_open'] = ext_v('regularMarketOpen') or p
+                rt_data['realtime_high'] = ext_v('regularMarketDayHigh') or p
+                rt_data['realtime_low'] = ext_v('regularMarketDayLow') or p
+                rt_data['realtime_volume'] = ext_v('regularMarketVolume')
+                return rt_data
+    except Exception as e:
+        print(f"Yahoo Web Scrape 異常: {e}")
+        
     return rt_data
 
+# 強制將盤中即時數據注入歷史 K 線中，避免被快取卡死
 def inject_realtime_data(hist, stock_id, timeframe="D"):
     if hist is None or hist.empty: return hist, None
     rt_data = get_realtime_data(stock_id)
@@ -543,12 +553,15 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
             today_date = today_date.tz_localize(hist.index.tz)
             
         if timeframe == "D":
+            # 如果歷史庫還停在昨天，強制插入一根今天的最新 K 棒
             if hist.index[-1].date() < today_date.date():
                 new_row = pd.DataFrame({
                     'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
                     'Close': [rt_price], 'Volume': [rt_vol]
                 }, index=[today_date])
+                new_row = new_row[hist.columns] # 對齊欄位
                 hist = pd.concat([hist, new_row])
+            # 如果已經是今天的 K 棒，強制用盤中最新價蓋過去
             elif hist.index[-1].date() == today_date.date():
                 hist.loc[hist.index[-1], 'Close'] = rt_price
                 hist.loc[hist.index[-1], 'Open'] = rt_open
@@ -611,15 +624,12 @@ def get_fallback_info(stock_id):
     except: pass
     return info
 
+# 🚀 隔離快取層：讓歷史資料只抓一次，但盤中資料隨時注入
 @st.cache_data(ttl=3600)
-def get_stock_data(stock_id, fugle_key="", fm_key=""):
-    stock_id = str(stock_id).strip()
+def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
     hist = None
     info_data = {}
-    
-    if fugle_key:
-        hist = fetch_fugle_kline(stock_id, fugle_key, "D")
-    
+    if fugle_key: hist = fetch_fugle_kline(stock_id, fugle_key, "D")
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
@@ -647,21 +657,28 @@ def get_stock_data(stock_id, fugle_key="", fm_key=""):
         except: pass
 
     if hist is not None and not hist.empty:
-        hist, rt_prev = inject_realtime_data(hist, stock_id, "D")
-        
         fallback = get_fallback_info(stock_id)
         for k, v in fallback.items():
             if v is not None:
                 if k not in info_data or not info_data[k] or str(info_data[k]).lower() == 'nan':
                     info_data[k] = v
-                    
+    return hist, info_data
+
+# 🚀 結合快取的歷史與零延遲的即時數據
+def get_stock_data(stock_id, fugle_key="", fm_key=""):
+    hist, info_data = _get_base_stock_data(stock_id, fugle_key, fm_key)
+    if hist is not None and not hist.empty:
+        hist = hist.copy() # 避免污染快取
+        info_data = info_data.copy()
+        
+        # 把即時報價硬塞進去！
+        hist, rt_prev = inject_realtime_data(hist, stock_id, "D")
         if rt_prev is not None: info_data['previousClose'] = rt_prev
-        return hist, info_data
-    return None, None
+        
+    return hist, info_data
 
 @st.cache_data(ttl=900)
-def get_chart_data(stock_id, timeframe, fugle_key=""):
-    stock_id = str(stock_id).strip()
+def _get_base_chart_data(stock_id, timeframe, fugle_key=""):
     tf_map = {"日線": "D", "週線": "W", "月線": "M", "60分線": "60"}
     if fugle_key:
         tf = tf_map.get(timeframe, "D")
@@ -676,13 +693,18 @@ def get_chart_data(stock_id, timeframe, fugle_key=""):
             df = ticker.history(period=params["period"], interval=params["interval"])
             if not df.empty:
                 if df.index.tz is not None: df.index = df.index.tz_localize(None)
-                
-                if timeframe == "日線": df, _ = inject_realtime_data(df, stock_id, "D")
-                elif timeframe == "週線": df, _ = inject_realtime_data(df, stock_id, "W")
-                elif timeframe == "月線": df, _ = inject_realtime_data(df, stock_id, "M")
                 return df
         except: continue
     return pd.DataFrame()
+
+def get_chart_data(stock_id, timeframe, fugle_key=""):
+    df = _get_base_chart_data(stock_id, timeframe, fugle_key)
+    if not df.empty:
+        df = df.copy()
+        if timeframe == "日線": df, _ = inject_realtime_data(df, stock_id, "D")
+        elif timeframe == "週線": df, _ = inject_realtime_data(df, stock_id, "W")
+        elif timeframe == "月線": df, _ = inject_realtime_data(df, stock_id, "M")
+    return df
 
 @st.cache_data(ttl=43200)
 def get_inst_data(stock_id, fm_key=""):
@@ -842,25 +864,22 @@ with st.sidebar:
     uploaded_key_file = st.file_uploader("📂 上傳 key.txt 自動填入", type=["txt"], help="請上傳包含 GEMINI_KEY, FUGLE_KEY, FINMIND_KEY 的純文字檔")
     if uploaded_key_file is not None:
         content = uploaded_key_file.getvalue().decode("utf-8")
+        clean_content = re.sub(r'\s+', '', content)
         keys_loaded = 0
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"): continue
-            if "=" in line:
-                k, v = line.split("=", 1)
-                k = k.strip().upper()
-                v = v.strip() 
-                
-                if "GEMINI" in k and v: 
-                    st.session_state.api_key = v
-                    keys_loaded += 1
-                elif "FUGLE" in k and v: 
-                    st.session_state.fugle_key = v
-                    keys_loaded += 1
-                elif "FINMIND" in k and v: 
-                    st.session_state.finmind_key = v
-                    keys_loaded += 1
-                    
+        m_gemini = re.search(r'GEMINI_KEY=(.*?)(?:FUGLE_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
+        m_fugle = re.search(r'FUGLE_KEY=(.*?)(?:GEMINI_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
+        m_finmind = re.search(r'FINMIND_KEY=(.*?)(?:GEMINI_KEY|FUGLE_KEY|$)', clean_content, re.IGNORECASE)
+        
+        if m_gemini and m_gemini.group(1):
+            st.session_state.api_key = m_gemini.group(1)
+            keys_loaded += 1
+        if m_fugle and m_fugle.group(1):
+            st.session_state.fugle_key = m_fugle.group(1)
+            keys_loaded += 1
+        if m_finmind and m_finmind.group(1):
+            st.session_state.finmind_key = m_finmind.group(1)
+            keys_loaded += 1
+            
         if keys_loaded > 0:
             st.success(f"✅ 成功載入 {keys_loaded} 組金鑰！密碼框已自動填滿，請點擊下方「🔄 重新整理快取」套用。")
         else:
