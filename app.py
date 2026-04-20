@@ -16,7 +16,7 @@ import math
 # ==========================================
 # 0. 網頁基本設定
 # ==========================================
-st.set_page_config(page_title="way—系統", layout="wide")
+st.set_page_config(page_title="way系統", layout="wide")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
 # --- 產業對照表 ---
@@ -740,28 +740,31 @@ with st.sidebar:
         st.session_state.run_screener = False
         st.rerun()
 
-    # 🚀 一鍵匯入金鑰功能 (在這裡！)
+    # 🚀 終極修復：一鍵上傳按鈕，強制過濾空行與保留合法金鑰空白
     st.markdown("---")
     st.markdown("### 🔐 一鍵匯入金鑰")
     uploaded_key_file = st.file_uploader("📂 上傳 key.txt 自動填入", type=["txt"], help="請上傳包含 GEMINI_KEY, FUGLE_KEY, FINMIND_KEY 的純文字檔")
     if uploaded_key_file is not None:
         content = uploaded_key_file.getvalue().decode("utf-8")
-        clean_content = re.sub(r'\s+', '', content)
         keys_loaded = 0
-        m_gemini = re.search(r'GEMINI_KEY=(.*?)(?:FUGLE_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
-        m_fugle = re.search(r'FUGLE_KEY=(.*?)(?:GEMINI_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
-        m_finmind = re.search(r'FINMIND_KEY=(.*?)(?:GEMINI_KEY|FUGLE_KEY|$)', clean_content, re.IGNORECASE)
-        
-        if m_gemini and m_gemini.group(1):
-            st.session_state.api_key = m_gemini.group(1)
-            keys_loaded += 1
-        if m_fugle and m_fugle.group(1):
-            st.session_state.fugle_key = m_fugle.group(1)
-            keys_loaded += 1
-        if m_finmind and m_finmind.group(1):
-            st.session_state.finmind_key = m_finmind.group(1)
-            keys_loaded += 1
-            
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"): continue
+            if "=" in line:
+                k, v = line.split("=", 1)
+                k = k.strip().upper()
+                v = v.strip() # 只清除頭尾隱形字元，保留富果金鑰中間合法的空白！
+                
+                if "GEMINI" in k and v: 
+                    st.session_state.api_key = v
+                    keys_loaded += 1
+                elif "FUGLE" in k and v: 
+                    st.session_state.fugle_key = v
+                    keys_loaded += 1
+                elif "FINMIND" in k and v: 
+                    st.session_state.finmind_key = v
+                    keys_loaded += 1
+                    
         if keys_loaded > 0:
             st.success(f"✅ 成功載入 {keys_loaded} 組金鑰！密碼框已自動填滿，請點擊下方「🔄 重新整理快取」套用。")
         else:
@@ -802,10 +805,8 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📈 進階資料源設定")
     st.session_state.fugle_key = st.text_input("🔑 Fugle (富果) API Key (選填)", type="password", value=st.session_state.fugle_key)
-    if st.session_state.fugle_key: st.session_state.fugle_key = re.sub(r'\s+', '', st.session_state.fugle_key)
     
     st.session_state.finmind_key = st.text_input("🔑 FinMind API Key (選填)", type="password", value=st.session_state.finmind_key)
-    if st.session_state.finmind_key: st.session_state.finmind_key = re.sub(r'\s+', '', st.session_state.finmind_key)
 
     f_ok, m_ok = validate_api_keys(st.session_state.fugle_key, st.session_state.finmind_key)
     
@@ -1407,7 +1408,7 @@ if curr_id:
              st.markdown("---")
 
         # ==========================================
-        # 🚀 升級突破 1：主力籌碼追蹤雷達
+        # 🚀 主力籌碼追蹤雷達
         # ==========================================
         st.markdown("#### 📡 主力籌碼追蹤雷達 (聰明錢動向與背離陷阱)", unsafe_allow_html=True)
         inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
