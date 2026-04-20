@@ -212,10 +212,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             clean_text = re.sub(r'```json\n?|```', '', text).strip()
             return json.loads(clean_text)
-        else:
-            print(f"AI API Error: {res.text}")
-    except Exception as e: 
-        print(f"AI Connection Error: {str(e)}")
+    except: pass
     return None
 
 @st.cache_data(ttl=86400)
@@ -293,7 +290,6 @@ def get_global_market_trend():
             time_status = "<span style='color:#00cc66; font-size:0.9rem;'>(美股與夜盤已收盤，為最新結算數據)</span>"
 
         tickers = yf.Tickers('^SOX TSM NQ=F EWT')
-        
         def get_price_and_pct(ticker_obj):
             try:
                 hist = ticker_obj.history(period='5d')
@@ -344,8 +340,7 @@ def get_monthly_revenue(stock_id, fm_key=""):
                                 'Month': mon, 'Revenue': round(rev, 2), 'YoY': yoy, 'MoM': mom
                             }])
                         except: pass
-    except Exception as e: 
-        pass
+    except: pass
     
     try:
         today = datetime.date.today()
@@ -393,7 +388,6 @@ def get_pe_pb_data(stock_id, fm_key=""):
     except: pass
     return None
 
-# 🚀 終極 F-Score 財務防禦力跑分引擎 (已加裝例外處理)
 @st.cache_data(ttl=43200)
 def get_finmind_financial_health(stock_id, fm_key=""):
     try:
@@ -451,7 +445,6 @@ def get_finmind_financial_health(stock_id, fm_key=""):
             ltd_p = get_val(vals_p, '非流動負債', '長期借款')
             shares_p = get_val(vals_p, '普通股股本', '股本')
             
-            # 若無資產資料，直接回傳空字典，不給 0 分冤枉分數
             if ta_l <= 0 or ta_p <= 0:
                 return {}
 
@@ -483,8 +476,7 @@ def get_finmind_financial_health(stock_id, fm_key=""):
                 
             res_dict['f_score'] = f_score
             return res_dict
-    except Exception as e: 
-        pass
+    except: pass
     return {}
 
 def get_fallback_info(stock_id):
@@ -509,7 +501,6 @@ def get_fallback_info(stock_id):
             info['trailingEps'] = ext_val('eps') or ext_val('trailingEps')
             info['dividendYield'] = ext_val('dividendYield', True)
             
-            # 🚀 升級：加裝「盤中即時報價攔截器」
             info['realtime_price'] = ext_val('regularMarketPrice')
             info['realtime_prev_close'] = ext_val('regularMarketPreviousClose')
             info['realtime_open'] = ext_val('regularMarketOpen')
@@ -544,11 +535,9 @@ def get_fallback_info(stock_id):
     except: pass
     return info
 
-# 🚀 終極即時報價攔截引擎 (官方 API 零延遲)
 @st.cache_data(ttl=30)
 def get_realtime_data(stock_id):
     rt_data = {}
-    # 策略 1: 台灣證券交易所 (TWSE) 官方盤中 API，100% 零延遲
     try:
         session = requests.Session()
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -576,10 +565,8 @@ def get_realtime_data(stock_id):
                     rt_data['realtime_low'] = p_f(info.get('l')) or rt_price
                     rt_data['realtime_volume'] = p_f(info.get('v'))
                     return rt_data
-    except Exception as e: 
-        pass
+    except: pass
 
-    # 策略 2: 若 TWSE 忙碌，啟動 Yahoo 網頁即時爬蟲 (免 Cookie 阻擋)
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -600,8 +587,7 @@ def get_realtime_data(stock_id):
                 rt_data['realtime_low'] = ext_v('regularMarketDayLow') or p
                 rt_data['realtime_volume'] = ext_v('regularMarketVolume')
                 return rt_data
-    except Exception as e:
-        pass
+    except: pass
         
     return rt_data
 
@@ -623,10 +609,11 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
             
         if timeframe == "D":
             if hist.index[-1].date() < today_date.date():
+                # 強制建立名為 'Date' 的 Index，徹底杜絕 KeyError
                 new_row = pd.DataFrame({
                     'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
                     'Close': [rt_price], 'Volume': [rt_vol]
-                }, index=[today_date])
+                }, index=pd.Index([today_date], name='Date'))
                 hist = pd.concat([hist, new_row])
             elif hist.index[-1].date() == today_date.date():
                 hist.loc[hist.index[-1], 'Close'] = rt_price
@@ -639,9 +626,10 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
             if rt_high > hist.loc[hist.index[-1], 'High']: hist.loc[hist.index[-1], 'High'] = rt_high
             if rt_low < hist.loc[hist.index[-1], 'Low']: hist.loc[hist.index[-1], 'Low'] = rt_low
             
+    # 最後再確認一次索引名稱
+    hist.index.name = 'Date'
     return hist, rt_prev
 
-# 🚀 隔離快取層：讓歷史資料只抓一次，但盤中資料隨時注入
 @st.cache_data(ttl=3600)
 def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
     hist = None
@@ -681,11 +669,10 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
                     info_data[k] = v
     return hist, info_data
 
-# 🚀 結合快取的歷史與零延遲的即時數據
 def get_stock_data(stock_id, fugle_key="", fm_key=""):
     hist, info_data = _get_base_stock_data(stock_id, fugle_key, fm_key)
     if hist is not None and not hist.empty:
-        hist = hist.copy() # 避免污染快取
+        hist = hist.copy()
         info_data = info_data.copy()
         
         hist, rt_prev = inject_realtime_data(hist, stock_id, "D")
@@ -1460,6 +1447,8 @@ if curr_id:
         if div_yield is not None and div_yield > 0.3: div_yield = div_yield / 100.0
 
         fcf = s_float(info.get('freeCashflow'))
+        if fcf is None and fm_health.get('cfo_l'): fcf = fm_health.get('cfo_l')
+            
         current_ratio = s_float(info.get('currentRatio'))
 
         dy_str = to_pct(div_yield)
@@ -1518,9 +1507,7 @@ if curr_id:
         st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
         st.markdown("---")
 
-        # ==========================================
         # 🚀 法人預估目標價
-        # ==========================================
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
         lo_val = s_float(info.get('targetLowPrice'))
@@ -1548,9 +1535,7 @@ if curr_id:
              st.markdown("<span style='color:gray;'>系統與 AI 目前皆無明確的法人目標價資料。</span>", unsafe_allow_html=True)
              st.markdown("---")
 
-        # ==========================================
         # 🚀 主力籌碼追蹤雷達
-        # ==========================================
         st.markdown("#### 📡 主力籌碼追蹤雷達 (聰明錢動向與背離陷阱)", unsafe_allow_html=True)
         inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
         
@@ -1597,9 +1582,7 @@ if curr_id:
                 st.warning("⚠️ 此檔股票近期無三大法人買賣超數據，無法啟動籌碼雷達。")
         st.markdown("---")
 
-        # ==========================================
         # 🚀 籌碼面與股權結構分析
-        # ==========================================
         st.markdown("#### 🐳 內部人與控盤主力推估", unsafe_allow_html=True)
         insider_pct = s_float(info.get('heldPercentInsiders'))
         inst_pct = s_float(info.get('heldPercentInstitutions'))
@@ -1651,9 +1634,7 @@ if curr_id:
         st.markdown(clean_html(chip_html), unsafe_allow_html=True)
         st.markdown("---")
 
-        # ==========================================
         # 🚀 AI 綜合產業報告與打包提示詞
-        # ==========================================
         hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
@@ -1776,9 +1757,7 @@ if curr_id:
             
         st.markdown("---")
 
-        # ==========================================
         # ⚔️ 產業同業 PK
-        # ==========================================
         if st.session_state.show_pk:
             st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
             st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
@@ -1824,14 +1803,21 @@ if curr_id:
                 else: st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
             st.markdown("---")
 
-        # ==========================================
         # 🌊 雙河流圖 (Tabs) 
-        # ==========================================
         if df_per_bk is not None and not df_per_bk.empty:
             st.markdown("### 🌊 估值位階雙河流圖 (P/E & P/B River)")
             st.markdown("<small style='color:gray;'>*實戰密技：『成長股』看本益比判斷潛力；『景氣循環股』(航運/鋼鐵/面板) 獲利不穩定，必須看淨值比(P/B)河流圖抄底！*</small>", unsafe_allow_html=True)
             
-            h_reset = hist.copy().reset_index()
+            # 🚀 終極防護：強制鎖定索引名稱，徹底根除 KeyError
+            h_reset = hist.copy()
+            if h_reset.index.name != 'Date':
+                h_reset.index.name = 'Date'
+            h_reset = h_reset.reset_index()
+            
+            # 以防萬一 pandas 還是產生了 index 欄位，強制重命名
+            if 'index' in h_reset.columns and 'Date' not in h_reset.columns:
+                h_reset.rename(columns={'index': 'Date'}, inplace=True)
+            
             if h_reset['Date'].dt.tz is not None: h_reset['Date'] = h_reset['Date'].dt.tz_localize(None)
             h_reset['Date_only'] = h_reset['Date'].dt.date
             
@@ -1917,9 +1903,7 @@ if curr_id:
                         st.info("缺乏足夠的淨值比數據。")
         st.markdown("---")
 
-        # ==========================================
         # 🚀 專業技術線圖與 KD 指標
-        # ==========================================
         st.markdown("### 🤖 專業技術線圖與量化型態分析")
         
         chart_tf = st.radio("切換 K 線週期：", ["60分線", "日線", "週線", "月線"], index=1, horizontal=True)
