@@ -473,6 +473,95 @@ def get_finmind_financial_health(stock_id, fm_key=""):
         print(f"F-Score 引擎錯誤: {e}")
     return {}
 
+# 🚀 終極即時報價攔截引擎 (官方 API 零延遲)
+@st.cache_data(ttl=60)
+def get_realtime_data(stock_id):
+    rt_data = {}
+    try:
+        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw|otc_{stock_id}.tw"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            msg_array = data.get('msgArray', [])
+            if msg_array:
+                info = msg_array[0]
+                def p_f(v):
+                    if v == '-' or v is None: return None
+                    try: return float(v)
+                    except: return None
+                
+                rt_price = p_f(info.get('z'))
+                prev_close = p_f(info.get('y'))
+                
+                if rt_price is None: rt_price = prev_close
+                
+                if rt_price is not None:
+                    rt_data['realtime_price'] = rt_price
+                    rt_data['realtime_prev_close'] = prev_close
+                    rt_data['realtime_open'] = p_f(info.get('o')) or rt_price
+                    rt_data['realtime_high'] = p_f(info.get('h')) or rt_price
+                    rt_data['realtime_low'] = p_f(info.get('l')) or rt_price
+                    rt_data['realtime_volume'] = p_f(info.get('v'))
+                    return rt_data
+    except Exception as e: print(f"TWSE API Error: {e}")
+
+    for ext in [".TW", ".TWO"]:
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{stock_id}{ext}?interval=1d&range=1d"
+            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                result = data.get('chart', {}).get('result', [])
+                if result:
+                    meta = result[0].get('meta', {})
+                    rt_price = meta.get('regularMarketPrice')
+                    if rt_price is not None:
+                        rt_data['realtime_price'] = rt_price
+                        rt_data['realtime_prev_close'] = meta.get('chartPreviousClose')
+                        rt_data['realtime_open'] = rt_price
+                        rt_data['realtime_high'] = rt_price
+                        rt_data['realtime_low'] = rt_price
+                        rt_data['realtime_volume'] = 0
+                        return rt_data
+        except: pass
+    return rt_data
+
+def inject_realtime_data(hist, stock_id, timeframe="D"):
+    if hist is None or hist.empty: return hist, None
+    rt_data = get_realtime_data(stock_id)
+    rt_price = rt_data.get('realtime_price')
+    rt_prev = rt_data.get('realtime_prev_close')
+    
+    if rt_price is not None and rt_price > 0:
+        today_date = pd.to_datetime(datetime.date.today())
+        rt_open = rt_data.get('realtime_open') or rt_price
+        rt_high = rt_data.get('realtime_high') or rt_price
+        rt_low = rt_data.get('realtime_low') or rt_price
+        rt_vol = rt_data.get('realtime_volume') or 0
+        
+        if hist.index.tz is not None:
+            today_date = today_date.tz_localize(hist.index.tz)
+            
+        if timeframe == "D":
+            if hist.index[-1].date() < today_date.date():
+                new_row = pd.DataFrame({
+                    'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
+                    'Close': [rt_price], 'Volume': [rt_vol]
+                }, index=[today_date])
+                hist = pd.concat([hist, new_row])
+            elif hist.index[-1].date() == today_date.date():
+                hist.loc[hist.index[-1], 'Close'] = rt_price
+                hist.loc[hist.index[-1], 'Open'] = rt_open
+                hist.loc[hist.index[-1], 'High'] = max(hist.loc[hist.index[-1], 'High'], rt_high)
+                hist.loc[hist.index[-1], 'Low'] = min(hist.loc[hist.index[-1], 'Low'], rt_low)
+                if rt_vol > 0: hist.loc[hist.index[-1], 'Volume'] = rt_vol
+        elif timeframe in ["W", "M"]:
+            hist.loc[hist.index[-1], 'Close'] = rt_price
+            if rt_high > hist.loc[hist.index[-1], 'High']: hist.loc[hist.index[-1], 'High'] = rt_high
+            if rt_low < hist.loc[hist.index[-1], 'Low']: hist.loc[hist.index[-1], 'Low'] = rt_low
+            
+    return hist, rt_prev
+
 def get_fallback_info(stock_id):
     info = {}
     try:
@@ -484,7 +573,6 @@ def get_fallback_info(stock_id):
         json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', text)
         if json_match:
             data_str = json_match.group(1)
-            # 支援更強健的正則表達式提取
             def ext_val(key, is_pct=False):
                 m = re.search(rf'"{key}"\s*:\s*(?:{{"raw"\s*:\s*)?"?([+-]?\d+(?:\.\d+)?)"?', data_str)
                 if m:
@@ -495,14 +583,6 @@ def get_fallback_info(stock_id):
             info['priceToBook'] = ext_val('pbRatio') or ext_val('priceToBook')
             info['trailingEps'] = ext_val('eps') or ext_val('trailingEps')
             info['dividendYield'] = ext_val('dividendYield', True)
-            
-            # 🚀 升級：加裝「盤中即時報價攔截器」，直接從網頁提取最新數字
-            info['realtime_price'] = ext_val('regularMarketPrice')
-            info['realtime_prev_close'] = ext_val('regularMarketPreviousClose')
-            info['realtime_open'] = ext_val('regularMarketOpen')
-            info['realtime_high'] = ext_val('regularMarketDayHigh')
-            info['realtime_low'] = ext_val('regularMarketDayLow')
-            info['realtime_volume'] = ext_val('regularMarketVolume')
 
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
@@ -567,40 +647,15 @@ def get_stock_data(stock_id, fugle_key="", fm_key=""):
         except: pass
 
     if hist is not None and not hist.empty:
+        hist, rt_prev = inject_realtime_data(hist, stock_id, "D")
+        
         fallback = get_fallback_info(stock_id)
         for k, v in fallback.items():
             if v is not None:
                 if k not in info_data or not info_data[k] or str(info_data[k]).lower() == 'nan':
                     info_data[k] = v
-
-        # 🚀 終極修復：用即時報價強制覆蓋落後的歷史 K 線，確保盤中 100% 同步
-        rt_price = fallback.get('realtime_price')
-        if rt_price is not None and rt_price > 0:
-            today_date = pd.to_datetime(datetime.date.today())
-            rt_open = fallback.get('realtime_open') or rt_price
-            rt_high = fallback.get('realtime_high') or rt_price
-            rt_low = fallback.get('realtime_low') or rt_price
-            rt_vol = fallback.get('realtime_volume') or 0
-            
-            # 處理時區問題，避免 pandas concat 時因為 tz-naive 與 tz-aware 衝突報錯
-            if hist.index.tz is not None:
-                today_date = today_date.tz_localize(hist.index.tz)
-            
-            # 如果歷史資料庫還停在昨天，就強制插入今天盤中的最新即時 K 棒
-            if hist.index[-1].date() < today_date.date():
-                new_row = pd.DataFrame({'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 'Close': [rt_price], 'Volume': [rt_vol]}, index=[today_date])
-                hist = pd.concat([hist, new_row])
-            # 如果歷史資料庫已經有今天的日期，就隨時用盤中最新價去更新它
-            elif hist.index[-1].date() == today_date.date():
-                hist.loc[hist.index[-1], 'Close'] = rt_price
-                hist.loc[hist.index[-1], 'Open'] = rt_open
-                hist.loc[hist.index[-1], 'High'] = rt_high
-                hist.loc[hist.index[-1], 'Low'] = rt_low
-                hist.loc[hist.index[-1], 'Volume'] = rt_vol
-                
-            # 同步修正昨收價，確保漲跌幅計算正確
-            info_data['previousClose'] = fallback.get('realtime_prev_close', info_data.get('previousClose'))
-
+                    
+        if rt_prev is not None: info_data['previousClose'] = rt_prev
         return hist, info_data
     return None, None
 
@@ -621,6 +676,10 @@ def get_chart_data(stock_id, timeframe, fugle_key=""):
             df = ticker.history(period=params["period"], interval=params["interval"])
             if not df.empty:
                 if df.index.tz is not None: df.index = df.index.tz_localize(None)
+                
+                if timeframe == "日線": df, _ = inject_realtime_data(df, stock_id, "D")
+                elif timeframe == "週線": df, _ = inject_realtime_data(df, stock_id, "W")
+                elif timeframe == "月線": df, _ = inject_realtime_data(df, stock_id, "M")
                 return df
         except: continue
     return pd.DataFrame()
