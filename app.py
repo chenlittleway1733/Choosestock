@@ -16,7 +16,7 @@ import math
 # ==========================================
 # 0. 網頁基本設定
 # ==========================================
-st.set_page_config(page_title="way系統", layout="wide")
+st.set_page_config(page_title="台股聯網 AI 投資戰情室", layout="wide")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
 # --- 產業對照表 ---
@@ -72,6 +72,7 @@ def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI捉取"
     return s
 
 def clean_html(html_str):
+    # 🚀 終極 HTML 壓縮機：強制把所有斷行和多餘空白壓成一行，徹底解決破圖問題！
     return re.sub(r'[\r\n\t]+', ' ', html_str).strip()
 
 def get_watchlist():
@@ -179,37 +180,44 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
+    
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
-    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」
+    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」(請優先找 {target_year} 年的預測值)
     4. 「股價淨值比 (P/B)」
     5. 「毛利率」
     6. 「營益率」
-    7. 「ROE(股東權益報酬率)」
+    7. 「ROE(股東權益報酬率)」(非常重要，請務必搜尋)
     8. 「最新單月或累計營收年增率(YoY)」
-    9. 「國內外法人最新預估目標價 (Target Price)」
-    10. 「負債權益比 (Debt-to-Equity Ratio)」
+    9. 「國內外法人最新預估目標價 (Target Price)」(請找近期外資或投信給出的目標價平均或最新值)
+    10. 「負債權益比 (Debt-to-Equity Ratio)」(請務必搜尋，評估財務槓桿)
     11. 「最新資料所屬年月或季度 (Data Period)」
 
     必須嚴格回傳包含上述 11 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     格式範例：
     {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "debt_to_equity": 0.45, "data_period": "2024/03"}}
     絕對不要輸出 markdown 標記或其他文字。"""
+    
     payload = {
         "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 (務必找出: 毛利率、營益率、ROE 股東權益報酬率、負債權益比) 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}]
     }
     try:
+        # 🚀 終極超時修復：強制給予 60 秒等待，解決 read timeout=20 問題！
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             clean_text = re.sub(r'```json\n?|```', '', text).strip()
             return json.loads(clean_text)
-    except: pass
+        else:
+            print(f"AI API Error: {res.text}")
+    except Exception as e: 
+        print(f"AI Connection Error: {str(e)}")
     return None
 
 @st.cache_data(ttl=86400)
@@ -253,7 +261,7 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
     payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        response = requests.post(url, headers=headers, json=payload, timeout=60) # 🚀 確保為 60 秒
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             response = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
@@ -270,24 +278,31 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
         else: return f"API 錯誤 ({response.status_code})", []
     except Exception as e: return f"連線異常: {str(e)}", []
 
+# --- 🌍 動態判定今日/明日 ---
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
         tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
         h = tw_time.hour
+        
         if 14 <= h < 22:
-            target_day, time_status = "明日", "<span style='color:gray; font-size:0.9rem;'>(美股現貨尚未開盤，此為昨夜收盤參考)</span>"
+            target_day = "明日"
+            time_status = "<span style='color:gray; font-size:0.9rem;'>(美股現貨尚未開盤，此為昨夜收盤參考)</span>"
         elif h >= 22 or h < 5:
-            target_day, time_status = ("明日" if h >= 22 else "今日"), "<span style='color:#00bfff; font-size:0.9rem;'>(美股現貨與台股夜盤 交易中)</span>"
+            target_day = "明日" if h >= 22 else "今日"
+            time_status = "<span style='color:#00bfff; font-size:0.9rem;'>(美股現貨與台股夜盤 交易中)</span>"
         else:
-            target_day, time_status = "今日", "<span style='color:#00cc66; font-size:0.9rem;'>(美股與夜盤已收盤，為最新結算數據)</span>"
+            target_day = "今日"
+            time_status = "<span style='color:#00cc66; font-size:0.9rem;'>(美股與夜盤已收盤，為最新結算數據)</span>"
 
         tickers = yf.Tickers('^SOX TSM NQ=F EWT')
+        
         def get_price_and_pct(ticker_obj):
             try:
                 hist = ticker_obj.history(period='5d')
                 if len(hist) >= 2:
-                    c, p = float(hist['Close'].iloc[-1]), float(hist['Close'].iloc[-2])
+                    c = float(hist['Close'].iloc[-1])
+                    p = float(hist['Close'].iloc[-2])
                     if not math.isnan(c) and not math.isnan(p) and p != 0: return c, (c - p) / p * 100
             except: pass
             return 0.0, 0.0
@@ -306,6 +321,7 @@ def get_global_market_trend():
         return {"sox_p": sox_price, "sox": sox_pct, "tsm_p": tsm_price, "tsm": tsm_pct, "nq_p": nq_price, "nq": nq_pct, "ewt_p": ewt_price, "ewt": ewt_pct, "trend": trend, "color": color, "target_day": target_day, "time_status": time_status}
     except: return None
 
+# --- 數據獲取引擎 ---
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id, fm_key=""):
     try:
@@ -315,25 +331,17 @@ def get_monthly_revenue(stock_id, fm_key=""):
             json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
             if json_match:
                 raw_json = json_match.group(1)
-                blocks = re.split(r'"yearMonth"', raw_json)[1:] 
-                for block in blocks:
-                    mon_m = re.search(r'^\s*:\s*"(\d{4}/\d{2})"', block)
-                    if not mon_m: continue
-                    mon = mon_m.group(1)
-                    rev_m = re.search(r'"單月營收",\s*"value":\s*"([^"]+)"', block)
-                    yoy_m = re.search(r'"年增率",\s*"value":\s*"([^"]+)"', block)
-                    mom_m = re.search(r'"月增率",\s*"value":\s*"([^"]+)"', block)
-                    if rev_m and yoy_m and mom_m:
-                        try:
-                            rev = float(rev_m.group(1).replace(',', '')) / 100000
-                            yoy = float(yoy_m.group(1).replace('%', '').replace(',', ''))
-                            mom = float(mom_m.group(1).replace('%', '').replace(',', ''))
-                            return pd.DataFrame([{
-                                'Month': mon, 'Revenue': round(rev, 2), 'YoY': yoy, 'MoM': mom
-                            }])
-                        except: pass
-    except Exception as e: 
-        print(f"Yahoo 營收對齊引擎失敗: {e}")
+                mom_m = re.search(r'"月增率",\s*"value":\s*"([+-]?\d+\.?\d*)"', raw_json)
+                yoy_m = re.search(r'"年增率",\s*"value":\s*"([+-]?\d+\.?\d*)"', raw_json)
+                rev_m = re.search(r'"單月營收",\s*"value":\s*"(\d+,?\d*)"', raw_json)
+                mon_m = re.search(r'"yearMonth":\s*"(\d{4}/\d{2})"', raw_json)
+                if mom_m and yoy_m and rev_m and mon_m:
+                    return pd.DataFrame([{
+                        'Month': mon_m.group(1),
+                        'Revenue': round(float(rev_m.group(1).replace(',', '')) / 100000, 2), 
+                        'YoY': float(yoy_m.group(1)), 'MoM': float(mom_m.group(1))
+                    }])
+    except: pass
     
     try:
         today = datetime.date.today()
@@ -381,200 +389,6 @@ def get_pe_pb_data(stock_id, fm_key=""):
     except: pass
     return None
 
-@st.cache_data(ttl=43200)
-def get_finmind_financial_health(stock_id, fm_key=""):
-    try:
-        today = datetime.date.today()
-        start_str = f"{today.year - 2}-01-01" 
-        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockFinancialStatements&data_id={stock_id}&start_date={start_str}"
-        if fm_key: url += f"&token={fm_key}"
-        res = requests.get(url, timeout=15)
-        data = res.json()
-        if data.get('status') == 200 and data.get('data'):
-            df = pd.DataFrame(data['data'])
-            if df.empty: return {}
-            
-            df['date'] = pd.to_datetime(df['date'])
-            dates = sorted(df['date'].unique())
-            latest_date = dates[-1]
-            prev_date = dates[-5] if len(dates) >= 5 else (dates[0] if len(dates)>1 else latest_date)
-            
-            df_latest = df[df['date'] == latest_date]
-            df_prev = df[df['date'] == prev_date]
-            
-            vals_l = {str(row['type']).strip(): row['value'] for _, row in df_latest.iterrows()}
-            vals_p = {str(row['type']).strip(): row['value'] for _, row in df_prev.iterrows()}
-            
-            def get_val(v_dict, *keys):
-                for k in keys:
-                    for v_key in v_dict.keys():
-                        if k in v_key:
-                            try: 
-                                val_str = str(v_dict[v_key]).replace(',', '').replace('%', '')
-                                return float(val_str)
-                            except: pass
-                return 0.0
-                
-            rev_l = get_val(vals_l, '營業收入', '淨收益', '收益')
-            gp_l = get_val(vals_l, '營業毛利', '毛利')
-            op_l = get_val(vals_l, '營業利益')
-            ni_l = get_val(vals_l, '本期淨利', '淨利')
-            ta_l = get_val(vals_l, '資產總計', '資產總額', '資產')
-            tl_l = get_val(vals_l, '負債總')
-            eq_l = get_val(vals_l, '權益總')
-            ca_l = get_val(vals_l, '流動資產')
-            cl_l = get_val(vals_l, '流動負債')
-            ltd_l = get_val(vals_l, '非流動負債', '長期借款')
-            cfo_l = get_val(vals_l, '營業活動之淨現金流入', '營業活動之現金流量', '營業活動之淨現金')
-            if cfo_l == 0: cfo_l = op_l 
-            shares_l = get_val(vals_l, '普通股股本', '股本')
-            
-            rev_p = get_val(vals_p, '營業收入', '淨收益', '收益')
-            gp_p = get_val(vals_p, '營業毛利', '毛利')
-            ni_p = get_val(vals_p, '本期淨利', '淨利')
-            ta_p = get_val(vals_p, '資產總計', '資產總額', '資產')
-            ca_p = get_val(vals_p, '流動資產')
-            cl_p = get_val(vals_p, '流動負債')
-            ltd_p = get_val(vals_p, '非流動負債', '長期借款')
-            shares_p = get_val(vals_p, '普通股股本', '股本')
-            
-            if ta_l <= 0 or ta_p <= 0:
-                return {}
-
-            res_dict = {}
-            if rev_l > 0:
-                res_dict['grossMargins'] = gp_l / rev_l
-                res_dict['operatingMargins'] = op_l / rev_l
-            if eq_l > 0:
-                res_dict['debtToEquity'] = tl_l / eq_l
-                
-            f_score = 0
-            if ta_l > 0 and ta_p > 0:
-                roa_l, roa_p = ni_l / ta_l, ni_p / ta_p
-                if roa_l > 0: f_score += 1                 
-                if cfo_l > 0: f_score += 1                 
-                if roa_l > roa_p: f_score += 1             
-                if cfo_l > ni_l: f_score += 1              
-                if (ltd_l / ta_l) < (ltd_p / ta_p): f_score += 1  
-                cr_l = (ca_l / cl_l) if cl_l > 0 else 0
-                cr_p = (ca_p / cl_p) if cl_p > 0 else 0
-                if cr_l > cr_p: f_score += 1               
-                if shares_l <= shares_p and shares_l > 0: f_score += 1 
-                gm_l = (gp_l / rev_l) if rev_l > 0 else 0
-                gm_p = (gp_p / rev_p) if rev_p > 0 else 0
-                if gm_l > gm_p: f_score += 1               
-                at_l = rev_l / ta_l
-                at_p = rev_p / ta_p
-                if at_l > at_p: f_score += 1               
-                
-            res_dict['f_score'] = f_score
-            return res_dict
-    except Exception as e: 
-        print(f"F-Score 引擎錯誤: {e}")
-    return {}
-
-# 🚀 終極突破：零延遲即時報價引擎 (TWSE官方API + Yahoo即時網頁雙軌備援)
-@st.cache_data(ttl=30)
-def get_realtime_data(stock_id):
-    rt_data = {}
-    # 策略 1: 台灣證券交易所 (TWSE) 官方盤中 API，100% 零延遲
-    try:
-        session = requests.Session()
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        # 必須先取得 Session 才能成功呼叫 API
-        session.get("https://mis.twse.com.tw/stock/index.jsp", headers=headers, timeout=5)
-        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw|otc_{stock_id}.tw"
-        res = session.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            msg_array = data.get('msgArray', [])
-            if msg_array:
-                info = msg_array[0]
-                def p_f(v):
-                    if v == '-' or v is None: return None
-                    try: return float(v)
-                    except: return None
-                
-                rt_price = p_f(info.get('z')) # 最新成交價
-                if rt_price is None: rt_price = p_f(info.get('y')) # 盤前顯示昨收
-                
-                if rt_price is not None:
-                    rt_data['realtime_price'] = rt_price
-                    rt_data['realtime_prev_close'] = p_f(info.get('y'))
-                    rt_data['realtime_open'] = p_f(info.get('o')) or rt_price
-                    rt_data['realtime_high'] = p_f(info.get('h')) or rt_price
-                    rt_data['realtime_low'] = p_f(info.get('l')) or rt_price
-                    rt_data['realtime_volume'] = p_f(info.get('v'))
-                    return rt_data
-    except Exception as e: 
-        print(f"TWSE API 連線異常: {e}")
-
-    # 策略 2: 若 TWSE 忙碌，啟動 Yahoo 網頁即時爬蟲 (免 Cookie 阻擋)
-    try:
-        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            text = res.text
-            def ext_v(field):
-                m = re.search(rf'"{field}"\s*:\s*(?:{{"raw"\s*:\s*)?([+-]?\d+(?:\.\d+)?)', text)
-                if m: return float(m.group(1))
-                return None
-            
-            p = ext_v('regularMarketPrice')
-            if p is not None:
-                rt_data['realtime_price'] = p
-                rt_data['realtime_prev_close'] = ext_v('regularMarketPreviousClose')
-                rt_data['realtime_open'] = ext_v('regularMarketOpen') or p
-                rt_data['realtime_high'] = ext_v('regularMarketDayHigh') or p
-                rt_data['realtime_low'] = ext_v('regularMarketDayLow') or p
-                rt_data['realtime_volume'] = ext_v('regularMarketVolume')
-                return rt_data
-    except Exception as e:
-        print(f"Yahoo Web Scrape 異常: {e}")
-        
-    return rt_data
-
-# 強制將盤中即時數據注入歷史 K 線中，避免被快取卡死
-def inject_realtime_data(hist, stock_id, timeframe="D"):
-    if hist is None or hist.empty: return hist, None
-    rt_data = get_realtime_data(stock_id)
-    rt_price = rt_data.get('realtime_price')
-    rt_prev = rt_data.get('realtime_prev_close')
-    
-    if rt_price is not None and rt_price > 0:
-        today_date = pd.to_datetime(datetime.date.today())
-        rt_open = rt_data.get('realtime_open') or rt_price
-        rt_high = rt_data.get('realtime_high') or rt_price
-        rt_low = rt_data.get('realtime_low') or rt_price
-        rt_vol = rt_data.get('realtime_volume') or 0
-        
-        if hist.index.tz is not None:
-            today_date = today_date.tz_localize(hist.index.tz)
-            
-        if timeframe == "D":
-            # 如果歷史庫還停在昨天，強制插入一根今天的最新 K 棒
-            if hist.index[-1].date() < today_date.date():
-                new_row = pd.DataFrame({
-                    'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
-                    'Close': [rt_price], 'Volume': [rt_vol]
-                }, index=[today_date])
-                new_row = new_row[hist.columns] # 對齊欄位
-                hist = pd.concat([hist, new_row])
-            # 如果已經是今天的 K 棒，強制用盤中最新價蓋過去
-            elif hist.index[-1].date() == today_date.date():
-                hist.loc[hist.index[-1], 'Close'] = rt_price
-                hist.loc[hist.index[-1], 'Open'] = rt_open
-                hist.loc[hist.index[-1], 'High'] = max(hist.loc[hist.index[-1], 'High'], rt_high)
-                hist.loc[hist.index[-1], 'Low'] = min(hist.loc[hist.index[-1], 'Low'], rt_low)
-                if rt_vol > 0: hist.loc[hist.index[-1], 'Volume'] = rt_vol
-        elif timeframe in ["W", "M"]:
-            hist.loc[hist.index[-1], 'Close'] = rt_price
-            if rt_high > hist.loc[hist.index[-1], 'High']: hist.loc[hist.index[-1], 'High'] = rt_high
-            if rt_low < hist.loc[hist.index[-1], 'Low']: hist.loc[hist.index[-1], 'Low'] = rt_low
-            
-    return hist, rt_prev
-
 def get_fallback_info(stock_id):
     info = {}
     try:
@@ -587,7 +401,7 @@ def get_fallback_info(stock_id):
         if json_match:
             data_str = json_match.group(1)
             def ext_val(key, is_pct=False):
-                m = re.search(rf'"{key}"\s*:\s*(?:{{"raw"\s*:\s*)?"?([+-]?\d+(?:\.\d+)?)"?', data_str)
+                m = re.search(f'"{key}"\s*:\s*"?([+-]?\d+(?:\.\d+)?)"?', data_str)
                 if m:
                     val = float(m.group(1))
                     return val / 100.0 if is_pct else val
@@ -596,6 +410,14 @@ def get_fallback_info(stock_id):
             info['priceToBook'] = ext_val('pbRatio') or ext_val('priceToBook')
             info['trailingEps'] = ext_val('eps') or ext_val('trailingEps')
             info['dividendYield'] = ext_val('dividendYield', True)
+            
+            # 🚀 升級：加裝「盤中即時報價攔截器」
+            info['realtime_price'] = ext_val('regularMarketPrice')
+            info['realtime_prev_close'] = ext_val('regularMarketPreviousClose')
+            info['realtime_open'] = ext_val('regularMarketOpen')
+            info['realtime_high'] = ext_val('regularMarketDayHigh')
+            info['realtime_low'] = ext_val('regularMarketDayLow')
+            info['realtime_volume'] = ext_val('regularMarketVolume')
 
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
@@ -623,6 +445,104 @@ def get_fallback_info(stock_id):
         if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
     except: pass
     return info
+
+# 🚀 終極即時報價攔截引擎 (官方 API 零延遲)
+@st.cache_data(ttl=30)
+def get_realtime_data(stock_id):
+    rt_data = {}
+    # 策略 1: 台灣證券交易所 (TWSE) 官方盤中 API，100% 零延遲
+    try:
+        session = requests.Session()
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        session.get("https://mis.twse.com.tw/stock/index.jsp", headers=headers, timeout=5)
+        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw|otc_{stock_id}.tw"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            msg_array = data.get('msgArray', [])
+            if msg_array:
+                info = msg_array[0]
+                def p_f(v):
+                    if v == '-' or v is None: return None
+                    try: return float(v)
+                    except: return None
+                
+                rt_price = p_f(info.get('z'))
+                if rt_price is None: rt_price = p_f(info.get('y'))
+                
+                if rt_price is not None:
+                    rt_data['realtime_price'] = rt_price
+                    rt_data['realtime_prev_close'] = p_f(info.get('y'))
+                    rt_data['realtime_open'] = p_f(info.get('o')) or rt_price
+                    rt_data['realtime_high'] = p_f(info.get('h')) or rt_price
+                    rt_data['realtime_low'] = p_f(info.get('l')) or rt_price
+                    rt_data['realtime_volume'] = p_f(info.get('v'))
+                    return rt_data
+    except Exception as e: 
+        pass
+
+    # 策略 2: 若 TWSE 忙碌，啟動 Yahoo 網頁即時爬蟲 (免 Cookie 阻擋)
+    try:
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            text = res.text
+            def ext_v(field):
+                m = re.search(rf'"{field}"\s*:\s*(?:{{"raw"\s*:\s*)?([+-]?\d+(?:\.\d+)?)', text)
+                if m: return float(m.group(1))
+                return None
+            
+            p = ext_v('regularMarketPrice')
+            if p is not None:
+                rt_data['realtime_price'] = p
+                rt_data['realtime_prev_close'] = ext_v('regularMarketPreviousClose')
+                rt_data['realtime_open'] = ext_v('regularMarketOpen') or p
+                rt_data['realtime_high'] = ext_v('regularMarketDayHigh') or p
+                rt_data['realtime_low'] = ext_v('regularMarketDayLow') or p
+                rt_data['realtime_volume'] = ext_v('regularMarketVolume')
+                return rt_data
+    except Exception as e:
+        pass
+        
+    return rt_data
+
+def inject_realtime_data(hist, stock_id, timeframe="D"):
+    if hist is None or hist.empty: return hist, None
+    rt_data = get_realtime_data(stock_id)
+    rt_price = rt_data.get('realtime_price')
+    rt_prev = rt_data.get('realtime_prev_close')
+    
+    if rt_price is not None and rt_price > 0:
+        today_date = pd.to_datetime(datetime.date.today())
+        rt_open = rt_data.get('realtime_open') or rt_price
+        rt_high = rt_data.get('realtime_high') or rt_price
+        rt_low = rt_data.get('realtime_low') or rt_price
+        rt_vol = rt_data.get('realtime_volume') or 0
+        
+        if hist.index.tz is not None:
+            today_date = today_date.tz_localize(hist.index.tz)
+            
+        if timeframe == "D":
+            if hist.index[-1].date() < today_date.date():
+                new_row = pd.DataFrame({
+                    'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
+                    'Close': [rt_price], 'Volume': [rt_vol]
+                }, index=[today_date])
+                # 🚀 刪除這行會導致 KeyError 的欄位對齊： new_row = new_row[hist.columns]
+                hist = pd.concat([hist, new_row])
+            elif hist.index[-1].date() == today_date.date():
+                hist.loc[hist.index[-1], 'Close'] = rt_price
+                hist.loc[hist.index[-1], 'Open'] = rt_open
+                hist.loc[hist.index[-1], 'High'] = max(hist.loc[hist.index[-1], 'High'], rt_high)
+                hist.loc[hist.index[-1], 'Low'] = min(hist.loc[hist.index[-1], 'Low'], rt_low)
+                if rt_vol > 0: hist.loc[hist.index[-1], 'Volume'] = rt_vol
+        elif timeframe in ["W", "M"]:
+            hist.loc[hist.index[-1], 'Close'] = rt_price
+            if rt_high > hist.loc[hist.index[-1], 'High']: hist.loc[hist.index[-1], 'High'] = rt_high
+            if rt_low < hist.loc[hist.index[-1], 'Low']: hist.loc[hist.index[-1], 'Low'] = rt_low
+            
+    return hist, rt_prev
 
 # 🚀 隔離快取層：讓歷史資料只抓一次，但盤中資料隨時注入
 @st.cache_data(ttl=3600)
@@ -671,7 +591,6 @@ def get_stock_data(stock_id, fugle_key="", fm_key=""):
         hist = hist.copy() # 避免污染快取
         info_data = info_data.copy()
         
-        # 把即時報價硬塞進去！
         hist, rt_prev = inject_realtime_data(hist, stock_id, "D")
         if rt_prev is not None: info_data['previousClose'] = rt_prev
         
@@ -706,6 +625,7 @@ def get_chart_data(stock_id, timeframe, fugle_key=""):
         elif timeframe == "月線": df, _ = inject_realtime_data(df, stock_id, "M")
     return df
 
+# 🌟 取得法人買賣超資料 (修復邏輯，並印出 debug)
 @st.cache_data(ttl=43200)
 def get_inst_data(stock_id, fm_key=""):
     try:
@@ -742,7 +662,10 @@ def get_inst_data(stock_id, fm_key=""):
                 res_df['Trust'] = pivot_df[t_cols].sum(axis=1) if t_cols else 0
                 res_df['Dealer'] = pivot_df[d_cols].sum(axis=1) if d_cols else 0
                 return res_df / 1000 
-    except: pass
+            else:
+                pass
+    except Exception as e: 
+        pass
     return pd.DataFrame()
 
 @st.cache_data(ttl=60)
@@ -864,22 +787,25 @@ with st.sidebar:
     uploaded_key_file = st.file_uploader("📂 上傳 key.txt 自動填入", type=["txt"], help="請上傳包含 GEMINI_KEY, FUGLE_KEY, FINMIND_KEY 的純文字檔")
     if uploaded_key_file is not None:
         content = uploaded_key_file.getvalue().decode("utf-8")
-        clean_content = re.sub(r'\s+', '', content)
         keys_loaded = 0
-        m_gemini = re.search(r'GEMINI_KEY=(.*?)(?:FUGLE_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
-        m_fugle = re.search(r'FUGLE_KEY=(.*?)(?:GEMINI_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
-        m_finmind = re.search(r'FINMIND_KEY=(.*?)(?:GEMINI_KEY|FUGLE_KEY|$)', clean_content, re.IGNORECASE)
-        
-        if m_gemini and m_gemini.group(1):
-            st.session_state.api_key = m_gemini.group(1)
-            keys_loaded += 1
-        if m_fugle and m_fugle.group(1):
-            st.session_state.fugle_key = m_fugle.group(1)
-            keys_loaded += 1
-        if m_finmind and m_finmind.group(1):
-            st.session_state.finmind_key = m_finmind.group(1)
-            keys_loaded += 1
-            
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"): continue
+            if "=" in line:
+                k, v = line.split("=", 1)
+                k = k.strip().upper()
+                v = v.strip() 
+                
+                if "GEMINI" in k and v: 
+                    st.session_state.api_key = v
+                    keys_loaded += 1
+                elif "FUGLE" in k and v: 
+                    st.session_state.fugle_key = v
+                    keys_loaded += 1
+                elif "FINMIND" in k and v: 
+                    st.session_state.finmind_key = v
+                    keys_loaded += 1
+                    
         if keys_loaded > 0:
             st.success(f"✅ 成功載入 {keys_loaded} 組金鑰！密碼框已自動填滿，請點擊下方「🔄 重新整理快取」套用。")
         else:
@@ -1152,7 +1078,7 @@ if curr_id:
         sys_f_eps = s_float(info.get('forwardEps'))
 
         if pe_ratio is None and t_eps is None and not st.session_state.ai_fetched_financials.get(curr_id):
-            st.warning("⚠️ **全球連線受阻**：目前免費資料庫 (Yahoo) 正全面封鎖台灣股票的財報抓取，下方部分前瞻數據將顯示為 N/A。👉 **解決方案**：請點擊上方【🪄 啟動 AI 全方位校對與補齊財報】讓 AI 強制為您抓回最新外資預估！")
+            st.warning("⚠️ **全球連線受阻**：目前免費資料庫 (Yahoo) 正全面封鎖台灣股票的財報抓取，導致下方基礎財報顯示為 N/A 或無資料。👉 **解決方案**：請點擊上方【🪄 啟動 AI 全方位校對與補齊財報】讓 AI 強制為您抓回最新數據！")
         
         ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
         ai_pe = s_float(ai_fin.get('pe'))
@@ -1212,10 +1138,14 @@ if curr_id:
             suggested_cap = 30.0
             cap_reason = "預設 30x (無毛利率數據)"
             if eff_gm is not None:
-                if eff_gm >= 0.50: suggested_cap, cap_reason = 40.0, "建議 40x (高毛利>50%: 軟體/IP/專利壟斷)"
-                elif eff_gm >= 0.30: suggested_cap, cap_reason = 30.0, "建議 30x (中高毛利>30%: 高階零組件/利基型)"
-                elif eff_gm >= 0.15: suggested_cap, cap_reason = 20.0, "建議 20x (穩健毛利>15%: 傳統優質硬體/代工)"
-                else: suggested_cap, cap_reason = 15.0, "建議 15x (低毛利<15%: 紅海競爭/純組裝)"
+                if eff_gm >= 0.50:
+                    suggested_cap, cap_reason = 40.0, "建議 40x (高毛利>50%: 軟體/IP/專利壟斷)"
+                elif eff_gm >= 0.30:
+                    suggested_cap, cap_reason = 30.0, "建議 30x (中高毛利>30%: 高階零組件/利基型)"
+                elif eff_gm >= 0.15:
+                    suggested_cap, cap_reason = 20.0, "建議 20x (穩健毛利>15%: 傳統優質硬體/代工)"
+                else:
+                    suggested_cap, cap_reason = 15.0, "建議 15x (低毛利<15%: 紅海競爭/純組裝)"
             
             summary_text = info.get('longBusinessSummary', '') + c_name + info.get('industry', '') + sector_disp
             ai_keywords = ["AI", "伺服器", "CoWoS", "矽光子", "散熱", "CPO", "先進封裝", "半導體設備", "水冷", "ASIC", "資料中心", "輝達", "Nvidia"]
@@ -1241,27 +1171,29 @@ if curr_id:
             eff_forward_pe = curr_p / eff_f_eps if eff_f_eps > 0 else None
             eff_peg = eff_forward_pe / (eff_cg * 100) if eff_forward_pe and eff_cg and eff_cg > 0 else None
             
-            if eff_f_eps is not None and target_pe_cap is not None:
-                sys_target_price_est = eff_f_eps * target_pe_cap
-                is_capped = True
+            if eff_f_eps is not None and eff_cg is not None and eff_cg > 0:
+                raw_mult = (eff_cg * 100) * target_peg_adj
+                capped_mult = min(raw_mult, target_pe_cap)
+                sys_target_price_est = eff_f_eps * capped_mult
+                is_capped = raw_mult > target_pe_cap
             else:
                 sys_target_price_est = None; is_capped = False
                 
-            extreme_target_price = sys_target_price_est
+            extreme_target_price = eff_f_eps * target_pe_cap if eff_f_eps is not None else None
             
             eg_str_disp = f"{eff_cg * 100:.2f}%" if eff_cg is not None else "N/A"
-            if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
+            if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟ٹی低基期防護(分母=0.5)</span>"
             eg_color = "#ff4d4d" if eff_cg and eff_cg > 0 else ("#00cc66" if eff_cg and eff_cg < 0 else "gray")
             
             eps_source_text = f"自訂法人共識 ({eff_f_eps:.2f}元)"
             peg_str_disp = f"{eff_peg:.2f}" if eff_peg is not None else "N/A"
             fpe_str = f"{eff_forward_pe:.1f}x" if eff_forward_pe is not None else "N/A"
-            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_suffix)
-            f_eps_display = build_cmp_dual_str(t_eps, eff_f_eps, ai_t_eps, None, 'num', 'num', ai_suffix)
+            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x')
+            f_eps_display = build_cmp_dual_str(t_eps, eff_f_eps, ai_t_eps, None, 'num', 'num', 'AI捉取')
         else:
             eff_f_eps = sys_f_eps_calc if sys_f_eps_calc is not None else ai_f_eps_calc
             eps_source_text = f"海外系統或反推 ({eff_f_eps:.2f}元)" if eff_f_eps is not None else "系統預估 (無資料)"
-            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', ai_suffix)
+            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推/捉')
             
             sys_forward_pe = s_float(info.get('forwardPE'))
             if sys_forward_pe is None and eff_f_eps is not None and eff_f_eps > 0: sys_forward_pe = curr_p / eff_f_eps
@@ -1285,30 +1217,32 @@ if curr_id:
             eff_peg = orig_peg if orig_peg is not None else ai_peg
             if real_cg is not None and real_cg <= 0: eff_peg = -999
             
-            if eff_f_eps is not None and target_pe_cap is not None:
-                sys_target_price_est = eff_f_eps * target_pe_cap
-                is_capped = True
+            if eff_f_eps is not None and real_cg is not None and real_cg > 0:
+                raw_mult = (real_cg * 100) * target_peg_adj
+                capped_mult = min(raw_mult, target_pe_cap)
+                sys_target_price_est = eff_f_eps * capped_mult
+                is_capped = raw_mult > target_pe_cap
             else:
                 sys_target_price_est = None; is_capped = False
                 
-            extreme_target_price = sys_target_price_est
+            extreme_target_price = eff_f_eps * target_pe_cap if eff_f_eps is not None else None
             
-            eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', ai_suffix)
+            eg_str_disp = build_cmp_str(real_cg, ai_yoy, 'pct', 'AI推算')
             if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
             eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
             
             orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if real_cg is not None and real_cg <= 0 else "N/A")
-            peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_peg:.2f}, {ai_suffix})</span>" if ai_peg is not None else orig_peg_str
+            peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_peg:.2f}, AI反推)</span>" if ai_peg is not None else orig_peg_str
             
             orig_fpe_str = f"{sys_forward_pe:.1f}x" if sys_forward_pe is not None else "N/A"
-            fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_fpe:.1f}x, {ai_suffix})</span>" if ai_fpe is not None else orig_fpe_str
+            fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_fpe:.1f}x, AI反推)</span>" if ai_fpe is not None else orig_fpe_str
             
-            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_suffix)
+            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x')
 
-        rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct', ai_suffix)
-        gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', ai_suffix)
-        roe_str = build_cmp_str(roe, ai_roe, 'pct', ai_suffix)
-        de_str = build_cmp_str(sys_de, ai_de, 'pct', ai_suffix)
+        rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct')
+        gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', 'AI捉取')
+        roe_str = build_cmp_str(roe, ai_roe, 'pct', 'AI推算')
+        de_str = build_cmp_str(sys_de, ai_de, 'pct')
         
         rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
         roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳 (已透過恆等式校正)'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
@@ -1343,15 +1277,20 @@ if curr_id:
             elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
             else: peg_color, peg_text = "#FFD700", "合理區間"
 
-        pb_str = build_cmp_str(pb_ratio, ai_pb, 'x', ai_suffix)
+        pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
         
         if sys_target_price_est:
             cap_warning_html = ""
-            if curr_p > sys_target_price_est: cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>🚨 股價超漲警示：目前股價已超越極限高空價，追高風險極大！</span>"
-            target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🚀 <span style='color:#ff4d4d; font-weight:bold;'>極限高空價 (Forward EPS × Cap): <span style='font-size:1.2rem;'>{extreme_target_price:.1f}元</span></span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] 帶入 EPS: {eff_f_eps:.2f} | 帶入 Cap: {target_pe_cap:.0f}x</small></div>{cap_warning_html}</div>"
+            if is_capped:
+                cap_msg = f"🚨 已觸發封頂防護 ({target_pe_cap:.0f}x)，PEG 推算被天花板壓制"
+                if curr_p > extreme_target_price: cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}<br>股價超漲警示：目前股價已超越極限高空價，追高風險極大！</span>"
+                else: cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}</span>"
+            
+            target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理估值 (PEG 推算): <b style='color:#FFD700; font-size:1.1rem;'>{sys_target_price_est:.1f}元</b><br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>極限高空價 (Forward EPS × Cap): <span style='font-size:1.2rem;'>{extreme_target_price:.1f}元</span></span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] 帶入 EPS: {eff_f_eps:.2f} | 帶入 Cap: {target_pe_cap:.0f}x</small></div>{cap_warning_html}</div>"
         else:
             target_price_html = ""
 
+        # 🚀 完美壓扁 HTML，防 Streamlit Markdown 破圖
         val_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
@@ -1388,14 +1327,11 @@ if curr_id:
         """
         st.markdown(clean_html(val_html), unsafe_allow_html=True)
         
-        mom_color = "#ff4d4d" if latest_mom_val is not None and latest_mom_val > 0 else ("#00cc66" if latest_mom_val is not None and latest_mom_val < 0 else "#fff")
-        mom_str_disp = f"<br><span style='font-size:1rem; color:{mom_color};'>MoM: {latest_mom_val:.2f}%</span>" if latest_mom_val is not None else ""
-
         fund_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>歷史本益比 (P/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{pe_str}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>EPS (目前 / 預估)</div><div style='font-size:1.3rem; font-weight:bold; color:#FFD700;'>{f_eps_display}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收成長率<br><span style='font-size:0.75rem; color:#888;'>({latest_rev_month})</span></div><div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}{mom_str_disp}</div></div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收年增率 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>預估獲利成長 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{eg_color};'>{eg_str_disp}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>毛利率 / 營益率</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{gm_om_str}</div></div>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>ROE (恆等式校正)</div><div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{roe_str}{roe_eval}</div></div>
@@ -1418,7 +1354,7 @@ if curr_id:
             recent_high_120 = hist['High'].tail(120).max()
             price_near_high = curr_p >= (recent_high_120 * 0.9)
             if last_mom < 0 and prev_mom < 0 and price_near_high:
-                 anomaly_html += f"<div style='background:linear-gradient(90deg, #b8860b 0%, #ff8c00 100%); color:white; padding:12px; border-radius:8px; margin-bottom:10px; font-weight:bold;'>🚸【量價背離風險】 近兩月營收連續衰退 (最新 MoM: {last_mom:.2f}%)，但股價仍高掛在近半年高檔區，請嚴防主力拉高出貨！</div>"
+                 anomaly_html += f"<div style='background:linear-gradient(90deg, #b8860b 0%, #ff8c00 100%); color:white; padding:12px; border-radius:8px; margin-bottom:10px; font-weight:bold;'>🚸【量價背離風險】 近兩月營收連續衰退 (最新 MoM: {last_mom}%)，但股價仍高掛在近半年高檔區，請嚴防主力拉高出貨！</div>"
 
         if anomaly_html == "":
             anomaly_html = "<div style='background:#1e1e1e; color:#00cc66; padding:12px; border-radius:8px; border:1px solid #333;'>✅ 目前未偵測到極端高估 (P/B>10) 或營收背離風險，數據處於相對常態範圍。</div>"
@@ -1431,8 +1367,6 @@ if curr_id:
         if div_yield is not None and div_yield > 0.3: div_yield = div_yield / 100.0
 
         fcf = s_float(info.get('freeCashflow'))
-        if fcf is None and fm_health.get('cfo_l'): fcf = fm_health.get('cfo_l')
-            
         current_ratio = s_float(info.get('currentRatio'))
 
         dy_str = to_pct(div_yield)
@@ -1491,7 +1425,9 @@ if curr_id:
         st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
         st.markdown("---")
 
+        # ==========================================
         # 🚀 法人預估目標價
+        # ==========================================
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
         lo_val = s_float(info.get('targetLowPrice'))
@@ -1519,7 +1455,9 @@ if curr_id:
              st.markdown("<span style='color:gray;'>系統與 AI 目前皆無明確的法人目標價資料。</span>", unsafe_allow_html=True)
              st.markdown("---")
 
+        # ==========================================
         # 🚀 主力籌碼追蹤雷達
+        # ==========================================
         st.markdown("#### 📡 主力籌碼追蹤雷達 (聰明錢動向與背離陷阱)", unsafe_allow_html=True)
         inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
         
@@ -1566,7 +1504,9 @@ if curr_id:
                 st.warning("⚠️ 此檔股票近期無三大法人買賣超數據，無法啟動籌碼雷達。")
         st.markdown("---")
 
+        # ==========================================
         # 🚀 籌碼面與股權結構分析
+        # ==========================================
         st.markdown("#### 🐳 內部人與控盤主力推估", unsafe_allow_html=True)
         insider_pct = s_float(info.get('heldPercentInsiders'))
         inst_pct = s_float(info.get('heldPercentInstitutions'))
@@ -1618,7 +1558,9 @@ if curr_id:
         st.markdown(clean_html(chip_html), unsafe_allow_html=True)
         st.markdown("---")
 
+        # ==========================================
         # 🚀 AI 綜合產業報告與打包提示詞
+        # ==========================================
         hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
         me_str = f"{me_val:.1f}" if me_val else "無資料"
         lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
@@ -1715,7 +1657,7 @@ if curr_id:
 
         col_ai1, col_ai2 = st.columns([1.2, 1])
         with col_ai1:
-            if st.button("🤖 啟動 AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
+            if st.button("🤖 啟 পণ্ডিত AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
                 if not st.session_state.api_key: st.warning("請先於左側選單輸入您的 API Key。")
                 else:
                     with st.spinner(f"AI ({st.session_state.get('selected_model', 'gemini-2.5-flash')}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
@@ -1741,7 +1683,9 @@ if curr_id:
             
         st.markdown("---")
 
+        # ==========================================
         # ⚔️ 產業同業 PK
+        # ==========================================
         if st.session_state.show_pk:
             st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
             st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
@@ -1787,7 +1731,9 @@ if curr_id:
                 else: st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
             st.markdown("---")
 
+        # ==========================================
         # 🌊 雙河流圖 (Tabs) 
+        # ==========================================
         if df_per_bk is not None and not df_per_bk.empty:
             st.markdown("### 🌊 估值位階雙河流圖 (P/E & P/B River)")
             st.markdown("<small style='color:gray;'>*實戰密技：『成長股』看本益比判斷潛力；『景氣循環股』(航運/鋼鐵/面板) 獲利不穩定，必須看淨值比(P/B)河流圖抄底！*</small>", unsafe_allow_html=True)
@@ -1878,7 +1824,9 @@ if curr_id:
                         st.info("缺乏足夠的淨值比數據。")
         st.markdown("---")
 
+        # ==========================================
         # 🚀 專業技術線圖與 KD 指標
+        # ==========================================
         st.markdown("### 🤖 專業技術線圖與量化型態分析")
         
         chart_tf = st.radio("切換 K 線週期：", ["60分線", "日線", "週線", "月線"], index=1, horizontal=True)
@@ -1911,6 +1859,7 @@ if curr_id:
         
         plot_df = full_df.tail(120).copy()
         
+        inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
         if not inst_df.empty:
             temp_dates = pd.to_datetime(plot_df.index).normalize()
             inst_df_aligned = inst_df.copy()
