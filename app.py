@@ -609,7 +609,6 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
             
         if timeframe == "D":
             if hist.index[-1].date() < today_date.date():
-                # 🚀 強制建立正確的 Date Index 避免 KeyError
                 new_row = pd.DataFrame({
                     'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
                     'Close': [rt_price], 'Volume': [rt_vol]
@@ -626,7 +625,6 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
             if rt_high > hist.loc[hist.index[-1], 'High']: hist.loc[hist.index[-1], 'High'] = rt_high
             if rt_low < hist.loc[hist.index[-1], 'Low']: hist.loc[hist.index[-1], 'Low'] = rt_low
             
-    # 🚀 終極防護：不管前面發生什麼事，強制保證索引叫 Date
     hist.index.name = 'Date'
     return hist, rt_prev
 
@@ -662,7 +660,7 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
         except: pass
 
     if hist is not None and not hist.empty:
-        hist.index.name = 'Date' # 快取底層鎖定
+        hist.index.name = 'Date'
         fallback = get_fallback_info(stock_id)
         for k, v in fallback.items():
             if v is not None:
@@ -1456,8 +1454,6 @@ if curr_id:
         if div_yield is not None and div_yield > 0.3: div_yield = div_yield / 100.0
 
         fcf = s_float(info.get('freeCashflow'))
-        if fcf is None and fm_health.get('cfo_l'): fcf = fm_health.get('cfo_l')
-            
         current_ratio = s_float(info.get('currentRatio'))
 
         dy_str = to_pct(div_yield)
@@ -1899,7 +1895,7 @@ if curr_id:
                         current_pb = merged_pb['PBR'].iloc[-1]
                         current_price_pb = merged_pb['Close'].iloc[-1]
                         
-                        if current_price_pb <= pb2.iloc[-1]: pb_status, status_color_pb = "⚓ 跌入歷史低估淨值區！(循環股潛在買點)", "#00cc66"
+                        if current_price_pb <= pb2.iloc[-1]: pb_status, status_color_pb = "⚓ 跌入歷史低估淨值區！(循環股潛買點)", "#00cc66"
                         elif current_price_pb >= pb5.iloc[-1]: pb_status, status_color_pb = "🚨 突破歷史瘋狂淨值區！(極度高估)", "#ff4d4d"
                         elif current_price_pb >= pb4.iloc[-1]: pb_status, status_color_pb = "⚠️ 處於歷史高估淨值區！(留意風險)", "#ff8c00"
                         else: pb_status, status_color_pb = "⚖️ 處於歷史合理淨值區", "#FFD700"
@@ -1913,7 +1909,9 @@ if curr_id:
                         st.info("缺乏足夠的淨值比數據。")
         st.markdown("---")
 
+        # ==========================================
         # 🚀 專業技術線圖與 KD 指標
+        # ==========================================
         st.markdown("### 🤖 專業技術線圖與量化型態分析")
         
         chart_tf = st.radio("切換 K 線週期：", ["60分線", "日線", "週線", "月線"], index=1, horizontal=True)
@@ -2005,13 +2003,39 @@ if curr_id:
         </div>
         """.replace('\n', ''), unsafe_allow_html=True)
         
+        # 🚀 升級 1：仿 Yahoo 股市的 MA 數值動態看板
+        def get_ma_trend(ma_series):
+            if len(ma_series) < 2 or pd.isna(ma_series.iloc[-1]): return 0.0, "-", "#aaa"
+            last_val = ma_series.iloc[-1]
+            prev_val = ma_series.iloc[-2]
+            if last_val > prev_val: return last_val, "▲", "#ff4d4d"
+            elif last_val < prev_val: return last_val, "▼", "#00cc66"
+            return last_val, "-", "#aaa"
+            
+        m5_v, m5_d, m5_c = get_ma_trend(plot_df['MA5'])
+        m10_v, m10_d, m10_c = get_ma_trend(plot_df['MA10'])
+        m20_v, m20_d, m20_c = get_ma_trend(plot_df['MA20'])
+        m60_v, m60_d, m60_c = get_ma_trend(plot_df['MA60'])
+
+        ma_html = f"""
+        <div style='display: flex; gap: 20px; font-size: 1.05rem; padding: 10px 15px; background: #1e1e1e; border-radius: 8px; border: 1px solid #333; margin-bottom: 10px; flex-wrap: wrap; align-items: center;'>
+            <div style='color: #fff;'><span style='color: #00bfff; font-size:1.2rem; vertical-align:middle;'>■</span> <b>MA5</b> {m5_v:.2f} <span style='color:{m5_c}; font-size:0.9rem;'>{m5_d}</span></div>
+            <div style='color: #fff;'><span style='color: #ab82ff; font-size:1.2rem; vertical-align:middle;'>■</span> <b>MA10</b> {m10_v:.2f} <span style='color:{m10_c}; font-size:0.9rem;'>{m10_d}</span></div>
+            <div style='color: #fff;'><span style='color: #ff8c00; font-size:1.2rem; vertical-align:middle;'>■</span> <b>MA20</b> {m20_v:.2f} <span style='color:{m20_c}; font-size:0.9rem;'>{m20_d}</span></div>
+            <div style='color: #fff;'><span style='color: #ffd700; font-size:1.2rem; vertical-align:middle;'>■</span> <b>MA60</b> {m60_v:.2f} <span style='color:{m60_c}; font-size:0.9rem;'>{m60_d}</span></div>
+        </div>
+        """
+        st.markdown(clean_html(ma_html), unsafe_allow_html=True)
+        
         fig_k = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]])
         
         fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='5MA', line=dict(color='#00bfff', width=1.5)), row=1, col=1, secondary_y=False)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='10MA', line=dict(color='#ab82ff', width=1.5)), row=1, col=1, secondary_y=False)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='20MA', line=dict(color='#ff8c00', width=1.5)), row=1, col=1, secondary_y=False)
-        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='60MA', line=dict(color='#ffd700', width=1.5)), row=1, col=1, secondary_y=False)
+        
+        # 🚀 升級 2：將 5日線 (MA5) 加粗至 2.5，其他微調為 1.8 確保不搶戲
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='5MA', line=dict(color='#00bfff', width=2.5)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='10MA', line=dict(color='#ab82ff', width=1.8)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='20MA', line=dict(color='#ff8c00', width=1.8)), row=1, col=1, secondary_y=False)
+        fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='60MA', line=dict(color='#ffd700', width=1.8)), row=1, col=1, secondary_y=False)
         
         vol_colors = ['#ff4d4d' if c >= o else '#00cc66' for c, o in zip(plot_df['Close'], plot_df['Open'])]
         fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
