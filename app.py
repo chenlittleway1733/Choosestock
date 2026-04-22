@@ -186,23 +186,21 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
-    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」(請優先找 {target_year} 年的預測值)
+    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」
     4. 「股價淨值比 (P/B)」
     5. 「毛利率」
     6. 「營益率」
-    7. 「ROE(股東權益報酬率)」(非常重要，請務必搜尋)
+    7. 「ROE(股東權益報酬率)」
     8. 「最新單月或累計營收年增率(YoY)」
-    9. 「國內外法人最新預估目標價 (Target Price)」(請找近期外資或投信給出的目標價平均或最新值)
-    10. 「負債權益比 (Debt-to-Equity Ratio)」(請務必搜尋，評估財務槓桿)
+    9. 「國內外法人最新預估目標價 (Target Price)」
+    10. 「負債權益比 (Debt-to-Equity Ratio)」
     11. 「最新資料所屬年月或季度 (Data Period)」
 
-    必須嚴格回傳包含上述 11 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
-    格式範例：
-    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "debt_to_equity": 0.45, "data_period": "2024/03"}}
+    必須嚴格回傳包含上述 11 個欄位的 JSON 格式。百分比請轉換為小數，數值請直接輸出數字。若查無資料，該欄位請填 null。
     絕對不要輸出 markdown 標記或其他文字。"""
     
     payload = {
-        "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 (務必找出: 毛利率、營益率、ROE 股東權益報酬率、負債權益比) 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
+        "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}]
     }
@@ -232,7 +230,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
 def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
-    system_prompt = """你是一位精通台股的資深產業分析師與操盤手。請針對目標公司的最新動態、財報與法說會提供分析。必須包含：1. 產業前景、2. 競爭優勢、3. 總體經濟與地緣政治系統風險評估(如中東局勢、通膨、關稅對該公司的近期影響)、4. 具體買賣點策略。請用 Markdown 格式與 Emoji。不要輸出 HTML。"""
+    system_prompt = """你是一位精通台股的資深產業分析師與操盤手。請針對目標公司的最新動態提供深度分析，包含產業前景、競爭優勢、系統風險及買賣點策略。請用 Markdown 格式與 Emoji。不要輸出 HTML。"""
     payload = {"contents": [{"parts": [{"text": f"請深度分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}]}
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
@@ -253,7 +251,7 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     api_key = api_key.strip()
     headers = {"Content-Type": "application/json"}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-    system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。確保代號為純數字。"""
+    system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。"""
     payload = {"contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}, "tools": [{"google_search": {}}], "generationConfig": {"responseMimeType": "application/json"}}
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -316,32 +314,6 @@ def get_global_market_trend():
 
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id, fm_key=""):
-    try:
-        y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
-        y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-        if y_res.status_code == 200:
-            json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
-            if json_match:
-                raw_json = json_match.group(1)
-                blocks = re.split(r'"yearMonth"', raw_json)[1:] 
-                for block in blocks:
-                    mon_m = re.search(r'^\s*:\s*"(\d{4}/\d{2})"', block)
-                    if not mon_m: continue
-                    mon = mon_m.group(1)
-                    rev_m = re.search(r'"單月營收",\s*"value":\s*"([^"]+)"', block)
-                    yoy_m = re.search(r'"年增率",\s*"value":\s*"([^"]+)"', block)
-                    mom_m = re.search(r'"月增率",\s*"value":\s*"([^"]+)"', block)
-                    if rev_m and yoy_m and mom_m:
-                        try:
-                            rev = float(rev_m.group(1).replace(',', '')) / 100000
-                            yoy = float(yoy_m.group(1).replace('%', '').replace(',', ''))
-                            mom = float(mom_m.group(1).replace('%', '').replace(',', ''))
-                            return pd.DataFrame([{
-                                'Month': mon, 'Revenue': round(rev, 2), 'YoY': yoy, 'MoM': mom
-                            }])
-                        except: pass
-    except: pass
-    
     try:
         today = datetime.date.today()
         start_str = f"{today.year - 2}-{today.month:02d}-01"
@@ -416,9 +388,7 @@ def get_finmind_financial_health(stock_id, fm_key=""):
                 for k in keys:
                     for v_key in v_dict.keys():
                         if k in v_key:
-                            try: 
-                                val_str = str(v_dict[v_key]).replace(',', '').replace('%', '')
-                                return float(val_str)
+                            try: return float(str(v_dict[v_key]).replace(',', '').replace('%', ''))
                             except: pass
                 return 0.0
                 
@@ -445,15 +415,13 @@ def get_finmind_financial_health(stock_id, fm_key=""):
             ltd_p = get_val(vals_p, '非流動負債', '長期借款')
             shares_p = get_val(vals_p, '普通股股本', '股本')
             
-            if ta_l <= 0 or ta_p <= 0:
-                return {}
+            if ta_l <= 0 or ta_p <= 0: return {}
 
             res_dict = {}
             if rev_l > 0:
                 res_dict['grossMargins'] = gp_l / rev_l
                 res_dict['operatingMargins'] = op_l / rev_l
-            if eq_l > 0:
-                res_dict['debtToEquity'] = tl_l / eq_l
+            if eq_l > 0: res_dict['debtToEquity'] = tl_l / eq_l
                 
             f_score = 0
             if ta_l > 0 and ta_p > 0:
@@ -481,9 +449,24 @@ def get_finmind_financial_health(stock_id, fm_key=""):
 
 def get_fallback_info(stock_id):
     info = {}
+    # 🚀 強化防呆：改用 YFinance 獲取精準的即時報價，避免 HTML Regex 抓錯導致綠K線與KD暴跌
+    for ext in [".TW", ".TWO"]:
+        try:
+            tk = yf.Ticker(f"{stock_id}{ext}")
+            fi = tk.fast_info
+            if 'last_price' in fi:
+                info['realtime_price'] = fi['last_price']
+                info['realtime_prev_close'] = fi.get('previous_close')
+                info['realtime_open'] = fi.get('open')
+                info['realtime_high'] = fi.get('day_high')
+                info['realtime_low'] = fi.get('day_low')
+                info['realtime_volume'] = fi.get('last_volume')
+                break
+        except: pass
+        
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
         
@@ -492,32 +475,19 @@ def get_fallback_info(stock_id):
             data_str = json_match.group(1)
             def ext_val(key, is_pct=False):
                 m = re.search(rf'"{key}"\s*:\s*(?:{{"raw"\s*:\s*)?"?([+-]?\d+(?:\.\d+)?)"?', data_str)
-                if m:
-                    val = float(m.group(1))
-                    return val / 100.0 if is_pct else val
+                if m: return float(m.group(1)) / 100.0 if is_pct else float(m.group(1))
                 return None
             info['trailingPE'] = ext_val('peRatio') or ext_val('trailingPE')
             info['priceToBook'] = ext_val('pbRatio') or ext_val('priceToBook')
             info['trailingEps'] = ext_val('eps') or ext_val('trailingEps')
             info['dividendYield'] = ext_val('dividendYield', True)
-            
-            info['realtime_price'] = ext_val('regularMarketPrice')
-            info['realtime_prev_close'] = ext_val('regularMarketPreviousClose')
-            info['realtime_open'] = ext_val('regularMarketOpen')
-            info['realtime_high'] = ext_val('regularMarketDayHigh')
-            info['realtime_low'] = ext_val('regularMarketDayLow')
-            info['realtime_volume'] = ext_val('regularMarketVolume')
 
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
             if idx != -1:
-                chunk = text[idx:idx+300]
-                matches = re.findall(r'>\s*([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(%)?\s*<', chunk)
+                matches = re.findall(r'>\s*([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(%)?\s*<', text[idx:idx+300])
                 if matches:
-                    try:
-                        val = float(matches[0][0].replace(',', ''))
-                        if is_pct or matches[0][1] == '%': return val / 100.0
-                        return val
+                    try: return float(matches[0][0].replace(',', '')) / 100.0 if is_pct or matches[0][1] == '%' else float(matches[0][0].replace(',', ''))
                     except: pass
             return None
 
@@ -535,6 +505,7 @@ def get_fallback_info(stock_id):
     except: pass
     return info
 
+# 🚀 終極零延遲報價：優先使用 YFinance Fast Info，徹底消滅抓錯股票價格的幽靈 K 線
 @st.cache_data(ttl=30)
 def get_realtime_data(stock_id):
     rt_data = {}
@@ -549,14 +520,9 @@ def get_realtime_data(stock_id):
             msg_array = data.get('msgArray', [])
             if msg_array:
                 info = msg_array[0]
-                def p_f(v):
-                    if v == '-' or v is None: return None
-                    try: return float(v)
-                    except: return None
-                
+                def p_f(v): return float(v) if v != '-' and v is not None else None
                 rt_price = p_f(info.get('z'))
                 if rt_price is None: rt_price = p_f(info.get('y'))
-                
                 if rt_price is not None:
                     rt_data['realtime_price'] = rt_price
                     rt_data['realtime_prev_close'] = p_f(info.get('y'))
@@ -567,27 +533,20 @@ def get_realtime_data(stock_id):
                     return rt_data
     except: pass
 
-    try:
-        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            text = res.text
-            def ext_v(field):
-                m = re.search(rf'"{field}"\s*:\s*(?:{{"raw"\s*:\s*)?([+-]?\d+(?:\.\d+)?)', text)
-                if m: return float(m.group(1))
-                return None
-            
-            p = ext_v('regularMarketPrice')
-            if p is not None:
-                rt_data['realtime_price'] = p
-                rt_data['realtime_prev_close'] = ext_v('regularMarketPreviousClose')
-                rt_data['realtime_open'] = ext_v('regularMarketOpen') or p
-                rt_data['realtime_high'] = ext_v('regularMarketDayHigh') or p
-                rt_data['realtime_low'] = ext_v('regularMarketDayLow') or p
-                rt_data['realtime_volume'] = ext_v('regularMarketVolume')
+    # 🚀 防呆機制：使用 YFinance 取代容易抓錯資料的 HTML Regex
+    for ext in [".TW", ".TWO"]:
+        try:
+            tk = yf.Ticker(f"{stock_id}{ext}")
+            fi = tk.fast_info
+            if 'last_price' in fi:
+                rt_data['realtime_price'] = fi['last_price']
+                rt_data['realtime_prev_close'] = fi.get('previous_close')
+                rt_data['realtime_open'] = fi.get('open')
+                rt_data['realtime_high'] = fi.get('day_high')
+                rt_data['realtime_low'] = fi.get('day_low')
+                rt_data['realtime_volume'] = fi.get('last_volume')
                 return rt_data
-    except: pass
+        except: continue
         
     return rt_data
 
@@ -598,23 +557,31 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
     rt_prev = rt_data.get('realtime_prev_close')
     
     if rt_price is not None and rt_price > 0:
-        today_date = pd.to_datetime(datetime.date.today())
+        # 🚀 時區防呆：台灣時間早上 9 點前，絕不產生今天的新 K 棒，避免拿到昨天的舊資料當成今天！
+        tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        if tw_time.hour < 9:
+            target_date = (tw_time - datetime.timedelta(days=1)).date()
+        else:
+            target_date = tw_time.date()
+            
         rt_open = rt_data.get('realtime_open') or rt_price
         rt_high = rt_data.get('realtime_high') or rt_price
         rt_low = rt_data.get('realtime_low') or rt_price
         rt_vol = rt_data.get('realtime_volume') or 0
         
-        if hist.index.tz is not None:
-            today_date = today_date.tz_localize(hist.index.tz)
-            
+        last_date = hist.index[-1].date()
+        
         if timeframe == "D":
-            if hist.index[-1].date() < today_date.date():
+            if last_date < target_date:
+                # 明確鎖定 Index 為 Date，徹底根絕 KeyError
+                new_idx = pd.to_datetime(target_date)
+                if hist.index.tz is not None: new_idx = new_idx.tz_localize(hist.index.tz)
                 new_row = pd.DataFrame({
                     'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
                     'Close': [rt_price], 'Volume': [rt_vol]
-                }, index=pd.Index([today_date], name='Date'))
+                }, index=pd.Index([new_idx], name='Date'))
                 hist = pd.concat([hist, new_row])
-            elif hist.index[-1].date() == today_date.date():
+            elif last_date == target_date:
                 hist.loc[hist.index[-1], 'Close'] = rt_price
                 hist.loc[hist.index[-1], 'Open'] = rt_open
                 hist.loc[hist.index[-1], 'High'] = max(hist.loc[hist.index[-1], 'High'], rt_high)
@@ -864,23 +831,22 @@ with st.sidebar:
     uploaded_key_file = st.file_uploader("📂 上傳 key.txt 自動填入", type=["txt"], help="請上傳包含 GEMINI_KEY, FUGLE_KEY, FINMIND_KEY 的純文字檔")
     if uploaded_key_file is not None:
         content = uploaded_key_file.getvalue().decode("utf-8")
+        clean_content = re.sub(r'\s+', '', content)
         keys_loaded = 0
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"): continue
-            if "=" in line:
-                k, v = line.split("=", 1)
-                k = k.strip().upper()
-                v = v.strip() 
-                if "GEMINI" in k and v: 
-                    st.session_state.api_key = v
-                    keys_loaded += 1
-                elif "FUGLE" in k and v: 
-                    st.session_state.fugle_key = v
-                    keys_loaded += 1
-                elif "FINMIND" in k and v: 
-                    st.session_state.finmind_key = v
-                    keys_loaded += 1
+        m_gemini = re.search(r'GEMINI_KEY=(.*?)(?:FUGLE_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
+        m_fugle = re.search(r'FUGLE_KEY=(.*?)(?:GEMINI_KEY|FINMIND_KEY|$)', clean_content, re.IGNORECASE)
+        m_finmind = re.search(r'FINMIND_KEY=(.*?)(?:GEMINI_KEY|FUGLE_KEY|$)', clean_content, re.IGNORECASE)
+        
+        if m_gemini and m_gemini.group(1):
+            st.session_state.api_key = m_gemini.group(1)
+            keys_loaded += 1
+        if m_fugle and m_fugle.group(1):
+            st.session_state.fugle_key = m_fugle.group(1)
+            keys_loaded += 1
+        if m_finmind and m_finmind.group(1):
+            st.session_state.finmind_key = m_finmind.group(1)
+            keys_loaded += 1
+            
         if keys_loaded > 0:
             st.success(f"✅ 成功載入 {keys_loaded} 組金鑰！密碼框已自動填滿，請點擊下方「🔄 重新整理快取」套用。")
         else:
@@ -1228,7 +1194,6 @@ if curr_id:
                 suggested_cap += 15.0
                 cap_reason += "<br>🚀 <span style='color:#ff4d4d;'>偵測到 AI/先進製程題材，Cap 強制上調 +15x</span>"
                 
-            # 🚀 終極升級：近 2 年 AI 週期 90% 高位本益比釋放機制
             if df_per_bk is not None and not df_per_bk.empty:
                 recent_date = pd.Timestamp.today() - pd.DateOffset(years=2)
                 recent_df = df_per_bk[df_per_bk['date'] >= recent_date]
@@ -1377,7 +1342,6 @@ if curr_id:
         else:
             target_price_html = ""
 
-        # 🚀 完美壓扁 HTML，防 Streamlit Markdown 破圖
         val_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
             <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
@@ -1813,9 +1777,12 @@ if curr_id:
             st.markdown("### 🌊 估值位階雙河流圖 (P/E & P/B River)")
             st.markdown("<small style='color:gray;'>*實戰密技：『成長股』看本益比判斷潛力；『景氣循環股』(航運/鋼鐵/面板) 獲利不穩定，必須看淨值比(P/B)河流圖抄底！*</small>", unsafe_allow_html=True)
             
-            # 🚀 終極防護：強制重命名任何怪異的索引為 'Date'
+            # 🚀 終極防護：強制鎖定索引名稱為 Date
             h_reset = hist.copy()
+            if h_reset.index.name != 'Date':
+                h_reset.index.name = 'Date'
             h_reset = h_reset.reset_index()
+            
             if 'Date' not in h_reset.columns:
                 if 'Datetime' in h_reset.columns:
                     h_reset = h_reset.rename(columns={'Datetime': 'Date'})
@@ -2003,7 +1970,6 @@ if curr_id:
         </div>
         """.replace('\n', ''), unsafe_allow_html=True)
         
-        # 🚀 升級 1：仿 Yahoo 股市的 MA 數值動態看板
         def get_ma_trend(ma_series):
             if len(ma_series) < 2 or pd.isna(ma_series.iloc[-1]): return 0.0, "-", "#aaa"
             last_val = ma_series.iloc[-1]
@@ -2030,8 +1996,6 @@ if curr_id:
         fig_k = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]])
         
         fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
-        
-        # 🚀 升級 2：將 5日線 (MA5) 加粗至 2.5，其他微調為 1.8 確保不搶戲
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='5MA', line=dict(color='#00bfff', width=2.5)), row=1, col=1, secondary_y=False)
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='10MA', line=dict(color='#ab82ff', width=1.8)), row=1, col=1, secondary_y=False)
         fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='20MA', line=dict(color='#ff8c00', width=1.8)), row=1, col=1, secondary_y=False)
