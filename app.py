@@ -609,7 +609,7 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
             
         if timeframe == "D":
             if hist.index[-1].date() < today_date.date():
-                # 強制建立名為 'Date' 的 Index，徹底杜絕 KeyError
+                # 🚀 強制建立正確的 Date Index 避免 KeyError
                 new_row = pd.DataFrame({
                     'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
                     'Close': [rt_price], 'Volume': [rt_vol]
@@ -626,7 +626,7 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
             if rt_high > hist.loc[hist.index[-1], 'High']: hist.loc[hist.index[-1], 'High'] = rt_high
             if rt_low < hist.loc[hist.index[-1], 'Low']: hist.loc[hist.index[-1], 'Low'] = rt_low
             
-    # 最後再確認一次索引名稱
+    # 🚀 終極防護：不管前面發生什麼事，強制保證索引叫 Date
     hist.index.name = 'Date'
     return hist, rt_prev
 
@@ -662,6 +662,7 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
         except: pass
 
     if hist is not None and not hist.empty:
+        hist.index.name = 'Date' # 快取底層鎖定
         fallback = get_fallback_info(stock_id)
         for k, v in fallback.items():
             if v is not None:
@@ -674,10 +675,8 @@ def get_stock_data(stock_id, fugle_key="", fm_key=""):
     if hist is not None and not hist.empty:
         hist = hist.copy()
         info_data = info_data.copy()
-        
         hist, rt_prev = inject_realtime_data(hist, stock_id, "D")
         if rt_prev is not None: info_data['previousClose'] = rt_prev
-        
     return hist, info_data
 
 @st.cache_data(ttl=900)
@@ -686,7 +685,9 @@ def _get_base_chart_data(stock_id, timeframe, fugle_key=""):
     if fugle_key:
         tf = tf_map.get(timeframe, "D")
         df = fetch_fugle_kline(stock_id, fugle_key, tf)
-        if not df.empty: return df
+        if not df.empty:
+            df.index.name = 'Date'
+            return df
 
     interval_map = {"日線": {"period": "1y", "interval": "1d"}, "週線": {"period": "2y", "interval": "1wk"}, "月線": {"period": "5y", "interval": "1mo"}, "60分線": {"period": "1mo", "interval": "60m"}}
     params = interval_map.get(timeframe, {"period": "1y", "interval": "1d"})
@@ -696,6 +697,7 @@ def _get_base_chart_data(stock_id, timeframe, fugle_key=""):
             df = ticker.history(period=params["period"], interval=params["interval"])
             if not df.empty:
                 if df.index.tz is not None: df.index = df.index.tz_localize(None)
+                df.index.name = 'Date'
                 return df
         except: continue
     return pd.DataFrame()
@@ -717,7 +719,6 @@ def get_inst_data(stock_id, fm_key=""):
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={stock_id}&start_date={start_str}"
         if fm_key: url += f"&token={fm_key}" 
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        
         if res.status_code == 200:
             data = res.json()
             if data.get('status') == 200 and data.get('data'):
@@ -736,11 +737,9 @@ def get_inst_data(stock_id, fm_key=""):
                 
                 pivot_df = df.pivot_table(index='date', columns='name', values='buy_sell', aggfunc='sum').fillna(0)
                 res_df = pd.DataFrame(index=pivot_df.index)
-                
                 f_cols = [c for c in pivot_df.columns if '外資' in str(c) or 'Foreign' in str(c)]
                 t_cols = [c for c in pivot_df.columns if '投信' in str(c) or 'Trust' in str(c)]
                 d_cols = [c for c in pivot_df.columns if '自營商' in str(c) or 'Dealer' in str(c)]
-                
                 res_df['Foreign'] = pivot_df[f_cols].sum(axis=1) if f_cols else 0
                 res_df['Trust'] = pivot_df[t_cols].sum(axis=1) if t_cols else 0
                 res_df['Dealer'] = pivot_df[d_cols].sum(axis=1) if d_cols else 0
@@ -875,7 +874,6 @@ with st.sidebar:
                 k, v = line.split("=", 1)
                 k = k.strip().upper()
                 v = v.strip() 
-                
                 if "GEMINI" in k and v: 
                     st.session_state.api_key = v
                     keys_loaded += 1
@@ -885,7 +883,6 @@ with st.sidebar:
                 elif "FINMIND" in k and v: 
                     st.session_state.finmind_key = v
                     keys_loaded += 1
-                    
         if keys_loaded > 0:
             st.success(f"✅ 成功載入 {keys_loaded} 組金鑰！密碼框已自動填滿，請點擊下方「🔄 重新整理快取」套用。")
         else:
@@ -1233,6 +1230,18 @@ if curr_id:
                 suggested_cap += 15.0
                 cap_reason += "<br>🚀 <span style='color:#ff4d4d;'>偵測到 AI/先進製程題材，Cap 強制上調 +15x</span>"
                 
+            # 🚀 終極升級：近 2 年 AI 週期 90% 高位本益比釋放機制
+            if df_per_bk is not None and not df_per_bk.empty:
+                recent_date = pd.Timestamp.today() - pd.DateOffset(years=2)
+                recent_df = df_per_bk[df_per_bk['date'] >= recent_date]
+                if not recent_df.empty:
+                    valid_pe = recent_df[recent_df['PER'] < 300]['PER']
+                    if not valid_pe.empty:
+                        hist_high_pe = valid_pe.quantile(0.9)
+                        if hist_high_pe > suggested_cap + 5:
+                            suggested_cap = float(math.ceil(hist_high_pe / 5) * 5)
+                            cap_reason += f"<br>📈 <span style='color:#FFD700;'>近兩年 AI 週期高位達 {hist_high_pe:.1f}x，動態釋放天花板！</span>"
+            
             target_pe_cap = st.number_input("⚙️ 動態本益比天花板 (Cap)", value=float(suggested_cap), step=5.0, help="防禦低基期失真陷阱！系統已根據毛利率與產業題材自動調整合理的極限本益比。")
             st.markdown(f"<div style='color:#00bfff; font-size:0.75rem; margin-top:-10px; line-height:1.2;'>💡 {cap_reason}</div>", unsafe_allow_html=True)
 
@@ -1808,15 +1817,16 @@ if curr_id:
             st.markdown("### 🌊 估值位階雙河流圖 (P/E & P/B River)")
             st.markdown("<small style='color:gray;'>*實戰密技：『成長股』看本益比判斷潛力；『景氣循環股』(航運/鋼鐵/面板) 獲利不穩定，必須看淨值比(P/B)河流圖抄底！*</small>", unsafe_allow_html=True)
             
-            # 🚀 終極防護：強制鎖定索引名稱，徹底根除 KeyError
+            # 🚀 終極防護：強制重命名任何怪異的索引為 'Date'
             h_reset = hist.copy()
-            if h_reset.index.name != 'Date':
-                h_reset.index.name = 'Date'
             h_reset = h_reset.reset_index()
-            
-            # 以防萬一 pandas 還是產生了 index 欄位，強制重命名
-            if 'index' in h_reset.columns and 'Date' not in h_reset.columns:
-                h_reset.rename(columns={'index': 'Date'}, inplace=True)
+            if 'Date' not in h_reset.columns:
+                if 'Datetime' in h_reset.columns:
+                    h_reset = h_reset.rename(columns={'Datetime': 'Date'})
+                elif 'index' in h_reset.columns:
+                    h_reset = h_reset.rename(columns={'index': 'Date'})
+                else:
+                    h_reset = h_reset.rename(columns={h_reset.columns[0]: 'Date'})
             
             if h_reset['Date'].dt.tz is not None: h_reset['Date'] = h_reset['Date'].dt.tz_localize(None)
             h_reset['Date_only'] = h_reset['Date'].dt.date
