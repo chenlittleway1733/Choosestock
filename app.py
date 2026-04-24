@@ -56,6 +56,21 @@ def to_val_str(v, fmt="pct"):
     if fmt == "x": return f"{v:.1f}x"
     return f"{v:.2f}"
 
+# 🚀 補回遺失的純文字排版工具 (給 AI Prompt 使用)，確保不報 NameError
+def p_fmt(orig, ai_val, fmt="pct", suffix="AI捉取"):
+    s = to_val_str(orig, fmt)
+    if ai_val is not None and not pd.isna(ai_val):
+        s += f" ({to_val_str(float(ai_val), fmt)}, {suffix})"
+    return s
+
+def p_dual(o1, o2, a1, a2, suffix="AI捉取"):
+    s = f"{to_val_str(o1, 'num')} / {to_val_str(o2, 'num')}"
+    if (a1 is not None and not pd.isna(a1)) or (a2 is not None and not pd.isna(a2)):
+        sa1 = to_val_str(float(a1) if a1 is not None else None, 'num')
+        sa2 = to_val_str(float(a2) if a2 is not None else None, 'num')
+        s += f" ({sa1} / {sa2}, {suffix})"
+    return s
+
 def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估"):
     s = to_val_str(orig, fmt)
     if ai_val is not None and not pd.isna(ai_val):
@@ -1203,7 +1218,7 @@ if curr_id:
             sys_f_eps_calc = t_eps * (1 + earn_growth)
 
         # ==========================================
-        # 🚀 移除舊開關後重構的財務儀表板 (乾淨版)
+        # 🚀 財務儀表板 (乾淨版)
         # ==========================================
         col_eps1, col_eps2 = st.columns([1, 1])
         with col_eps1:
@@ -1638,7 +1653,7 @@ if curr_id:
         st.markdown(clean_html(chip_html), unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 準備為 AI Prompt 打包的字串變數 (獨立宣告避免 NameError)
+        # 🚀 準備為 AI Prompt 打包的字串變數
         ai_fpe_prompt = sys_forward_pe if sys_forward_pe is not None else None
         orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
         if orig_peg_num == -999:
