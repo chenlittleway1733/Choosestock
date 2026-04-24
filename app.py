@@ -215,7 +215,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     絕對不要輸出 markdown 標記或其他文字。"""
     
     payload = {
-        "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
+        "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 以及 {target_year} 法ర్ణ預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}]
     }
@@ -1323,7 +1323,7 @@ if curr_id:
         ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if ai_f_eps_calc is not None else None
         
         # 🚀 顯示字串與顏色邏輯
-        eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推算')
+        eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推估')
         if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
         eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
         
@@ -1336,7 +1336,7 @@ if curr_id:
         pe_str = build_cmp_str(pe_ratio, ai_pe, 'x')
         rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct')
         gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', 'AI推估')
-        roe_str = build_cmp_str(roe, ai_roe, 'pct', 'AI推算')
+        roe_str = build_cmp_str(roe, ai_roe, 'pct', 'AI推估')
         de_str = build_cmp_str(sys_de, ai_de, 'pct')
         
         rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
@@ -1529,7 +1529,7 @@ if curr_id:
         st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 準備為 AI Prompt 打包的字串變數 (確保不報 NameError)
+        # 🚀 準備為 AI Prompt 打包的字串變數
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
         lo_val = s_float(info.get('targetLowPrice'))
@@ -1612,8 +1612,9 @@ if curr_id:
         
         with col_ai2:
             with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
-                st.markdown("<small style='color:gray;'>*點擊下方黑框右上角的 📋 複製圖示，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
-                st.code(full_prompt_for_copy, language="text")
+                # 🚀 升級 iPad 友善的提示詞複製區：改用 st.text_area 解決無法換行、難以複製的問題！
+                st.markdown("<small style='color:gray;'>*請在下方文字框內點選，全選 (Ctrl+A / ⌘+A) 並複製，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
+                st.text_area("提示詞內容", value=full_prompt_for_copy, height=300, label_visibility="collapsed")
         
         if st.session_state.ai_industry_result:
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1624,8 +1625,9 @@ if curr_id:
                 st.markdown(st.session_state.ai_industry_result)
                 st.markdown("---")
                 st.markdown("##### 📋 【純文字複製區】")
-                st.markdown("<small style='color:gray;'>*將游標移至下方黑框內，點擊右上角的「📋」圖示，即可將報告全文複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
-                st.code(st.session_state.ai_industry_result, language="markdown")
+                # 🚀 升級 iPad 友善的報告複製區：改用 st.text_area 解決無法換行、難以複製的問題！
+                st.markdown("<small style='color:gray;'>*請在下方文字框內全選並複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
+                st.text_area("純文字結果", value=st.session_state.ai_industry_result, height=400, label_visibility="collapsed")
             st.markdown("<br>", unsafe_allow_html=True)
             
         st.markdown("---")
