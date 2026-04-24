@@ -56,13 +56,13 @@ def to_val_str(v, fmt="pct"):
     if fmt == "x": return f"{v:.1f}x"
     return f"{v:.2f}"
 
-def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI捉取"):
+def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估"):
     s = to_val_str(orig, fmt)
     if ai_val is not None and not pd.isna(ai_val):
         s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({to_val_str(float(ai_val), fmt)}, {suffix})</span>"
     return s
 
-def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI捉取"):
+def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估"):
     s1 = to_val_str(o1, fmt1)
     s2 = to_val_str(o2, fmt2)
     s = f"{s1} / <span style='color:#00bfff;'>{s2}</span>" if (fmt1=="num" and fmt2=="num") else f"{s1} / {s2}"
@@ -1202,7 +1202,9 @@ if curr_id:
         if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
             sys_f_eps_calc = t_eps * (1 + earn_growth)
 
-        # 🚀 移除自訂 EPS 欄位，版面更為清爽
+        # ==========================================
+        # 🚀 移除舊開關後重構的財務儀表板 (乾淨版)
+        # ==========================================
         col_eps1, col_eps2 = st.columns([1, 1])
         with col_eps1:
             target_peg_adj = st.selectbox(
@@ -1302,7 +1304,7 @@ if curr_id:
 
         ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if ai_f_eps_calc is not None else None
         
-        # 🚀 顯示字串生成
+        # 🚀 顯示字串與顏色邏輯
         eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推算')
         if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
         eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
@@ -1364,10 +1366,10 @@ if curr_id:
                     cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}</span>"
             
             sys_tp_str = f"{sys_target_price_est:.1f}元" if sys_target_price_est else "N/A"
-            ai_tp_str = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_target_price_est:.1f}元, AI估值)</span>" if ai_target_price_est else ""
+            ai_tp_str = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_target_price_est:.1f}元, AI推估)</span>" if ai_target_price_est else ""
             
             sys_ext_str = f"{extreme_target_price:.1f}元" if extreme_target_price else "N/A"
-            ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_extreme_target_price:.1f}元, AI估值)</span>" if ai_extreme_target_price else ""
+            ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_extreme_target_price:.1f}元, AI推估)</span>" if ai_extreme_target_price else ""
             
             debug_eps = eff_f_eps if eff_f_eps else 0
             
@@ -1636,25 +1638,13 @@ if curr_id:
         st.markdown(clean_html(chip_html), unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 AI 綜合產業報告與打包提示詞
-        hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
-        me_str = f"{me_val:.1f}" if me_val else "無資料"
-        lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
-        ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price else "未捕捉到"
-
-        def p_fmt(orig, ai_val, fmt="pct", suffix="AI捉取"):
-            s = to_val_str(orig, fmt)
-            if ai_val is not None and not pd.isna(ai_val):
-                s += f" ({to_val_str(float(ai_val), fmt)}, {suffix})"
-            return s
-            
-        def p_dual(o1, o2, a1, a2, suffix="AI捉取"):
-            s = f"{to_val_str(o1, 'num')} / {to_val_str(o2, 'num')}"
-            if (a1 is not None and not pd.isna(a1)) or (a2 is not None and not pd.isna(a2)):
-                sa1 = to_val_str(float(a1) if a1 is not None else None, 'num')
-                sa2 = to_val_str(float(a2) if a2 is not None else None, 'num')
-                s += f" ({sa1} / {sa2}, {suffix})"
-            return s
+        # 🚀 準備為 AI Prompt 打包的字串變數 (獨立宣告避免 NameError)
+        ai_fpe_prompt = sys_forward_pe if sys_forward_pe is not None else None
+        orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
+        if orig_peg_num == -999:
+            ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
+        else:
+            ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
 
         ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
         ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
@@ -1663,10 +1653,11 @@ if curr_id:
         ctx_om = p_fmt(op_margin, ai_om, 'pct')
         ctx_roe = p_fmt(roe, ai_roe, 'pct')
         ctx_de = p_fmt(sys_de, ai_de, 'pct')
-        
-        ctx_fpe = p_fmt(sys_f_eps_calc, ai_f_eps_calc, 'x', 'AI反推') if sys_f_eps_calc else "N/A"
-        
+        ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推') if sys_forward_pe else "N/A"
+        ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
+        ctx_eg = p_fmt(real_cg, ai_cg, 'pct', 'AI推算')
         latest_mom_str = f"{df_rev_bk['MoM'].iloc[-1]:.2f}%" if df_rev_bk is not None and not df_rev_bk.empty else "無資料"
+        tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
 
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
@@ -1674,11 +1665,14 @@ if curr_id:
         - 歷史本益比 (Trailing P/E): {ctx_pe}
         - 前瞻本益比 (Forward P/E): {ctx_fpe}
         - 股價淨值比 (P/B): {ctx_pb}
+        - 本益成長比 (PEG): {ctx_peg}
+        - 🎯 系統逆向推算極限高空價: {tp_est_str}
 
         【財務基本面動能 (原始數據 vs AI數據)】
-        - EPS (目前): {t_eps} 元
+        - EPS (目前 / 預估): {ctx_eps} 元
         - 營收年增率 (YoY) [{latest_rev_month}]: {ctx_rg}
         - 最新單月營收月增率 (MoM) [{latest_rev_month}]: {latest_mom_str}
+        - 預估獲利成長 (YoY): {ctx_eg}
         - 毛利率: {ctx_gm}
         - 營業利益率: {ctx_om}
         - 股東權益報酬率 (ROE): {ctx_roe}
@@ -1876,237 +1870,9 @@ if curr_id:
                         st.info("缺乏足夠的淨值比數據。")
         st.markdown("---")
 
-        # 🚀 移除舊開關後重構的財務儀表板 (乾淨版)
-        col_eps1, col_eps2 = st.columns([1, 1])
-        with col_eps1:
-            target_peg_adj = st.selectbox(
-                "🎯 估值情境 (目標 PEG)", 
-                [1.0, 1.2, 1.5], 
-                format_func=lambda x: "保守 (1.0x)" if x==1.0 else ("穩健 (1.2x)" if x==1.2 else "樂觀高空 (1.5x)"),
-                index=0,
-                help="教練密技：目標價逆推公式的乘數。大盤熱度高或作夢空間大時可調升至 1.5。"
-            )
-        with col_eps2:
-            suggested_cap = 30.0
-            cap_reason = "預設 30x (無毛利率數據)"
-            if eff_gm is not None:
-                if eff_gm >= 0.50:
-                    suggested_cap, cap_reason = 40.0, "建議 40x (高毛利>50%: 軟體/IP/專利壟斷)"
-                elif eff_gm >= 0.30:
-                    suggested_cap, cap_reason = 30.0, "建議 30x (中高毛利>30%: 高階零組件/利基型)"
-                elif eff_gm >= 0.15:
-                    suggested_cap, cap_reason = 20.0, "建議 20x (穩健毛利>15%: 傳統優質硬體/代工)"
-                else:
-                    suggested_cap, cap_reason = 15.0, "建議 15x (低毛利<15%: 紅海競爭/純組裝)"
-            
-            summary_text = info.get('longBusinessSummary', '') + c_name + info.get('industry', '') + sector_disp
-            ai_keywords = ["AI", "伺服器", "CoWoS", "矽光子", "散熱", "CPO", "先進封裝", "半導體設備", "水冷", "ASIC", "資料中心", "輝達", "Nvidia"]
-            if any(kw.lower() in summary_text.lower() for kw in ai_keywords):
-                suggested_cap += 15.0
-                cap_reason += "<br>🚀 <span style='color:#ff4d4d;'>偵測到 AI/先進製程題材，Cap 強制上調 +15x</span>"
-                
-            if df_per_bk is not None and not df_per_bk.empty:
-                recent_date = pd.Timestamp.today() - pd.DateOffset(years=2)
-                recent_df = df_per_bk[df_per_bk['date'] >= recent_date]
-                if not recent_df.empty:
-                    valid_pe = recent_df[recent_df['PER'] < 300]['PER']
-                    if not valid_pe.empty:
-                        hist_high_pe = valid_pe.quantile(0.9)
-                        if hist_high_pe > suggested_cap + 5:
-                            suggested_cap = float(math.ceil(hist_high_pe / 5) * 5)
-                            cap_reason += f"<br>📈 <span style='color:#FFD700;'>近兩年 AI 週期高位達 {hist_high_pe:.1f}x，動態釋放天花板！</span>"
-            
-            target_pe_cap = st.number_input("⚙️ 動態本益比天花板 (Cap)", value=float(suggested_cap), step=5.0, help="防禦低基期失真陷阱！系統已根據毛利率與產業題材自動調整合理的極限本益比。")
-            st.markdown(f"<div style='color:#00bfff; font-size:0.75rem; margin-top:-10px; line-height:1.2;'>💡 {cap_reason}</div>", unsafe_allow_html=True)
-
         # ==========================================
-        # 🚀 系統原生計算邏輯
-        # ==========================================
-        eff_f_eps = sys_f_eps_calc
-        eps_source_text = f"海外系統或反推 ({eff_f_eps:.2f}元)" if eff_f_eps is not None else "系統預估 (無資料)"
-        f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推測/捉取')
-        
-        sys_forward_pe = s_float(info.get('forwardPE'))
-        if sys_forward_pe is None and eff_f_eps is not None and eff_f_eps > 0: sys_forward_pe = curr_p / eff_f_eps
-        
-        ai_fpe = curr_p / ai_f_eps_calc if ai_f_eps_calc and ai_f_eps_calc > 0 else None
-        eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
-        
-        is_base_normalized = False
-        if eff_f_eps is not None and t_eps is not None and t_eps > 0:
-            if t_eps < 0.5:
-                safe_base_eps = 0.5
-                is_base_normalized = True
-            else: safe_base_eps = t_eps
-            real_cg = (eff_f_eps - safe_base_eps) / safe_base_eps
-        else: real_cg = earn_growth
-        
-        orig_peg = sys_forward_pe / (real_cg * 100) if sys_forward_pe is not None and real_cg is not None and real_cg > 0 else None
-        
-        # ==========================================
-        # 🚀 AI 計算邏輯
-        # ==========================================
-        ai_cg = None
-        if ai_f_eps_calc is not None and ai_t_eps is not None and ai_t_eps > 0:
-            safe_base_eps_ai = 0.5 if ai_t_eps < 0.5 else ai_t_eps
-            ai_cg = (ai_f_eps_calc - safe_base_eps_ai) / safe_base_eps_ai
-        else:
-            ai_cg = ai_yoy
-            
-        ai_peg = ai_fpe / (ai_cg * 100) if ai_fpe is not None and ai_cg is not None and ai_cg > 0 else None
-        
-        eff_peg = orig_peg if orig_peg is not None else ai_peg
-        if real_cg is not None and real_cg <= 0: eff_peg = -999
-        
-        # ==========================================
-        # 🚀 目標價計算 (雙引擎)
-        # ==========================================
-        if eff_f_eps is not None and real_cg is not None and real_cg > 0:
-            raw_mult = (real_cg * 100) * target_peg_adj
-            capped_mult = min(raw_mult, target_pe_cap)
-            sys_target_price_est = eff_f_eps * capped_mult
-            is_capped = raw_mult > target_pe_cap
-        else:
-            sys_target_price_est = None; is_capped = False
-            
-        extreme_target_price = eff_f_eps * target_pe_cap if eff_f_eps is not None else None
-
-        if ai_f_eps_calc is not None and ai_cg is not None and ai_cg > 0:
-            ai_raw_mult = (ai_cg * 100) * target_peg_adj
-            ai_capped_mult = min(ai_raw_mult, target_pe_cap)
-            ai_target_price_est = ai_f_eps_calc * ai_capped_mult
-            ai_is_capped = ai_raw_mult > target_pe_cap
-        else:
-            ai_target_price_est = None; ai_is_capped = False
-
-        ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if ai_f_eps_calc is not None else None
-        
-        # ==========================================
-        # 🚀 顯示字串與顏色邏輯
-        # ==========================================
-        eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推算')
-        if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
-        eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
-        
-        orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if real_cg is not None and real_cg <= 0 else "N/A")
-        peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_peg:.2f}, AI推算)</span>" if ai_peg is not None else orig_peg_str
-        
-        orig_fpe_str = f"{sys_forward_pe:.1f}x" if sys_forward_pe is not None else "N/A"
-        fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_fpe:.1f}x, AI推算)</span>" if ai_fpe is not None else orig_fpe_str
-        
-        pe_str = build_cmp_str(pe_ratio, ai_pe, 'x')
-        rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct')
-        gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', 'AI捉取')
-        roe_str = build_cmp_str(roe, ai_roe, 'pct', 'AI推算')
-        de_str = build_cmp_str(sys_de, ai_de, 'pct')
-        
-        rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
-        roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳 (已透過恆等式校正)'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
-        
-        if eff_de is None: de_eval = ""
-        elif eff_de < 0.5: de_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='小於50%財務極度穩健'>⭐ 優質</span>"
-        elif eff_de > 1.0: de_eval = " <span style='color:#ff4d4d; font-size:0.8rem; margin-left:5px;' title='大於100%視為高槓桿風險'>⚠️ 高槓桿</span>"
-        else: de_eval = " <span style='color:#FFD700; font-size:0.8rem; margin-left:5px;' title='50%~100%為資本密集產業常見合理區間'>🆗 合理</span>"
-
-        if eff_pe is None: pe_color, pe_text = "gray", "數據不足"
-        elif eff_pe > 25: pe_color, pe_text = "#ff4d4d", "高成長溢價"
-        elif eff_pe < 15: pe_color, pe_text = "#00cc66", "相對便宜"
-        else: pe_color, pe_text = "#FFD700", "合理區間"
-
-        if eff_pb is None: pb_color, pb_text = "gray", "數據不足"
-        elif eff_pb > 3: pb_color, pb_text = "#ff4d4d", "偏高溢價"
-        elif eff_pb < 1.5: pb_color, pb_text = "#00cc66", "具資產保護"
-        else: pb_color, pb_text = "#FFD700", "合理區間"
-
-        if eff_forward_pe is None: fpe_color, fpe_text = "gray", "數據不足"
-        else:
-            if eff_forward_pe > 25: fpe_color, fpe_text = "#ff4d4d", "高成長期望"
-            elif eff_forward_pe < 15: fpe_color, fpe_text = "#00cc66", "相對便宜"
-            else: fpe_color, fpe_text = "#FFD700", "合理區間"
-
-        if eff_peg == -999: peg_color, peg_text = "gray", "分母為負，無意義"
-        elif eff_peg is None: peg_color, peg_text = "gray", "衰退或無數據"
-        else: 
-            if eff_forward_pe is not None and target_pe_cap is not None and eff_forward_pe > target_pe_cap:
-                peg_color, peg_text = "#ff8c00", "估值過熱(超越Cap)" 
-            elif eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
-            elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
-            else: peg_color, peg_text = "#FFD700", "合理區間"
-
-        pb_str = build_cmp_str(pb_ratio, ai_pb, 'x')
-        
-        if sys_target_price_est or ai_target_price_est:
-            cap_warning_html = ""
-            if is_capped or ai_is_capped:
-                cap_msg = f"🚨 觸發封頂防護 ({target_pe_cap:.0f}x)"
-                if (extreme_target_price and curr_p > extreme_target_price) or (ai_extreme_target_price and curr_p > ai_extreme_target_price):
-                    cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}，追高風險極大！</span>"
-                else: 
-                    cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}</span>"
-            
-            sys_tp_str = f"{sys_target_price_est:.1f}元" if sys_target_price_est else "N/A"
-            ai_tp_str = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_target_price_est:.1f}元, AI推估)</span>" if ai_target_price_est else ""
-            
-            sys_ext_str = f"{extreme_target_price:.1f}元" if extreme_target_price else "N/A"
-            ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_extreme_target_price:.1f}元, AI推估)</span>" if ai_extreme_target_price else ""
-            
-            debug_eps = eff_f_eps if eff_f_eps else 0
-            
-            target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理估值 (PEG 推算): <b style='color:#fff; font-size:1.1rem;'>{sys_tp_str}</b> <br>{ai_tp_str}<br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>極限高空價 (Forward EPS × Cap): <span style='font-size:1.2rem;'>{sys_ext_str}</span> <br>{ai_ext_str}</span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] 帶入 EPS: {debug_eps:.2f} | 帶入 Cap: {target_pe_cap:.0f}x</small></div>{cap_warning_html}</div>"
-        else:
-            target_price_html = ""
-
-        val_html = f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 歷史本益比 (Trailing P/E)</div>
-                    <div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_text}</div>
-                </div>
-                <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pe_str}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fpe_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div>
-                    <div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_text}</div>
-                </div>
-                <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{fpe_str}</div>
-                <div style='color:#ffd700; font-size:0.85rem; font-weight:bold;'>基準：{eps_source_text}</div>
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {peg_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📈 前瞻 PEG (Forward PEG)</div>
-                    <div style='background:{peg_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{peg_text}</div>
-                </div>
-                <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{peg_str_disp}</div>
-                {target_price_html}
-            </div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
-                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div>
-                    <div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_text}</div>
-                </div>
-                <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str}</div>
-            </div>
-        </div>
-        """
-        st.markdown(clean_html(val_html), unsafe_allow_html=True)
-        
-        fund_html = f"""
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>歷史本益比 (P/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{pe_str}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>EPS (目前 / 預估)</div><div style='font-size:1.3rem; font-weight:bold; color:#FFD700;'>{f_eps_display}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收年增率 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>預估獲利成長 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{eg_color};'>{eg_str_disp}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>毛利率 / 營益率</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{gm_om_str}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>ROE (恆等式校正)</div><div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{roe_str}{roe_eval}</div></div>
-            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>負債權益比 (D/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{de_str}{de_eval}</div></div>
-        </div>
-        """
-        st.markdown(clean_html(fund_html), unsafe_allow_html=True)
-        st.markdown("---")
-        
         # 🚀 專業技術線圖與 KD 指標
+        # ==========================================
         st.markdown("### 🤖 專業技術線圖與量化型態分析")
         
         chart_tf = st.radio("切換 K 線週期：", ["60分線", "日線", "週線", "月線"], index=1, horizontal=True)
