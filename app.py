@@ -53,28 +53,31 @@ def to_pct(val):
 
 def to_val_str(v, fmt="pct"):
     if v is None or pd.isna(v): return "N/A"
-    if fmt == "pct": return f"{v * 100:.2f}%"
-    if fmt == "x": return f"{v:.1f}x"
-    return f"{v:.2f}"
+    num = s_float(v, None)
+    if num is None: return "N/A"
+    if fmt == "pct": return f"{num * 100:.2f}%"
+    if fmt == "x": return f"{num:.1f}x"
+    if fmt == "num": return f"{num:.2f}"
+    return f"{num:.2f}"
 
 def p_fmt(orig, ai_val, fmt="pct", suffix="AI捉取"):
     s = to_val_str(orig, fmt)
     if ai_val is not None and not pd.isna(ai_val):
-        s += f" ({to_val_str(float(ai_val), fmt)}, {suffix})"
+        s += f" ({to_val_str(ai_val, fmt)}, {suffix})"
     return s
 
 def p_dual(o1, o2, a1, a2, suffix="AI捉取"):
     s = f"{to_val_str(o1, 'num')} / {to_val_str(o2, 'num')}"
     if (a1 is not None and not pd.isna(a1)) or (a2 is not None and not pd.isna(a2)):
-        sa1 = to_val_str(float(a1) if a1 is not None else None, 'num')
-        sa2 = to_val_str(float(a2) if a2 is not None else None, 'num')
+        sa1 = to_val_str(a1, 'num')
+        sa2 = to_val_str(a2, 'num')
         s += f" ({sa1} / {sa2}, {suffix})"
     return s
 
 def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估"):
     s = to_val_str(orig, fmt)
     if ai_val is not None and not pd.isna(ai_val):
-        s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({to_val_str(float(ai_val), fmt)}, {suffix})</span>"
+        s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({to_val_str(ai_val, fmt)}, {suffix})</span>"
     return s
 
 def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估"):
@@ -82,13 +85,10 @@ def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估"
     s2 = to_val_str(o2, fmt2)
     s = f"{s1} / <span style='color:#00bfff;'>{s2}</span>" if (fmt1=="num" and fmt2=="num") else f"{s1} / {s2}"
     if (a1 is not None and not pd.isna(a1)) or (a2 is not None and not pd.isna(a2)):
-        sa1 = to_val_str(float(a1) if a1 is not None else None, fmt1)
-        sa2 = to_val_str(float(a2) if a2 is not None else None, fmt2)
+        sa1 = to_val_str(a1, fmt1)
+        sa2 = to_val_str(a2, fmt2)
         s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({sa1} / {sa2}, {suffix})</span>"
     return s
-
-def clean_html(html_str):
-    return re.sub(r'[\r\n\t]+', ' ', html_str).strip()
 
 def get_watchlist():
     watchlist = []
