@@ -34,6 +34,7 @@ SECTOR_MAP = {
 # ==========================================
 # 1. 全局安全轉換與排版函數
 # ==========================================
+
 def s_float(val, default=None):
     try:
         if val is None: return default
