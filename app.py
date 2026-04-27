@@ -190,6 +190,7 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     except: pass
     return pd.DataFrame()
 
+# 🚀 終極防彈版 AI 財報補齊引擎
 def get_financials_from_ai(stock_name, stock_id, api_key):
     if not api_key: return None
     api_key = api_key.strip()
@@ -215,16 +216,21 @@ def get_financials_from_ai(stock_name, stock_id, api_key):
     絕對不要輸出 markdown 標記或其他文字。"""
     
     payload = {
-        "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 以及 {target_year} 法ర్ణ預測 EPS 與 最新目標價"}]}],
+        "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"google_search": {}}]
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"responseMimeType": "application/json"} # 🚀 強制要求 JSON 格式，減少幻覺
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            clean_text = re.sub(r'```json\n?|```', '', text).strip()
-            return json.loads(clean_text)
+            # 🚀 暴力 JSON 萃取：不管 AI 前後加了什麼廢話，直接切出 {} 裡面的內容
+            s_idx = text.find('{')
+            e_idx = text.rfind('}')
+            if s_idx != -1 and e_idx != -1:
+                clean_text = text[s_idx:e_idx+1]
+                return json.loads(clean_text)
     except: pass
     return None
 
@@ -485,6 +491,7 @@ def get_finmind_financial_health(stock_id, fm_key=""):
     except: pass
     return {}
 
+# 🚀 暴力網頁提取器：無視改版，直接抓取關鍵財務數字
 def get_fallback_info(stock_id):
     info = {}
     for ext in [".TW", ".TWO"]:
@@ -507,21 +514,19 @@ def get_fallback_info(stock_id):
         res = requests.get(url, headers=headers, timeout=5)
         text = res.text
         
-        json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', text)
-        if json_match:
-            data_str = json_match.group(1)
-            def ext_val(key, is_pct=False):
-                m = re.search(rf'"{key}"\s*:\s*(?:{{"raw"\s*:\s*)?"?([+-]?\d+(?:\.\d+)?)"?', data_str)
-                if m: return float(m.group(1)) / 100.0 if is_pct else float(m.group(1))
-                return None
-            info['trailingPE'] = ext_val('peRatio') or ext_val('trailingPE')
-            info['priceToBook'] = ext_val('pbRatio') or ext_val('priceToBook')
-            info['trailingEps'] = ext_val('eps') or ext_val('trailingEps')
-            info['dividendYield'] = ext_val('dividendYield', True)
+        # 🚀 升級暴力提取：不依賴固定的 __NEXT_DATA__ 標籤，直接掃描全文本找出 JSON 欄位
+        def ext_val(key, is_pct=False):
+            m = re.search(rf'"{key}"\s*:\s*(?:{{"raw"\s*:\s*)?"?([+-]?\d+(?:\.\d+)?)"?', text)
+            if m: return float(m.group(1)) / 100.0 if is_pct else float(m.group(1))
+            return None
             
-            info['targetHighPrice'] = ext_val('targetHighPrice')
-            info['targetMeanPrice'] = ext_val('targetMeanPrice')
-            info['targetLowPrice'] = ext_val('targetLowPrice')
+        info['trailingPE'] = ext_val('peRatio') or ext_val('trailingPE')
+        info['priceToBook'] = ext_val('pbRatio') or ext_val('priceToBook')
+        info['trailingEps'] = ext_val('eps') or ext_val('trailingEps')
+        info['dividendYield'] = ext_val('dividendYield', True)
+        info['targetHighPrice'] = ext_val('targetHighPrice')
+        info['targetMeanPrice'] = ext_val('targetMeanPrice')
+        info['targetLowPrice'] = ext_val('targetLowPrice')
 
         def fuzzy_ext(keyword, is_pct=False):
             idx = text.find(keyword)
@@ -541,7 +546,8 @@ def get_fallback_info(stock_id):
         info['operatingMargins'] = fuzzy_ext('營業利益率', True) or fuzzy_ext('營益率', True)
         info['returnOnEquity'] = fuzzy_ext('ROE', True) or fuzzy_ext('權益報酬率', True)
         
-        sec_match = re.search(r'href="/class-quote\?category=([^"]+)"', text)
+        # 🚀 解決上櫃公司分類亂碼 (遇到 & 就截斷)
+        sec_match = re.search(r'href="/class-quote\?category=([^"&]+)', text)
         if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
     except: pass
     return info
@@ -1220,9 +1226,6 @@ if curr_id:
         if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
             sys_f_eps_calc = t_eps * (1 + earn_growth)
 
-        # ==========================================
-        # 🚀 財務儀表板 (乾淨版)
-        # ==========================================
         col_eps1, col_eps2 = st.columns([1, 1])
         with col_eps1:
             target_peg_adj = st.selectbox(
@@ -1267,7 +1270,6 @@ if curr_id:
 
         is_base_normalized = False 
 
-        # 🚀 系統原始邏輯運算
         eff_f_eps = sys_f_eps_calc
         eps_source_text = f"海外系統或反推 ({eff_f_eps:.2f}元)" if eff_f_eps is not None else "系統預估 (無資料)"
         f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推估')
@@ -1288,7 +1290,6 @@ if curr_id:
         
         orig_peg = sys_forward_pe / (real_cg * 100) if sys_forward_pe is not None and real_cg is not None and real_cg > 0 else None
         
-        # 🚀 AI 輔助邏輯運算
         ai_cg = None
         if ai_f_eps_calc is not None and ai_t_eps is not None and ai_t_eps > 0:
             safe_base_eps_ai = 0.5 if ai_t_eps < 0.5 else ai_t_eps
@@ -1301,7 +1302,6 @@ if curr_id:
         eff_peg = orig_peg if orig_peg is not None else ai_peg
         if real_cg is not None and real_cg <= 0: eff_peg = -999
         
-        # 🚀 雙重目標價估算 (系統 vs AI)
         if eff_f_eps is not None and real_cg is not None and real_cg > 0:
             raw_mult = (real_cg * 100) * target_peg_adj
             capped_mult = min(raw_mult, target_pe_cap)
@@ -1322,8 +1322,7 @@ if curr_id:
 
         ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if ai_f_eps_calc is not None else None
         
-        # 🚀 顯示字串與顏色邏輯
-        eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推估')
+        eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推算')
         if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
         eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
         
@@ -1529,16 +1528,133 @@ if curr_id:
         st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 準備為 AI Prompt 打包的字串變數
+        # 🚀 法人預估目標價
         hi_val = s_float(info.get('targetHighPrice'))
         me_val = s_float(info.get('targetMeanPrice'))
         lo_val = s_float(info.get('targetLowPrice'))
         
-        hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
-        me_str = f"{me_val:.1f}" if me_val else "無資料"
-        lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
-        ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price else "未捕捉到"
+        st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+        
+        if hi_val is not None and me_val is not None and lo_val is not None:
+            v1, v2, v3 = st.columns(3)
+            v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi_val:.1f}</b></div>", unsafe_allow_html=True)
+            upside = ((me_val / curr_p) - 1) * 100 if curr_p else 0
+            v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
+            v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo_val:.1f}</b></div>", unsafe_allow_html=True)
+            if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元 ({ai_suffix})")
+            st.markdown("---")
+        elif hi_val is not None:
+             st.info(f"系統法人最高預期：**{hi_val:.1f}**")
+             if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元 ({ai_suffix})")
+             st.markdown("---")
+        elif ai_target_price:
+             upside_ai = ((ai_target_price / curr_p) - 1) * 100 if curr_p else 0
+             st.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>🤖 AI 聯網捕捉最新目標價 ({ai_suffix})</small><br><b>{ai_target_price:.1f}</b><br><small>潛在空間: {upside_ai:+.1f}%</small></div>", unsafe_allow_html=True)
+             st.markdown("---")
+        else:
+             st.markdown("<span style='color:gray;'>系統與 AI 目前皆無明確的法人目標價資料。</span>", unsafe_allow_html=True)
+             st.markdown("---")
 
+        # 🚀 主力籌碼追蹤雷達
+        st.markdown("#### 📡 主力籌碼追蹤雷達 (聰明錢動向與背離陷阱)", unsafe_allow_html=True)
+        inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
+        
+        if not inst_df.empty:
+            f_streak = get_streak(inst_df['Foreign'])
+            t_streak = get_streak(inst_df['Trust'])
+            f_10d = inst_df['Foreign'].tail(10).sum()
+            t_10d = inst_df['Trust'].tail(10).sum()
+            
+            f_status = f"連買 {f_streak} 天 🔥" if f_streak > 0 else (f"連賣 {-f_streak} 天 ⚠️" if f_streak < 0 else "無連續動向")
+            t_status = f"連買 {t_streak} 天 🔥" if t_streak > 0 else (f"連賣 {-t_streak} 天 ⚠️" if t_streak < 0 else "無連續動向")
+            
+            f_color = "#ff4d4d" if f_10d > 0 else "#00cc66"
+            t_color = "#ff4d4d" if t_10d > 0 else "#00cc66"
+            
+            trap_warning = ""
+            if (eff_eg is not None and eff_eg > 0) and ((f_10d + t_10d) < -1000):
+                trap_warning = "<div style='background:linear-gradient(90deg, #8b0000 0%, #ff4d4d 100%); color:white; padding:12px; border-radius:8px; margin-top:10px; font-weight:bold;'>🚨 【高危陷阱警示】基本面看似亮眼，但外資/投信近 10 日聯手倒貨超過千張！請提防主力趁利多逢高出貨！</div>"
+            elif (f_streak >= 3 or t_streak >= 3) and ((f_10d + t_10d) > 1000):
+                trap_warning = "<div style='background:linear-gradient(90deg, #006400 0%, #00cc66 100%); color:white; padding:12px; border-radius:8px; margin-top:10px; font-weight:bold;'>🚀 【聰明錢上車】三大法人近期連買且大幅建倉，籌碼動能強勁，極具波段上攻潛力！</div>"
+            else:
+                trap_warning = "<div style='background:#1e1e1e; color:#aaa; padding:12px; border-radius:8px; border:1px solid #333; margin-top:10px;'>目前三大法人買賣超動向無極端異常訊號。</div>"
+
+            radar_html = f"""
+            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:10px;'>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {f_color};'>
+                    <div style='color:#aaa; font-size:0.9rem;'>外資近 10 日淨買賣</div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:{f_color};'>{f_10d:,.0f} 張</div>
+                    <div style='font-size:1rem; font-weight:bold; color:#fff; margin-top:5px;'>動向: {f_status}</div>
+                </div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {t_color};'>
+                    <div style='color:#aaa; font-size:0.9rem;'>投信近 10 日淨買賣</div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:{t_color};'>{t_10d:,.0f} 張</div>
+                    <div style='font-size:1rem; font-weight:bold; color:#fff; margin-top:5px;'>動向: {t_status}</div>
+                </div>
+            </div>
+            {trap_warning}
+            """
+            st.markdown(clean_html(radar_html), unsafe_allow_html=True)
+        else:
+            if not st.session_state.finmind_key:
+                st.warning("⚠️ 系統無法獲取主力籌碼雷達。請至左側上傳 `key.txt` 匯入 FinMind 金鑰以解除限制。")
+            else:
+                st.warning("⚠️ 此檔股票近期無三大法人買賣超數據，無法啟動籌碼雷達。")
+        st.markdown("---")
+
+        # 🚀 籌碼面與股權結構分析
+        st.markdown("#### 🐳 內部人與控盤主力推估", unsafe_allow_html=True)
+        insider_pct = s_float(info.get('heldPercentInsiders'))
+        inst_pct = s_float(info.get('heldPercentInstitutions'))
+        shares_out = s_float(info.get('sharesOutstanding'))
+        share_capital = shares_out * 10 if shares_out is not None else None
+
+        if share_capital is not None:
+            if share_capital >= 10_000_000_000:
+                cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
+            elif share_capital <= 3_000_000_000:
+                cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
+            else:
+                cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
+        else:
+            cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
+
+        inst_str = to_pct(inst_pct)
+        inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
+
+        insider_str = to_pct(insider_pct)
+        in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
+
+        chip_html = f"""
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 外資/機構總持股率</div>
+                    <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
+                    <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
+                </div>
+                <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
+            </div>
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
+                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                    <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
+                    <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
+                </div>
+                <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
+                <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
+            </div>
+        </div>
+        """
+        st.markdown(clean_html(chip_html), unsafe_allow_html=True)
+        st.markdown("---")
+
+        # 🚀 準備為 AI Prompt 打包的字串變數
         ai_fpe_prompt = sys_forward_pe if sys_forward_pe is not None else None
         orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
         if orig_peg_num == -999:
@@ -1612,7 +1728,6 @@ if curr_id:
         
         with col_ai2:
             with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
-                # 🚀 升級 iPad 友善的提示詞複製區：改用 st.text_area 解決無法換行、難以複製的問題！
                 st.markdown("<small style='color:gray;'>*請在下方文字框內點選，全選 (Ctrl+A / ⌘+A) 並複製，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
                 st.text_area("提示詞內容", value=full_prompt_for_copy, height=300, label_visibility="collapsed")
         
@@ -1625,7 +1740,6 @@ if curr_id:
                 st.markdown(st.session_state.ai_industry_result)
                 st.markdown("---")
                 st.markdown("##### 📋 【純文字複製區】")
-                # 🚀 升級 iPad 友善的報告複製區：改用 st.text_area 解決無法換行、難以複製的問題！
                 st.markdown("<small style='color:gray;'>*請在下方文字框內全選並複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
                 st.text_area("純文字結果", value=st.session_state.ai_industry_result, height=400, label_visibility="collapsed")
             st.markdown("<br>", unsafe_allow_html=True)
