@@ -365,25 +365,52 @@ def get_monthly_revenue(stock_id, fm_key=""):
         if y_res.status_code == 200:
             json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
             if json_match:
-                raw_json = json_match.group(1)
-                blocks = re.split(r'"yearMonth"', raw_json)[1:] 
-                for block in blocks:
-                    mon_m = re.search(r'^\s*:\s*"(\d{4}/\d{2})"', block)
-                    if not mon_m: continue
-                    mon = mon_m.group(1)
-                    rev_m = re.search(r'"單月營收",\s*"value":\s*"([^"]+)"', block)
-                    yoy_m = re.search(r'"年增率",\s*"value":\s*"([^"]+)"', block)
-                    mom_m = re.search(r'"月增率",\s*"value":\s*"([^"]+)"', block)
-                    if rev_m and yoy_m and mom_m:
-                        try:
-                            rev = float(rev_m.group(1).replace(',', '')) / 100000
-                            yoy = float(yoy_m.group(1).replace('%', '').replace(',', ''))
-                            mom = float(mom_m.group(1).replace('%', '').replace(',', ''))
-                            return pd.DataFrame([{
-                                'Month': mon, 'Revenue': round(rev, 2), 'YoY': yoy, 'MoM': mom
-                            }])
-                        except: pass
-    except: pass
+                # 🚀 升級 1：使用深度 JSON 解析，取代容易抓錯月份的正則表達式
+                raw_json = json.loads(json_match.group(1))
+                
+                def find_rev_list(node):
+                    if isinstance(node, dict):
+                        if 'yearMonth' in node and 'revenue' in node and 'monthOverMonth' in node:
+                            return [node]
+                        res = []
+                        for k, v in node.items():
+                            ext = find_rev_list(v)
+                            if ext: res.extend(ext)
+                        return res
+                    elif isinstance(node, list):
+                        res = []
+                        for item in node:
+                            ext = find_rev_list(item)
+                            if ext: res.extend(ext)
+                        return res
+                    return []
+                    
+                rev_list = find_rev_list(raw_json)
+                valid_revs = [r for r in rev_list if isinstance(r.get('yearMonth'), str) and re.match(r'\d{4}/\d{2}', r.get('yearMonth'))]
+                
+                if valid_revs:
+                    valid_revs.sort(key=lambda x: x['yearMonth'], reverse=True) # 確保絕對是最新的月份
+                    latest = valid_revs[0]
+                    mon = latest.get('yearMonth')
+                    
+                    def get_raw(field):
+                        val = latest.get(field)
+                        if isinstance(val, dict): return val.get('raw', 0)
+                        return float(val) if val is not None else 0
+                        
+                    rev_raw = get_raw('revenue')
+                    yoy_raw = get_raw('yearOverYear')
+                    mom_raw = get_raw('monthOverMonth')
+                    
+                    if mon and rev_raw:
+                        return pd.DataFrame([{
+                            'Month': mon, 
+                            'Revenue': round(rev_raw / 100000000, 2), 
+                            'YoY': round(yoy_raw * 100, 2), 
+                            'MoM': round(mom_raw * 100, 2)
+                        }])
+    except Exception as e: 
+        print(f"Yahoo 營收對齊引擎失敗: {e}")
     
     try:
         today = datetime.date.today()
@@ -511,10 +538,12 @@ def get_finmind_financial_health(stock_id, fm_key=""):
                 if at_l > at_p: f_score += 1               
                 
             res_dict['f_score'] = f_score
-            return res_dict
-    except: pass
+        return res_dict
+    except Exception as e: 
+        print(f"F-Score 引擎錯誤: {e}")
     return {}
 
+# 🚀 升級 2：暴力網頁提取器升級為「深度 JSON 樹狀尋訪」，根絕抓錯數字的悲劇
 def get_fallback_info(stock_id):
     info = {}
     for ext in [".TW", ".TWO"]:
@@ -539,43 +568,42 @@ def get_fallback_info(stock_id):
         
         json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', text)
         if json_match:
-            data_str = json_match.group(1)
-            def ext_val(key, is_pct=False):
-                m = re.search(rf'"{key}"\s*:\s*(?:{{"raw"\s*:\s*)?"?([+-]?\d+(?:\.\d+)?)"?', data_str)
-                if m: return float(m.group(1)) / 100.0 if is_pct else float(m.group(1))
-                return None
-            info['trailingPE'] = ext_val('peRatio') or ext_val('trailingPE')
-            info['priceToBook'] = ext_val('pbRatio') or ext_val('priceToBook')
-            info['trailingEps'] = ext_val('eps') or ext_val('trailingEps')
-            info['dividendYield'] = ext_val('dividendYield', True)
+            data = json.loads(json_match.group(1))
+            keys_to_find = ['peRatio', 'trailingPE', 'pbRatio', 'priceToBook', 'eps', 'trailingEps', 'dividendYield', 'targetHighPrice', 'targetMeanPrice', 'targetLowPrice', 'grossMargins', 'operatingMargins', 'returnOnEquity']
+            found_data = {}
             
-            info['targetHighPrice'] = ext_val('targetHighPrice')
-            info['targetMeanPrice'] = ext_val('targetMeanPrice')
-            info['targetLowPrice'] = ext_val('targetLowPrice')
-
-        def fuzzy_ext(keyword, is_pct=False):
-            idx = text.find(keyword)
-            if idx != -1:
-                matches = re.findall(r'>\s*([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(%)?\s*<', text[idx:idx+300])
-                if matches:
-                    try: return float(matches[0][0].replace(',', '')) / 100.0 if is_pct or matches[0][1] == '%' else float(matches[0][0].replace(',', ''))
-                    except: pass
-            return None
-
-        if 'trailingPE' not in info or not info['trailingPE']: info['trailingPE'] = fuzzy_ext('本益比')
-        if 'priceToBook' not in info or not info['priceToBook']: info['priceToBook'] = fuzzy_ext('股價淨值比')
-        if 'trailingEps' not in info or not info['trailingEps']: info['trailingEps'] = fuzzy_ext('EPS')
-        if 'dividendYield' not in info or not info['dividendYield']: info['dividendYield'] = fuzzy_ext('殖利率', True)
-        
-        info['grossMargins'] = fuzzy_ext('毛利率', True) or fuzzy_ext('營業毛利率', True)
-        info['operatingMargins'] = fuzzy_ext('營業利益率', True) or fuzzy_ext('營益率', True)
-        info['returnOnEquity'] = fuzzy_ext('ROE', True) or fuzzy_ext('權益報酬率', True)
-        
+            def find_keys(node):
+                if isinstance(node, dict):
+                    for k, v in node.items():
+                        if k in keys_to_find:
+                            if isinstance(v, dict) and 'raw' in v:
+                                found_data[k] = v['raw']
+                            elif isinstance(v, (int, float)):
+                                found_data[k] = v
+                        find_keys(v)
+                elif isinstance(node, list):
+                    for item in node:
+                        find_keys(item)
+                        
+            find_keys(data)
+            
+            info['trailingPE'] = found_data.get('peRatio') or found_data.get('trailingPE')
+            info['priceToBook'] = found_data.get('pbRatio') or found_data.get('priceToBook')
+            info['trailingEps'] = found_data.get('eps') or found_data.get('trailingEps')
+            info['dividendYield'] = found_data.get('dividendYield')
+            info['targetHighPrice'] = found_data.get('targetHighPrice')
+            info['targetMeanPrice'] = found_data.get('targetMeanPrice')
+            info['targetLowPrice'] = found_data.get('targetLowPrice')
+            info['grossMargins'] = found_data.get('grossMargins')
+            info['operatingMargins'] = found_data.get('operatingMargins')
+            info['returnOnEquity'] = found_data.get('returnOnEquity')
+            
         sec_match = re.search(r'href="/class-quote\?category=([^"&]+)', text)
         if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
     except: pass
     return info
 
+# 🚀 終極突破：零延遲即時報價引擎 (TWSE官方API + Yahoo即時網頁雙軌備援)
 @st.cache_data(ttl=30)
 def get_realtime_data(stock_id):
     rt_data = {}
@@ -1503,9 +1531,12 @@ if curr_id:
 
         st.markdown("#### 🛡️ 防禦力與財務健康檢測 (長線/存股必看)", unsafe_allow_html=True)
         div_yield = s_float(info.get('dividendYield')) or s_float(info.get('trailingAnnualDividendYield'))
-        if div_yield is not None and div_yield > 0.3: div_yield = div_yield / 100.0
+        # 🚀 升級 3：修復殖利率顯示異常，只有當數字異常大(例如 19.0) 時才除以100，避開已是小數點(0.0025)被二度縮小的問題
+        if div_yield is not None and div_yield > 1.0: div_yield = div_yield / 100.0
 
         fcf = s_float(info.get('freeCashflow'))
+        if fcf is None and fm_health.get('cfo_l'): fcf = fm_health.get('cfo_l')
+            
         current_ratio = s_float(info.get('currentRatio'))
 
         dy_str = to_pct(div_yield)
