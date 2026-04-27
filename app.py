@@ -17,7 +17,7 @@ import io
 # ==========================================
 # 0. 網頁基本設定
 # ==========================================
-st.set_page_config(page_title="台股聯網-AI 投資戰情室", layout="wide")
+st.set_page_config(page_title="台股聯網 AI 投資戰情室", layout="wide")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
 # --- 產業對照表 ---
@@ -198,7 +198,6 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     except: pass
     return pd.DataFrame()
 
-# 🚀 修復 API 400 Bad Request，確保工具名稱正確
 def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return {"error": "未提供 API Key"}
     api_key = api_key.strip()
@@ -226,7 +225,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
     payload = {
         "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞 以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"google_search": {}}] # 🚀 修正：官方正確的參數名稱為 google_search
+        "tools": [{"google_search": {}}] 
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
@@ -1155,33 +1154,6 @@ if curr_id:
             st.markdown(clean_html(trend_html), unsafe_allow_html=True)
 
         # ==========================================
-        # 🚀 提早宣告所有變數，絕對防止 NameError
-        # ==========================================
-        hi_val = s_float(info.get('targetHighPrice'))
-        me_val = s_float(info.get('targetMeanPrice'))
-        lo_val = s_float(info.get('targetLowPrice'))
-        
-        hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
-        me_str = f"{me_val:.1f}" if me_val else "無資料"
-        lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
-        
-        ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
-        ai_pe = s_float(ai_fin.get('pe'))
-        ai_pb = s_float(ai_fin.get('pb'))
-        ai_t_eps = s_float(ai_fin.get('trailing_eps'))
-        ai_f_eps_calc = s_float(ai_fin.get('forward_eps'))
-        ai_yoy = s_float(ai_fin.get('yoy'))
-        ai_gm = s_float(ai_fin.get('gross_margin'))
-        ai_om = s_float(ai_fin.get('operating_margin'))
-        ai_roe = s_float(ai_fin.get('roe'))
-        ai_de = s_float(ai_fin.get('debt_to_equity'))
-        ai_target_price = s_float(ai_fin.get('target_price'))
-        
-        raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
-        ai_suffix = f"AI({raw_ai_period})" if raw_ai_period else "AI捉取"
-        ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price else "未捕捉到"
-
-        # ==========================================
         # 💼 財務基本面與獲利基準微調
         # ==========================================
         col_fin_title, col_fin_btn = st.columns([0.6, 0.4])
@@ -1239,6 +1211,21 @@ if curr_id:
 
         if pe_ratio is None and t_eps is None and not st.session_state.ai_fetched_financials.get(curr_id):
             st.warning("⚠️ **全球連線受阻**：目前免費資料庫限制了部分上櫃股票的抓取。👉 **解決方案**：請點擊上方【🪄 啟動 AI 全方位校對與補齊財報】讓 AI 強制為您抓回最新外資預估！")
+        
+        ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
+        ai_pe = s_float(ai_fin.get('pe'))
+        ai_pb = s_float(ai_fin.get('pb'))
+        ai_t_eps = s_float(ai_fin.get('trailing_eps'))
+        ai_f_eps_calc = s_float(ai_fin.get('forward_eps'))
+        ai_yoy = s_float(ai_fin.get('yoy'))
+        ai_gm = s_float(ai_fin.get('gross_margin'))
+        ai_om = s_float(ai_fin.get('operating_margin'))
+        ai_roe = s_float(ai_fin.get('roe'))
+        ai_de = s_float(ai_fin.get('debt_to_equity'))
+        ai_target_price = s_float(ai_fin.get('target_price'))
+        
+        raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
+        ai_suffix = f"AI({raw_ai_period})" if raw_ai_period else "AI捉取"
         
         eff_pe = pe_ratio if pe_ratio is not None else ai_pe
         eff_pb = pb_ratio if pb_ratio is not None else ai_pb
@@ -1571,6 +1558,11 @@ if curr_id:
         st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
         st.markdown("---")
 
+        # 🚀 法人預估目標價
+        hi_val = s_float(info.get('targetHighPrice'))
+        me_val = s_float(info.get('targetMeanPrice'))
+        lo_val = s_float(info.get('targetLowPrice'))
+        
         st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
         
         if hi_val is not None and me_val is not None and lo_val is not None:
@@ -1692,7 +1684,34 @@ if curr_id:
         st.markdown(clean_html(chip_html), unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 準備為 AI Prompt 打包的字串變數
+        # ==========================================
+        # 🚀 AI Prompt 打包字串 (100% 杜絕 NameError)
+        # ==========================================
+        hi_str = f"{hi_val:.1f}" if hi_val else "無資料"
+        me_str = f"{me_val:.1f}" if me_val else "無資料"
+        lo_str = f"{lo_val:.1f}" if lo_val else "無資料"
+        ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price else "未捕捉到"
+
+        ai_fpe_prompt = sys_forward_pe if sys_forward_pe is not None else None
+        orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
+        if orig_peg_num == -999:
+            ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
+        else:
+            ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
+
+        ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
+        ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
+        ctx_rg = p_fmt(rev_growth, ai_yoy, 'pct')
+        ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
+        ctx_om = p_fmt(op_margin, ai_om, 'pct')
+        ctx_roe = p_fmt(roe, ai_roe, 'pct')
+        ctx_de = p_fmt(sys_de, ai_de, 'pct')
+        ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推') if sys_forward_pe else "N/A"
+        ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
+        ctx_eg = p_fmt(real_cg, ai_cg, 'pct', 'AI推算')
+        latest_mom_str = f"{df_rev_bk['MoM'].iloc[-1]:.2f}%" if df_rev_bk is not None and not df_rev_bk.empty else "無資料"
+        tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
+
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
         - 最新收盤價: {curr_p} 元
@@ -1942,7 +1961,6 @@ if curr_id:
         
         plot_df = full_df.tail(120).copy()
         
-        inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
         if not inst_df.empty:
             temp_dates = pd.to_datetime(plot_df.index).normalize()
             inst_df_aligned = inst_df.copy()
