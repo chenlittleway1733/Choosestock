@@ -1166,12 +1166,18 @@ if curr_id:
                     fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key, selected_model)
                     
                     if isinstance(fetched_data, dict) and "error" not in fetched_data:
+                        fetched_data['model_used'] = st.session_state.get('ai_model_radio', 'Gemini 2.5 Flash')
                         st.session_state.ai_fetched_financials[curr_id] = fetched_data
                         st.rerun()
                     elif isinstance(fetched_data, dict) and "error" in fetched_data:
                         st.error(f"🚨 AI 抓取失敗：{fetched_data['error']}")
                     else:
                         st.error("🚨 AI 暫時無法找到確切數據，或請求遭拒。")
+
+            # 🚀 升級：在按鈕下方顯示目前補齊財報所使用的 AI 版本
+            temp_ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
+            if temp_ai_fin.get('model_used'):
+                st.markdown(f"<div style='text-align:right; color:#FFD700; font-size:0.85rem; margin-top:5px;'>🤖 驅動核心: <b>{temp_ai_fin['model_used']}</b></div>", unsafe_allow_html=True)
                         
         df_rev_bk = get_monthly_revenue(curr_id, st.session_state.finmind_key)
         df_per_bk = get_pe_pb_data(curr_id, st.session_state.finmind_key)
