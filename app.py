@@ -206,7 +206,6 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
     
-    # 🚀 升級：明確要求 AI 抓取 MoM 與 Dividend Yield
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
@@ -222,13 +221,14 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
     12. 「預估現金殖利率 (Dividend Yield)」(例如：擬配發現金股利2元，最新股價900元，殖利率應為 0.0022)
     13. 「最新資料所屬年月或季度 (Data Period)」
 
-    必須嚴格回傳包含上述 13 個欄位的 JSON 格式。百分比請轉換為小數（例如衰退14%請寫 -0.14，24%寫 0.24），數值請直接輸出數字。若查無資料，該欄位請填 null。
+    必須嚴格回傳包含上述 13 個欄位的 JSON 格式。百分比請轉換為小數，數值請直接輸出數字。若查無資料，該欄位請填 null。
     絕對不要輸出 markdown 標記或其他文字。"""
     
     payload = {
         "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"google_search": {}}] 
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"responseMimeType": "application/json"}
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
@@ -299,7 +299,8 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     payload = {
         "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], 
         "systemInstruction": {"parts": [{"text": system_prompt}]}, 
-        "tools": [{"google_search": {}}]
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"responseMimeType": "application/json"}
     }
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -478,6 +479,10 @@ def get_finmind_financial_health(stock_id, fm_key=""):
             
             df_latest = df[df['date'] == latest_date]
             df_prev = df[df['date'] == prev_date]
+            
+            # 🚀 終極修復：確保 vals_l 和 vals_p 字典被正確建立
+            vals_l = dict(zip(df_latest['type'].astype(str).str.strip(), df_latest['value']))
+            vals_p = dict(zip(df_prev['type'].astype(str).str.strip(), df_prev['value']))
             
             def get_val(v_dict, *keys):
                 for k in keys:
@@ -1207,8 +1212,13 @@ if curr_id:
         df_per_bk = get_pe_pb_data(curr_id, st.session_state.finmind_key)
         fm_health = get_finmind_financial_health(curr_id, st.session_state.finmind_key)
         
-        latest_rev_month = df_rev_bk['Month'].iloc[-1] if df_rev_bk is not None and not df_rev_bk.empty else "無資料"
-        latest_mom_val = s_float(df_rev_bk['MoM'].iloc[-1]) if df_rev_bk is not None and not df_rev_bk.empty else None
+        # 🚀 防呆 1：處理最新月份營收
+        if df_rev_bk is not None and not df_rev_bk.empty:
+            latest_rev_month = df_rev_bk['Month'].iloc[-1]
+            latest_mom_val = s_float(df_rev_bk['MoM'].iloc[-1])
+        else:
+            latest_rev_month = "無資料"
+            latest_mom_val = None
         
         pe_ratio = s_float(info.get('trailingPE'))
         if (pe_ratio is None or pe_ratio > 1000) and df_per_bk is not None and not df_per_bk.empty:
@@ -1240,7 +1250,7 @@ if curr_id:
         sys_f_eps_calc = s_float(info.get('forwardEps'))
 
         if pe_ratio is None and t_eps is None and not st.session_state.ai_fetched_financials.get(curr_id):
-            st.warning("⚠️ **全球連線受阻**：目前免費資料庫限制了部分上櫃股票的抓取。👉 **解決方案**：請點擊上方【🪄 啟動 AI 全方位校對與補齊財報】讓 AI 強制為您抓回最新外資預估！")
+            st.warning("⚠️ **全球連線受阻**：目前免費資料庫限制了部分股票的抓取。👉 **解決方案**：請點擊上方【🪄 啟動 AI 全方位校對與補齊財報】讓 AI 強制為您抓回最新數據！")
         
         ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
         ai_pe = s_float(ai_fin.get('pe'))
@@ -1259,6 +1269,12 @@ if curr_id:
         if ai_mom is not None: 
             latest_mom_val = ai_mom * 100
         
+        # 🚀 防呆 2：在所有更新完成後才建立 latest_mom_str
+        if latest_mom_val is not None:
+            latest_mom_str = f"{latest_mom_val:.2f}%"
+        else:
+            latest_mom_str = "N/A"
+            
         ai_dy = s_float(ai_fin.get('dividend_yield'))
         
         raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
@@ -1386,6 +1402,38 @@ if curr_id:
 
         ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if ai_f_eps_calc is not None else None
         
+        # 🚀 準備為 AI Prompt 打包的字串變數 (100% 杜絕 NameError，確保在渲染前就打包完畢)
+        hi_val = s_float(info.get('targetHighPrice'))
+        me_val = s_float(info.get('targetMeanPrice'))
+        lo_val = s_float(info.get('targetLowPrice'))
+        
+        def price_str(v):
+            return f"{v:.1f}" if v is not None else "無資料"
+            
+        hi_str = price_str(hi_val)
+        me_str = price_str(me_val)
+        lo_str = price_str(lo_val)
+
+        ai_fpe_prompt = sys_forward_pe if sys_forward_pe is not None else None
+        orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
+        if orig_peg_num == -999:
+            ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
+        else:
+            ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
+
+        ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
+        ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
+        ctx_rg = p_fmt(rev_growth, ai_yoy, 'pct')
+        ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
+        ctx_om = p_fmt(op_margin, ai_om, 'pct')
+        ctx_roe = p_fmt(roe, ai_roe, 'pct')
+        ctx_de = p_fmt(sys_de, ai_de, 'pct')
+        ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推') if sys_forward_pe else "N/A"
+        ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
+        ctx_eg = p_fmt(real_cg, ai_cg, 'pct', 'AI推算')
+        tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
+        
+        # 顯示用的字串
         eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推算')
         if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
         eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
@@ -1495,7 +1543,7 @@ if curr_id:
         st.markdown(clean_html(val_html), unsafe_allow_html=True)
         
         mom_color = "#ff4d4d" if latest_mom_val is not None and latest_mom_val > 0 else ("#00cc66" if latest_mom_val is not None and latest_mom_val < 0 else "#fff")
-        mom_str_disp = f"<br><span style='font-size:1rem; color:{mom_color};'>MoM: {latest_mom_val:.2f}%</span>" if latest_mom_val is not None else ""
+        mom_str_disp = f"<br><span style='font-size:1rem; color:{mom_color};'>MoM: {latest_mom_str}</span>" if latest_mom_str != "N/A" else ""
 
         fund_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
@@ -1535,7 +1583,6 @@ if curr_id:
         st.markdown("#### 🛡️ 防禦力與財務健康檢測 (長線/存股必看)", unsafe_allow_html=True)
         div_yield = s_float(info.get('dividendYield')) or s_float(info.get('trailingAnnualDividendYield'))
         
-        # 🚀 升級殖利率顯示：AI 若有抓到則強制覆蓋，並修改荒謬值防護邏輯
         if ai_dy is not None:
             div_yield = ai_dy
         elif div_yield is not None and div_yield > 1.0: 
@@ -1602,11 +1649,6 @@ if curr_id:
         st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 法人預估目標價
-        hi_val = s_float(info.get('targetHighPrice'))
-        me_val = s_float(info.get('targetMeanPrice'))
-        lo_val = s_float(info.get('targetLowPrice'))
-        
         st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
         
         if hi_val is not None and me_val is not None and lo_val is not None:
@@ -1728,26 +1770,9 @@ if curr_id:
         st.markdown(clean_html(chip_html), unsafe_allow_html=True)
         st.markdown("---")
 
-        # 🚀 準備為 AI Prompt 打包的字串變數
-        ai_fpe_prompt = sys_forward_pe if sys_forward_pe is not None else None
-        orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
-        if orig_peg_num == -999:
-            ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
-        else:
-            ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
-
-        ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
-        ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
-        ctx_rg = p_fmt(rev_growth, ai_yoy, 'pct')
-        ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
-        ctx_om = p_fmt(op_margin, ai_om, 'pct')
-        ctx_roe = p_fmt(roe, ai_roe, 'pct')
-        ctx_de = p_fmt(sys_de, ai_de, 'pct')
-        ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推') if sys_forward_pe else "N/A"
-        ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
-        ctx_eg = p_fmt(real_cg, ai_cg, 'pct', 'AI推算')
-        tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
-
+        # ==========================================
+        # 🚀 打包傳給 AI 的 Context 字串
+        # ==========================================
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
         - 最新收盤價: {curr_p} 元
