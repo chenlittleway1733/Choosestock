@@ -225,7 +225,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
     絕對不要輸出 markdown 標記或其他文字。"""
     
     payload = {
-        "contents": [{"parts": [{"text": f"請啟動搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
+        "contents": [{"parts": [{"text": f"請啟提搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}],
         "generationConfig": {"responseMimeType": "application/json"}
@@ -480,7 +480,6 @@ def get_finmind_financial_health(stock_id, fm_key=""):
             df_latest = df[df['date'] == latest_date]
             df_prev = df[df['date'] == prev_date]
             
-            # 🚀 終極修復：確保 vals_l 和 vals_p 字典被正確建立
             vals_l = dict(zip(df_latest['type'].astype(str).str.strip(), df_latest['value']))
             vals_p = dict(zip(df_prev['type'].astype(str).str.strip(), df_prev['value']))
             
@@ -571,36 +570,39 @@ def get_fallback_info(stock_id):
         
         json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', text)
         if json_match:
-            data = json.loads(json_match.group(1))
-            keys_to_find = ['peRatio', 'trailingPE', 'pbRatio', 'priceToBook', 'eps', 'trailingEps', 'dividendYield', 'targetHighPrice', 'targetMeanPrice', 'targetLowPrice', 'grossMargins', 'operatingMargins', 'returnOnEquity']
-            found_data = {}
+            data_str = json_match.group(1)
+            def ext_val(key, is_pct=False):
+                safe_area = data_str[:len(data_str)//2]
+                m = re.search(rf'"{key}"\s*:\s*(?:{{"raw"\s*:\s*)?"?([+-]?\d+(?:\.\d+)?)"?', safe_area)
+                if m: return float(m.group(1)) / 100.0 if is_pct else float(m.group(1))
+                return None
+            info['trailingPE'] = ext_val('peRatio') or ext_val('trailingPE')
+            info['priceToBook'] = ext_val('pbRatio') or ext_val('priceToBook')
+            info['trailingEps'] = ext_val('eps') or ext_val('trailingEps')
+            info['dividendYield'] = ext_val('dividendYield', True)
             
-            def find_keys(node):
-                if isinstance(node, dict):
-                    for k, v in node.items():
-                        if k in keys_to_find:
-                            if isinstance(v, dict) and 'raw' in v:
-                                found_data[k] = v['raw']
-                            elif isinstance(v, (int, float)):
-                                found_data[k] = v
-                        find_keys(v)
-                elif isinstance(node, list):
-                    for item in node:
-                        find_keys(item)
-                        
-            find_keys(data)
-            
-            info['trailingPE'] = found_data.get('peRatio') or found_data.get('trailingPE')
-            info['priceToBook'] = found_data.get('pbRatio') or found_data.get('priceToBook')
-            info['trailingEps'] = found_data.get('eps') or found_data.get('trailingEps')
-            info['dividendYield'] = found_data.get('dividendYield')
-            info['targetHighPrice'] = found_data.get('targetHighPrice')
-            info['targetMeanPrice'] = found_data.get('targetMeanPrice')
-            info['targetLowPrice'] = found_data.get('targetLowPrice')
-            info['grossMargins'] = found_data.get('grossMargins')
-            info['operatingMargins'] = found_data.get('operatingMargins')
-            info['returnOnEquity'] = found_data.get('returnOnEquity')
-            
+            info['targetHighPrice'] = ext_val('targetHighPrice')
+            info['targetMeanPrice'] = ext_val('targetMeanPrice')
+            info['targetLowPrice'] = ext_val('targetLowPrice')
+
+        def fuzzy_ext(keyword, is_pct=False):
+            idx = text.find(keyword)
+            if idx != -1:
+                matches = re.findall(r'>\s*([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(%)?\s*<', text[idx:idx+300])
+                if matches:
+                    try: return float(matches[0][0].replace(',', '')) / 100.0 if is_pct or matches[0][1] == '%' else float(matches[0][0].replace(',', ''))
+                    except: pass
+            return None
+
+        if 'trailingPE' not in info or not info['trailingPE']: info['trailingPE'] = fuzzy_ext('本益比')
+        if 'priceToBook' not in info or not info['priceToBook']: info['priceToBook'] = fuzzy_ext('股價淨值比')
+        if 'trailingEps' not in info or not info['trailingEps']: info['trailingEps'] = fuzzy_ext('EPS')
+        if 'dividendYield' not in info or not info['dividendYield']: info['dividendYield'] = fuzzy_ext('殖利率', True)
+        
+        info['grossMargins'] = fuzzy_ext('毛利率', True) or fuzzy_ext('營業毛利率', True)
+        info['operatingMargins'] = fuzzy_ext('營業利益率', True) or fuzzy_ext('營益率', True)
+        info['returnOnEquity'] = fuzzy_ext('ROE', True) or fuzzy_ext('權益報酬率', True)
+        
         sec_match = re.search(r'href="/class-quote\?category=([^"&]+)', text)
         if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
     except: pass
@@ -1080,6 +1082,14 @@ if st.session_state.show_whale:
 
 curr_id = st.session_state.selected_stock
 if curr_id:
+    # 🚀 絕對防呆宣告：避免因任何例外導致變數未定義而觸發 NameError
+    ctx_pe, ctx_fpe, ctx_pb, ctx_peg = "N/A", "N/A", "N/A", "N/A"
+    hi_str, me_str, lo_str, ai_tp_str = "N/A", "N/A", "N/A", ""
+    latest_rev_month, latest_mom_str = "未知", "N/A"
+    dy_str, fcf_str, cr_str, fs_str = "N/A", "N/A", "N/A", "N/A"
+    ctx_eps, ctx_rg, ctx_eg, ctx_gm, ctx_om, ctx_roe, ctx_de = "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
+    tp_est_str, cap_warning_html = "無資料", ""
+
     with st.spinner('同步數據中...'):
         hist, info = get_stock_data(curr_id, st.session_state.fugle_key, st.session_state.finmind_key)
         if info is None: info = {}
@@ -1212,7 +1222,6 @@ if curr_id:
         df_per_bk = get_pe_pb_data(curr_id, st.session_state.finmind_key)
         fm_health = get_finmind_financial_health(curr_id, st.session_state.finmind_key)
         
-        # 🚀 防呆 1：處理最新月份營收
         if df_rev_bk is not None and not df_rev_bk.empty:
             latest_rev_month = df_rev_bk['Month'].iloc[-1]
             latest_mom_val = s_float(df_rev_bk['MoM'].iloc[-1])
@@ -1262,14 +1271,14 @@ if curr_id:
         ai_om = s_float(ai_fin.get('operating_margin'))
         ai_roe = s_float(ai_fin.get('roe'))
         ai_de = s_float(ai_fin.get('debt_to_equity'))
+        
+        # 🚀 接收 AI 抓到的目標價、MoM 與 Dividend Yield，並覆蓋錯誤資料
         ai_target_price = s_float(ai_fin.get('target_price'))
         
-        # 🚀 接收 AI 抓到的 MoM 與 Dividend Yield，並覆蓋錯誤資料
         ai_mom = s_float(ai_fin.get('mom'))
         if ai_mom is not None: 
             latest_mom_val = ai_mom * 100
         
-        # 🚀 防呆 2：在所有更新完成後才建立 latest_mom_str
         if latest_mom_val is not None:
             latest_mom_str = f"{latest_mom_val:.2f}%"
         else:
@@ -1280,6 +1289,11 @@ if curr_id:
         raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
         ai_suffix = f"AI({raw_ai_period})" if raw_ai_period else "AI捉取"
         
+        # 🚀 在目標價 html 生成前，先宣告給 prompt 用的純文字變數，絕對防禦 NameError
+        ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price is not None else "未捕捉到"
+        target_price_html = ""
+        cap_warning_html = ""
+
         eff_pe = pe_ratio if pe_ratio is not None else ai_pe
         eff_pb = pb_ratio if pb_ratio is not None else ai_pb
         eff_t_eps = t_eps if t_eps is not None else ai_t_eps
@@ -1402,38 +1416,6 @@ if curr_id:
 
         ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if ai_f_eps_calc is not None else None
         
-        # 🚀 準備為 AI Prompt 打包的字串變數 (100% 杜絕 NameError，確保在渲染前就打包完畢)
-        hi_val = s_float(info.get('targetHighPrice'))
-        me_val = s_float(info.get('targetMeanPrice'))
-        lo_val = s_float(info.get('targetLowPrice'))
-        
-        def price_str(v):
-            return f"{v:.1f}" if v is not None else "無資料"
-            
-        hi_str = price_str(hi_val)
-        me_str = price_str(me_val)
-        lo_str = price_str(lo_val)
-
-        ai_fpe_prompt = sys_forward_pe if sys_forward_pe is not None else None
-        orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
-        if orig_peg_num == -999:
-            ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
-        else:
-            ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
-
-        ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
-        ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
-        ctx_rg = p_fmt(rev_growth, ai_yoy, 'pct')
-        ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
-        ctx_om = p_fmt(op_margin, ai_om, 'pct')
-        ctx_roe = p_fmt(roe, ai_roe, 'pct')
-        ctx_de = p_fmt(sys_de, ai_de, 'pct')
-        ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推') if sys_forward_pe else "N/A"
-        ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
-        ctx_eg = p_fmt(real_cg, ai_cg, 'pct', 'AI推算')
-        tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
-        
-        # 顯示用的字串
         eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推算')
         if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
         eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
@@ -1486,7 +1468,6 @@ if curr_id:
         pb_str = build_cmp_str(pb_ratio, ai_pb, 'x', ai_suffix)
         
         if sys_target_price_est or ai_target_price_est:
-            cap_warning_html = ""
             if is_capped or ai_is_capped:
                 cap_msg = f"🚨 觸發封頂防護 ({target_pe_cap:.0f}x)"
                 if (extreme_target_price and curr_p > extreme_target_price) or (ai_extreme_target_price and curr_p > ai_extreme_target_price):
@@ -1495,16 +1476,14 @@ if curr_id:
                     cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}</span>"
             
             sys_tp_str = f"{sys_target_price_est:.1f}元" if sys_target_price_est else "N/A"
-            ai_tp_str = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_target_price_est:.1f}元, AI推估)</span>" if ai_target_price_est else ""
+            ai_tp_est_html = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_target_price_est:.1f}元, AI推估)</span>" if ai_target_price_est else ""
             
             sys_ext_str = f"{extreme_target_price:.1f}元" if extreme_target_price else "N/A"
             ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_extreme_target_price:.1f}元, AI推估)</span>" if ai_extreme_target_price else ""
             
             debug_eps = eff_f_eps if eff_f_eps else 0
             
-            target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理估值 (PEG 推算): <b style='color:#fff; font-size:1.1rem;'>{sys_tp_str}</b> <br>{ai_tp_str}<br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>極限高空價 (Forward EPS × Cap): <span style='font-size:1.2rem;'>{sys_ext_str}</span> <br>{ai_ext_str}</span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] 帶入 EPS: {debug_eps:.2f} | 帶入 Cap: {target_pe_cap:.0f}x</small></div>{cap_warning_html}</div>"
-        else:
-            target_price_html = ""
+            target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理估值 (PEG 推算): <b style='color:#fff; font-size:1.1rem;'>{sys_tp_str}</b> <br>{ai_tp_est_html}<br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>極限高空價 (Forward EPS × Cap): <span style='font-size:1.2rem;'>{sys_ext_str}</span> <br>{ai_ext_str}</span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] 帶入 EPS: {debug_eps:.2f} | 帶入 Cap: {target_pe_cap:.0f}x</small></div>{cap_warning_html}</div>"
 
         val_html = f"""
         <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
@@ -1649,6 +1628,16 @@ if curr_id:
         st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
         st.markdown("---")
 
+        def price_str(v):
+            return f"{v:.1f}" if v is not None else "無資料"
+
+        hi_val = s_float(info.get('targetHighPrice'))
+        me_val = s_float(info.get('targetMeanPrice'))
+        lo_val = s_float(info.get('targetLowPrice'))
+        hi_str = price_str(hi_val)
+        me_str = price_str(me_val)
+        lo_str = price_str(lo_val)
+        
         st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
         
         if hi_val is not None and me_val is not None and lo_val is not None:
@@ -1771,8 +1760,27 @@ if curr_id:
         st.markdown("---")
 
         # ==========================================
-        # 🚀 打包傳給 AI 的 Context 字串
+        # 🚀 提早打包給 AI 的純文字 Prompt 變數，絕不報錯
         # ==========================================
+        ai_fpe_prompt = sys_forward_pe if sys_forward_pe is not None else None
+        orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
+        if orig_peg_num == -999:
+            ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
+        else:
+            ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
+
+        ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
+        ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
+        ctx_rg = p_fmt(rev_growth, ai_yoy, 'pct')
+        ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
+        ctx_om = p_fmt(op_margin, ai_om, 'pct')
+        ctx_roe = p_fmt(roe, ai_roe, 'pct')
+        ctx_de = p_fmt(sys_de, ai_de, 'pct')
+        ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推') if sys_forward_pe else "N/A"
+        ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
+        ctx_eg = p_fmt(real_cg, ai_cg, 'pct', 'AI推算')
+        tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
+
         context_str = f"""
         【即時盤面與估值 (原始數據 vs AI數據)】
         - 最新收盤價: {curr_p} 元
