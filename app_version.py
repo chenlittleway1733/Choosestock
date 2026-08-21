@@ -1,0 +1,5 @@
+"""Application display version."""
+
+APP_DISPLAY_NAME = "WAY AI 投資戰情室"
+APP_DISPLAY_VERSION = "2.4 Slim R6"
+APP_PAGE_TITLE = f"{APP_DISPLAY_NAME} {APP_DISPLAY_VERSION}"
