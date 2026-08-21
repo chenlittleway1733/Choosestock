@@ -176,6 +176,58 @@ class ApplicationBrandAndNavigationTests(unittest.TestCase):
         self.assertIn("股票預估價", source)
         self.assertNotIn("財務基本面與獲利基準微調", source)
 
+    def test_ui_main_imports_with_previous_panel_modules(self):
+        """Regression for Streamlit partial-deploy ImportError at ui_main.py line 9."""
+        import importlib.util
+        import ui_context.prompt_context as real_prompt
+        import ui_panels.financials as real_financials
+
+        old_financials = types.ModuleType("ui_panels.financials")
+        for name in (
+            "render_ai_financial_audit_control", "render_anomaly_detection_panel",
+            "render_defense_health_cards", "render_eps_breakdown_panel",
+            "render_final_signal_panel", "render_financial_metric_cards",
+            "render_financial_quality_report_panel", "render_target_price_panel",
+            "render_valuation_detail_panel",
+        ):
+            setattr(old_financials, name, getattr(real_financials, name))
+
+        old_prompt = types.ModuleType("ui_context.prompt_context")
+        for name in (
+            "build_prompt_target_context", "prompt_ai_source_summary", "prompt_dynamic_cap_core",
+            "prompt_df", "prompt_buy_decision_gap_risk_conditions", "prompt_defense_panel_summary",
+            "prompt_etf_panel_summary", "prompt_eps_adoption_sync_summary",
+            "prompt_field_source_priority_summary", "prompt_forward_eps_tier_core",
+            "prompt_chip_panel_summary", "prompt_model_gap_trigger_conditions",
+            "prompt_model_library_feedback_request", "prompt_panel_sync_audit",
+            "prompt_peg_valuation_layers", "prompt_quality_summary", "prompt_snapshot_audit_core",
+            "prompt_snapshot_audit_summary", "prompt_target_price_panel_summary",
+            "prompt_technical_suffix", "prompt_warnings",
+        ):
+            setattr(old_prompt, name, getattr(real_prompt, name))
+
+        saved_financials = sys.modules.get("ui_panels.financials")
+        saved_prompt = sys.modules.get("ui_context.prompt_context")
+        try:
+            sys.modules["ui_panels.financials"] = old_financials
+            sys.modules["ui_context.prompt_context"] = old_prompt
+            spec = importlib.util.spec_from_file_location("ui_main_compat_probe", ROOT / "ui_main.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        finally:
+            if saved_financials is not None:
+                sys.modules["ui_panels.financials"] = saved_financials
+            else:
+                sys.modules.pop("ui_panels.financials", None)
+            if saved_prompt is not None:
+                sys.modules["ui_context.prompt_context"] = saved_prompt
+            else:
+                sys.modules.pop("ui_context.prompt_context", None)
+
+        self.assertTrue(callable(module.build_eps_price_calculation_rows))
+        self.assertTrue(callable(module.build_essential_version_prompt))
+        self.assertEqual(len(module._DEPLOYMENT_COMPAT_WARNINGS), 2)
+
 
 class StockMappingConsistencyTests(unittest.TestCase):
     def test_stocklist_mapping_and_taxonomy_are_in_sync(self):

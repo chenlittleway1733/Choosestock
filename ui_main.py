@@ -1,3 +1,4 @@
+import inspect
 import re
 """
 主畫面 UI 模組：
@@ -7,7 +8,6 @@ from app_version import APP_PAGE_TITLE
 from ui_common import *
 from ui_panels.overview import render_empty_stock_prompt
 from ui_panels.financials import (
-    build_eps_price_calculation_rows,
     render_ai_financial_audit_control,
     render_anomaly_detection_panel,
     render_defense_health_cards,
@@ -15,10 +15,70 @@ from ui_panels.financials import (
     render_final_signal_panel,
     render_financial_metric_cards,
     render_financial_quality_report_panel,
-    render_eps_price_calculation_panel,
     render_target_price_panel,
     render_valuation_detail_panel,
 )
+
+_DEPLOYMENT_COMPAT_WARNINGS = []
+try:
+    from ui_panels.financials import build_eps_price_calculation_rows, render_eps_price_calculation_panel
+except ImportError:
+    _DEPLOYMENT_COMPAT_WARNINGS.append("ui_panels/financials.py 尚未更新，已啟用內建 TTM/FY 計算面板備援。")
+
+    def build_eps_price_calculation_rows(
+        *, ttm_eps=None, fy1_eps=None, fy2_eps=None, fy3_eps=None,
+        fy1_year=None, fy2_year=None, fy3_year=None,
+        base_cap=None, soft_cap=None, hard_cap=None, cap_eps_basis="",
+    ):
+        def _positive(value):
+            value = s_float(value)
+            return value if value is not None and value > 0 else None
+
+        base, soft, hard = _positive(base_cap), _positive(soft_cap), _positive(hard_cap)
+        basis = str(cap_eps_basis or "").strip().lower()
+        items = [
+            ("TTM", "近四季", ttm_eps),
+            ("FY1", str(fy1_year or "年度未取得"), fy1_eps),
+            ("FY2", str(fy2_year or "年度未取得"), fy2_eps),
+            ("FY3", str(fy3_year or "年度未取得"), fy3_eps),
+        ]
+        rows = []
+        for tier, period, raw_eps in items:
+            eps = _positive(raw_eps)
+            if basis == "ttm_only":
+                position = "v18.2 正式 TTM 口徑" if tier == "TTM" else "跨口徑情境換算，非正式估值"
+            elif basis in {"fy1_forward", "forward_fy1", "fy1"}:
+                position = "v18.2 正式 FY1 前瞻口徑" if tier == "FY1" else ("歷史基準情境換算" if tier == "TTM" else "遠期情境換算，不可直接作買點")
+            else:
+                position = "情境換算，需再確認 EPS 與倍率口徑"
+            if eps is None:
+                position = f"未取得 {tier} EPS｜{position}"
+            rows.append({
+                "tier": tier, "period": period, "eps": eps,
+                "base_cap": base, "base_price": eps * base if eps is not None and base is not None else None,
+                "soft_cap": soft, "soft_price": eps * soft if eps is not None and soft is not None else None,
+                "hard_cap": hard, "hard_price": eps * hard if eps is not None and hard is not None else None,
+                "position": position,
+            })
+        return rows
+
+    def render_eps_price_calculation_panel(rows, *, cap_eps_basis=""):
+        st.markdown("#### 💰 股票預估價｜TTM / FY1 / FY2 / FY3")
+        st.caption("Base / Soft / Hard 來自 Dynamic Cap v18.2；計算價 = EPS × 倍率。跨口徑列只作情境換算。")
+
+        def _fmt(value, suffix=""):
+            value = s_float(value)
+            return "—" if value is None else f"{value:.2f}{suffix}"
+
+        display_rows = [{
+            "口徑": row.get("tier"), "期間": row.get("period"), "EPS": _fmt(row.get("eps")),
+            "Base": _fmt(row.get("base_cap"), "x"), "Base計算價": _fmt(row.get("base_price"), "元"),
+            "Soft": _fmt(row.get("soft_cap"), "x"), "Soft計算價": _fmt(row.get("soft_price"), "元"),
+            "Hard": _fmt(row.get("hard_cap"), "x"), "Hard計算價": _fmt(row.get("hard_price"), "元"),
+            "定位": row.get("position"),
+        } for row in (rows or [])]
+        st_dataframe(pd.DataFrame(display_rows), hide_index=True)
+        return rows
 from ui_panels.etf import render_etf_exposure_panel
 from ui_panels.chips import render_chip_panels
 from ui_panels.news import render_financial_news_panel
@@ -32,7 +92,6 @@ from ui_context.financial_context import build_ai_financial_context, build_finan
 from ui_context.implied_context import build_implied_pe_context
 from ui_context.multiple_context import build_multiple_context, fmt_cap, fmt_eps, fmt_price
 from ui_context.prompt_context import (
-    build_essential_version_prompt,
     build_prompt_target_context,
     prompt_ai_source_summary,
     prompt_dynamic_cap_core,
@@ -55,8 +114,93 @@ from ui_context.prompt_context import (
     prompt_technical_suffix,
     prompt_warnings,
 )
+try:
+    from ui_context.prompt_context import build_essential_version_prompt
+except ImportError:
+    _DEPLOYMENT_COMPAT_WARNINGS.append("ui_context/prompt_context.py 尚未更新，已啟用內建精簡提示詞備援。")
+
+    def build_essential_version_prompt(*, app_title, stock_id, stock_name, fields):
+        missing_markers = ("n/a", "null", "none", "nan", "無資料", "未取得", "未捕捉到", "未知")
+
+        def _usable(value):
+            if value is None:
+                return ""
+            text = re.sub(r"\s+", " ", str(value)).strip()
+            return "" if not text or any(marker in text.lower() for marker in missing_markers) else text
+
+        data_lines = []
+        for item in fields or []:
+            if not isinstance(item, (tuple, list)) or len(item) < 2:
+                continue
+            label, value = _usable(item[0]), _usable(item[1])
+            if label and value:
+                data_lines.append(f"- {label}：{value}")
+        core_data = "\n".join(data_lines) if data_lines else "- 請先查證核心數據後再分析"
+        return (
+            f"你是台股估值與風險分析助手。請用繁體中文，根據 {app_title} 分析 {stock_name} ({stock_id})。\n\n"
+            f"【核心數據】\n{core_data}\n\n"
+            "【任務】\n1. 判斷現價相對 TTM/FY1/FY2/FY3 情境價與法人目標價。\n"
+            "2. 檢查毛利率、營益率與 YoY 是否支撐 EPS。\n"
+            "3. 給出結論、分批買進、減碼/停損與三項核心風險。"
+        )
 from ui_context.quality_context import build_quality_report_context, fy_year_display_safe
 from ui_context.valuation_context import build_dynamic_cap_context
+
+
+def _supports_parameter(func, parameter_name):
+    try:
+        return parameter_name in inspect.signature(func).parameters
+    except Exception:
+        return False
+
+
+def _render_ai_financial_audit_compat(*, curr_id, stock_name, info, current_price, compact):
+    kwargs = {"curr_id": curr_id, "stock_name": stock_name, "info": info}
+    if _supports_parameter(render_ai_financial_audit_control, "current_price"):
+        kwargs["current_price"] = current_price
+    if _supports_parameter(render_ai_financial_audit_control, "compact"):
+        kwargs["compact"] = compact
+    return render_ai_financial_audit_control(**kwargs)
+
+
+def _render_quote_with_ai_compat(*, hist, info, curr_id, stock_name):
+    if _supports_parameter(render_quote_panel, "header_action"):
+        return render_quote_panel(
+            hist=hist,
+            info=info,
+            header_action=lambda current_price: _render_ai_financial_audit_compat(
+                curr_id=curr_id,
+                stock_name=stock_name,
+                info=info,
+                current_price=current_price,
+                compact=True,
+            ),
+        )
+
+    _DEPLOYMENT_COMPAT_WARNINGS.append("ui_panels/quote.py 尚未更新，AI 校對按鈕暫以舊版位置顯示。")
+    snapshot = render_quote_panel(hist=hist, info=info)
+    current_price = snapshot.get("curr_p", 0) if isinstance(snapshot, dict) else 0
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    snapshot["header_action_result"] = _render_ai_financial_audit_compat(
+        curr_id=curr_id,
+        stock_name=stock_name,
+        info=info,
+        current_price=current_price,
+        compact=False,
+    )
+    return snapshot
+
+
+def _render_prompt_pack_compat(*, curr_id, prompt):
+    if _supports_parameter(render_prompt_pack_panel, "prompt"):
+        return render_prompt_pack_panel(curr_id=curr_id, prompt=prompt)
+    _DEPLOYMENT_COMPAT_WARNINGS.append("ui_panels/prompt_pack.py 尚未更新，已將精簡提示詞同步到舊版複製面板。")
+    return render_prompt_pack_panel(
+        curr_id=curr_id,
+        buy_decision_prompt=prompt,
+        research_prompt=prompt,
+        build_technical_suffix=lambda _mode: "",
+    )
 
 
 def render_main_page(sidebar_state=None):
@@ -82,6 +226,11 @@ def render_main_page(sidebar_state=None):
     # 5. 主畫面開始
     # ==========================================
     st.markdown(f"## 📈 {APP_PAGE_TITLE}")
+
+    if _DEPLOYMENT_COMPAT_WARNINGS:
+        st.warning("⚠️ 雲端專案檢測到新舊模組混用，已啟用相容備援以避免啟動失敗。請將 ZIP 內 way_stock 資料夾的全部檔案一次覆蓋雲端專案。")
+        for warning in dict.fromkeys(_DEPLOYMENT_COMPAT_WARNINGS):
+            st.caption(f"- {warning}")
 
     curr_id = str(st.session_state.get("selected_stock", "") or "").strip()
 
@@ -128,16 +277,11 @@ def render_main_page(sidebar_state=None):
         if hist is not None and not hist.empty:
             sector_disp, industry_profile = render_stock_header_panel(curr_id=curr_id, stock_name=c_name, info=info)
 
-            quote_snapshot = render_quote_panel(
+            quote_snapshot = _render_quote_with_ai_compat(
                 hist=hist,
                 info=info,
-                header_action=lambda current_price: render_ai_financial_audit_control(
-                    curr_id=curr_id,
-                    stock_name=c_name,
-                    info=info,
-                    current_price=current_price,
-                    compact=True,
-                ),
+                curr_id=curr_id,
+                stock_name=c_name,
             )
             curr_p = quote_snapshot.get("curr_p", 0)
             open_p = quote_snapshot.get("open_p", 0)
@@ -2064,7 +2208,7 @@ def render_main_page(sidebar_state=None):
                 return prompt_technical_suffix(mode, hist=hist, curr_p=curr_p)
             
             # 第 17-C-2：打包提示詞分成「買進決策版 / 研究完整版」
-            render_prompt_pack_panel(
+            _render_prompt_pack_compat(
                 curr_id=curr_id,
                 prompt=essential_prompt_for_copy,
             )
