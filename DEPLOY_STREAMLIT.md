@@ -16,4 +16,4 @@
 - `ui_context/prompt_context.py`
 - `ui_main.py`
 
-提交完成後，在 Streamlit Cloud 重新啟動或重新部署 App。若所有檔案已完整覆蓋，首頁的「新舊模組混用」警告就不會再出現。
+提交完成後，在 Streamlit Cloud 重新啟動或重新部署 App。`ui_main.py` 已內建 TTM/FY 計算與精簡提示詞相容功能；即使這兩個子模組暫時未同步，系統也會安靜切換，不再顯示「新舊模組混用」警告。

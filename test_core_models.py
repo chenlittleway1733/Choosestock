@@ -227,7 +227,12 @@ class ApplicationBrandAndNavigationTests(unittest.TestCase):
 
         self.assertTrue(callable(module.build_eps_price_calculation_rows))
         self.assertTrue(callable(module.build_essential_version_prompt))
-        self.assertEqual(len(module._DEPLOYMENT_COMPAT_WARNINGS), 2)
+        self.assertEqual(len(module._DEPLOYMENT_COMPAT_NOTES), 2)
+
+    def test_compatibility_fallback_is_silent_for_users(self):
+        main_source = (ROOT / "ui_main.py").read_text(encoding="utf-8")
+        self.assertNotIn("雲端專案檢測到新舊模組混用", main_source)
+        self.assertNotIn("st.warning(\"⚠️ 雲端專案", main_source)
 
     def test_deployment_zip_uses_streamlit_repository_root_layout(self):
         from tools.build_clean_package import build_package

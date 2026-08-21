@@ -19,11 +19,11 @@ from ui_panels.financials import (
     render_valuation_detail_panel,
 )
 
-_DEPLOYMENT_COMPAT_WARNINGS = []
+_DEPLOYMENT_COMPAT_NOTES = []
 try:
     from ui_panels.financials import build_eps_price_calculation_rows, render_eps_price_calculation_panel
 except ImportError:
-    _DEPLOYMENT_COMPAT_WARNINGS.append("ui_panels/financials.py 尚未更新，已啟用內建 TTM/FY 計算面板備援。")
+    _DEPLOYMENT_COMPAT_NOTES.append("使用 ui_main 內建 TTM/FY 計算面板。")
 
     def build_eps_price_calculation_rows(
         *, ttm_eps=None, fy1_eps=None, fy2_eps=None, fy3_eps=None,
@@ -117,7 +117,7 @@ from ui_context.prompt_context import (
 try:
     from ui_context.prompt_context import build_essential_version_prompt
 except ImportError:
-    _DEPLOYMENT_COMPAT_WARNINGS.append("ui_context/prompt_context.py 尚未更新，已啟用內建精簡提示詞備援。")
+    _DEPLOYMENT_COMPAT_NOTES.append("使用 ui_main 內建精簡提示詞產生器。")
 
     def build_essential_version_prompt(*, app_title, stock_id, stock_name, fields):
         missing_markers = ("n/a", "null", "none", "nan", "無資料", "未取得", "未捕捉到", "未知")
@@ -177,7 +177,7 @@ def _render_quote_with_ai_compat(*, hist, info, curr_id, stock_name):
             ),
         )
 
-    _DEPLOYMENT_COMPAT_WARNINGS.append("ui_panels/quote.py 尚未更新，AI 校對按鈕暫以舊版位置顯示。")
+    _DEPLOYMENT_COMPAT_NOTES.append("AI 校對按鈕使用相容位置。")
     snapshot = render_quote_panel(hist=hist, info=info)
     current_price = snapshot.get("curr_p", 0) if isinstance(snapshot, dict) else 0
     snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -194,7 +194,7 @@ def _render_quote_with_ai_compat(*, hist, info, curr_id, stock_name):
 def _render_prompt_pack_compat(*, curr_id, prompt):
     if _supports_parameter(render_prompt_pack_panel, "prompt"):
         return render_prompt_pack_panel(curr_id=curr_id, prompt=prompt)
-    _DEPLOYMENT_COMPAT_WARNINGS.append("ui_panels/prompt_pack.py 尚未更新，已將精簡提示詞同步到舊版複製面板。")
+    _DEPLOYMENT_COMPAT_NOTES.append("精簡提示詞使用相容複製面板。")
     return render_prompt_pack_panel(
         curr_id=curr_id,
         buy_decision_prompt=prompt,
@@ -226,11 +226,6 @@ def render_main_page(sidebar_state=None):
     # 5. 主畫面開始
     # ==========================================
     st.markdown(f"## 📈 {APP_PAGE_TITLE}")
-
-    if _DEPLOYMENT_COMPAT_WARNINGS:
-        st.warning("⚠️ 雲端專案檢測到新舊模組混用，已啟用相容備援以避免啟動失敗。請將 ZIP 解壓後最外層的全部檔案與資料夾，一次覆蓋雲端專案根目錄。")
-        for warning in dict.fromkeys(_DEPLOYMENT_COMPAT_WARNINGS):
-            st.caption(f"- {warning}")
 
     curr_id = str(st.session_state.get("selected_stock", "") or "").strip()
 

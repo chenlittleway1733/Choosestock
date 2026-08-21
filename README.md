@@ -4,7 +4,7 @@ WAY投資戰情室-2.5版 Streamlit 專案。
 
 主畫面不顯示快速跳轉列；即時報價右上方提供 AI 全方位校對與補齊財報，報價下方依序呈現 TTM/FY1/FY2/FY3 計算價與法人目標價。
 
-啟動保護：若雲端只更新 `ui_main.py`、其他面板仍是舊版，系統會先啟用內建相容備援並提示整包覆蓋，不再直接因新函式匯入失敗而中斷。交付 ZIP 採 Streamlit 專案根目錄格式，解壓後會直接看到 `app.py`、`ui_panels/` 與 `ui_context/`，請將最外層全部內容一次覆蓋雲端專案根目錄。
+啟動保護：若雲端的 `ui_panels/financials.py` 或 `ui_context/prompt_context.py` 仍是舊版，`ui_main.py` 會直接使用內建 TTM/FY 計算與精簡提示詞功能，不顯示部署警告，也不再因新函式匯入失敗而中斷。交付 ZIP 採 Streamlit 專案根目錄格式，解壓後會直接看到 `app.py`、`ui_panels/` 與 `ui_context/`。
 
 月營收查詢採 Yahoo → FinMind → MOPS 快速備援；MOPS 舊式逐月、逐市場長循環預設關閉。外部網站阻擋時會在短時間內自動跳過，不再讓整個頁面停在 `Running get_monthly_revenue(...)`。
 
