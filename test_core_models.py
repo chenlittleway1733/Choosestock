@@ -109,7 +109,7 @@ from ui_context.prompt_context import (
     prompt_technical_suffix,
 )
 from ui_context.multiple_context import build_multiple_context
-from ui_context.navigation_context import TOP_SECTION_NAV_ITEMS, build_section_anchor_html, build_top_section_nav_html
+from ui_main import TOP_SECTION_NAV_ITEMS, build_section_anchor_html, build_top_section_nav_html
 from validators.candidate_review import build_financial_candidate_data as modular_build_financial_candidate_data
 from validators.financial_validation import validate_ai_financial_json as modular_validate_ai_financial_json
 from utils import (
