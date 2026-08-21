@@ -275,6 +275,7 @@ REVIEW_STATUS_LABELS = {
 }
 
 FINANCIAL_CANDIDATE_FIELD_LABELS = {
+    "current_price": "目前股價",
     "pe": "歷史本益比 P/E",
     "trailing_eps": "近四季 EPS（legacy）",
     "forward_eps": "法人預估 EPS（legacy）",
@@ -312,6 +313,7 @@ FINANCIAL_CANDIDATE_FIELD_LABELS = {
 }
 
 FINANCIAL_CANDIDATE_FIELD_UNITS = {
+    "current_price": "NTD/share",
     "pe": "x",
     "pb": "x",
     "forward_pe": "x",
@@ -1866,7 +1868,7 @@ def validate_ai_financial_json(ai_fin, stock_id="", stock_name=""):
 
     # 數值欄位基本轉型
     numeric_fields = [
-        "pe",
+        "current_price", "pe",
         # EPS 拆欄：保留 legacy 欄位，也支援新標準欄位。
         "trailing_eps", "forward_eps",
         "latest_month_eps", "latest_quarter_eps", "previous_quarter_eps", "last_two_quarter_eps", "ttm_eps", "fiscal_year_eps",
@@ -1879,6 +1881,10 @@ def validate_ai_financial_json(ai_fin, stock_id="", stock_name=""):
     for field in numeric_fields:
         if field in data:
             num(field)
+
+    current_price = data.get("current_price")
+    if current_price is not None and current_price <= 0:
+        null_field("current_price", f"目前股價={current_price} 不可小於等於 0")
 
     # EPS 拆欄向下相容：舊版 AI 只回 trailing_eps / forward_eps 時，映射到新口徑。
     if data.get("ttm_eps") is None and data.get("trailing_eps") is not None:

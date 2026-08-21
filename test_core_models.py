@@ -98,6 +98,7 @@ from services import (
     reconcile_price_history_with_reference,
 )
 from ui_context.prompt_context import (
+    build_essential_version_prompt,
     prompt_chip_panel_summary,
     prompt_dynamic_cap_core,
     prompt_etf_panel_summary,
@@ -109,7 +110,6 @@ from ui_context.prompt_context import (
     prompt_technical_suffix,
 )
 from ui_context.multiple_context import build_multiple_context
-from ui_main import TOP_SECTION_NAV_ITEMS, build_section_anchor_html, build_top_section_nav_html
 from validators.candidate_review import build_financial_candidate_data as modular_build_financial_candidate_data
 from validators.financial_validation import validate_ai_financial_json as modular_validate_ai_financial_json
 from utils import (
@@ -165,15 +165,11 @@ class ApplicationBrandAndNavigationTests(unittest.TestCase):
         self.assertNotIn("WAY AI 投資戰情室", visible_text)
         self.assertNotIn("2.4 Slim R6", visible_text)
 
-    def test_top_navigation_links_have_matching_page_anchors(self):
-        nav_html = build_top_section_nav_html()
+    def test_quick_navigation_bar_and_anchors_are_removed(self):
         main_source = (ROOT / "ui_main.py").read_text(encoding="utf-8")
-        self.assertEqual(len(TOP_SECTION_NAV_ITEMS), 10)
-        for section_id, label in TOP_SECTION_NAV_ITEMS:
-            self.assertIn(f'href="#{section_id}"', nav_html)
-            self.assertIn(label, nav_html)
-            self.assertIn(f'_section_anchor("{section_id}")', main_source)
-            self.assertIn(f'id="{section_id}"', build_section_anchor_html(section_id))
+        self.assertNotIn("快速跳轉", main_source)
+        self.assertNotIn("way-top-nav", main_source)
+        self.assertNotIn("_section_anchor", main_source)
 
     def test_financial_forecast_heading_is_renamed(self):
         source = (ROOT / "ui_panels" / "financials.py").read_text(encoding="utf-8")
@@ -921,7 +917,10 @@ class FieldSourcePriorityTests(unittest.TestCase):
         old_mops = services.get_mops_monthly_revenue
         old_get = services.requests.get
         try:
-            services.get_mops_monthly_revenue = lambda *args, **kwargs: pd.DataFrame()
+            def unexpected_mops(*args, **kwargs):
+                self.fail("FinMind succeeded, so the slow MOPS fallback must not run")
+
+            services.get_mops_monthly_revenue = unexpected_mops
 
             def fake_get(url, *args, **kwargs):
                 if "tw.stock.yahoo.com" in url:
@@ -950,6 +949,32 @@ class FieldSourcePriorityTests(unittest.TestCase):
         self.assertEqual(latest["announce_date"], "來源未提供")
         self.assertEqual(latest["announce_month"], "來源未提供")
         self.assertEqual(latest["revenue_month"], "2026/05")
+
+    def test_mops_fast_path_never_starts_legacy_month_crawl_by_default(self):
+        class FakeResponse:
+            status_code = 503
+            content = b""
+            text = ""
+
+        urls = []
+        timeouts = []
+        old_get = services.requests.get
+        try:
+            def fake_get(url, *args, **kwargs):
+                urls.append(url)
+                timeouts.append(kwargs.get("timeout"))
+                return FakeResponse()
+
+            services.requests.get = fake_get
+            result = services.get_mops_monthly_revenue("2330")
+        finally:
+            services.requests.get = old_get
+
+        self.assertTrue(result.empty)
+        self.assertEqual(len(urls), 3)
+        self.assertTrue(all("mopsfin.twse.com.tw/opendata" in url for url in urls))
+        self.assertTrue(all("/nas/t21/" not in url for url in urls))
+        self.assertEqual(timeouts, [(0.8, 1.8)] * 3)
 
     def test_calc_monthly_revenue_growth_uses_same_month_last_year(self):
         df = pd.DataFrame([
@@ -2409,19 +2434,65 @@ class _FakePanelStreamlit:
 
 
 class UIRegressionTests(unittest.TestCase):
-    def _render_prompt_pack_with_fakes(self, *, prompt_mode, technical_mode, suffix_text):
+    def test_ai_fill_scope_covers_exact_core_fields_and_ignores_yfinance_growth(self):
+        from ui_panels.financials import _build_programmatic_analyst_fill_scope
+
+        snapshot, missing = _build_programmatic_analyst_fill_scope(
+            {
+                "trailingEps": 40,
+                "forwardEpsFY1": 45,
+                "forwardEpsFY1Year": 2026,
+                "grossMargins": 0.58,
+                "operatingMargins": 0.47,
+                "revenueGrowth": 0.99,
+                "targetMeanPrice": 1100,
+                "targetLowPrice": 900,
+                "targetHighPrice": 1250,
+            },
+            current_price=980,
+        )
+
+        self.assertEqual(snapshot["current_price"], 980)
+        self.assertEqual(snapshot["ttm_eps"], 40)
+        self.assertEqual(snapshot["forward_eps_fy1"], 45)
+        self.assertEqual(snapshot["gross_margin"], 0.58)
+        self.assertEqual(snapshot["operating_margin"], 0.47)
+        self.assertEqual(snapshot["target_price"], 1100)
+        self.assertNotIn("yoy", snapshot)
+        self.assertIn("yoy", missing)
+        self.assertIn("forward_eps_fy2", missing)
+        self.assertIn("forward_eps_fy3", missing)
+
+    def test_eps_price_panel_rows_calculate_all_four_tiers(self):
+        from ui_panels.financials import build_eps_price_calculation_rows
+
+        rows = build_eps_price_calculation_rows(
+            ttm_eps=10,
+            fy1_eps=12,
+            fy2_eps=14,
+            fy3_eps=16,
+            fy1_year=2026,
+            fy2_year=2027,
+            fy3_year=2028,
+            base_cap=20,
+            soft_cap=24,
+            hard_cap=28,
+            cap_eps_basis="ttm_only",
+        )
+
+        self.assertEqual([row["tier"] for row in rows], ["TTM", "FY1", "FY2", "FY3"])
+        self.assertEqual(rows[0]["base_price"], 200)
+        self.assertEqual(rows[1]["soft_price"], 288)
+        self.assertEqual(rows[2]["hard_price"], 392)
+        self.assertEqual(rows[3]["base_price"], 320)
+        self.assertIn("正式 TTM", rows[0]["position"])
+        self.assertIn("非正式估值", rows[1]["position"])
+
+    def _render_prompt_pack_with_fakes(self, *, prompt):
         from ui_panels import prompt_pack
 
-        fake_st = _FakePromptPackStreamlit({
-            "提示詞版本": prompt_mode,
-            "技術面打包選項": technical_mode,
-        })
+        fake_st = _FakePromptPackStreamlit({})
         fake_components = _FakePromptPackComponents()
-        suffix_calls = []
-
-        def build_suffix(mode):
-            suffix_calls.append(mode)
-            return suffix_text
 
         original_st = prompt_pack.st
         original_components = prompt_pack.components
@@ -2430,43 +2501,43 @@ class UIRegressionTests(unittest.TestCase):
             prompt_pack.components = fake_components
             prompt_pack.render_prompt_pack_panel(
                 curr_id="2330",
-                buy_decision_prompt="BUY_PROMPT",
-                research_prompt="RESEARCH_PROMPT",
-                build_technical_suffix=build_suffix,
+                prompt=prompt,
             )
         finally:
             prompt_pack.st = original_st
             prompt_pack.components = original_components
 
-        return fake_st, fake_components, suffix_calls
+        return fake_st, fake_components
 
-    def test_prompt_pack_panel_renders_buy_prompt_without_technical_suffix(self):
-        fake_st, fake_components, suffix_calls = self._render_prompt_pack_with_fakes(
-            prompt_mode="買進決策版（精簡，建議平常使用）",
-            technical_mode="不加入技術面",
-            suffix_text="",
-        )
+    def test_prompt_pack_panel_renders_one_essential_prompt(self):
+        fake_st, fake_components = self._render_prompt_pack_with_fakes(prompt="ESSENTIAL_PROMPT")
 
-        self.assertEqual(suffix_calls, ["不加入技術面"])
-        self.assertEqual(fake_st.expander_calls[0]["label"], "📋 點此複製【打包提示詞】至 Gemini Advanced 或 ChatGPT 發問")
-        self.assertEqual(fake_st.text_area_calls[0]["value"], "BUY_PROMPT")
-        self.assertIn("copy_prompt_textarea_2330_buy_", fake_st.text_area_calls[0]["key"])
-        self.assertIn(json.dumps("BUY_PROMPT", ensure_ascii=False), fake_components.html_calls[0]["body"])
+        self.assertEqual(fake_st.expander_calls[0]["label"], "📋 點此複製【精簡提示詞】至 Gemini Advanced 或 ChatGPT 發問")
+        self.assertEqual(fake_st.text_area_calls[0]["value"], "ESSENTIAL_PROMPT")
+        self.assertIn("copy_prompt_textarea_2330_", fake_st.text_area_calls[0]["key"])
+        self.assertIn(json.dumps("ESSENTIAL_PROMPT", ensure_ascii=False), fake_components.html_calls[0]["body"])
         self.assertEqual(fake_components.html_calls[0]["height"], 105)
 
-    def test_prompt_pack_panel_appends_technical_suffix_to_research_prompt(self):
-        fake_st, fake_components, suffix_calls = self._render_prompt_pack_with_fakes(
-            prompt_mode="研究完整版（完整，適合深度分析）",
-            technical_mode="加入技術面摘要 + 技術線圖輔助規則",
-            suffix_text="TECH_SUFFIX",
+    def test_essential_prompt_builder_omits_every_missing_field(self):
+        prompt = build_essential_version_prompt(
+            app_title="WAY投資戰情室-2.5版",
+            stock_id="2330",
+            stock_name="台積電",
+            fields=[
+                ("現價", "980.00元"),
+                ("TTM EPS", None),
+                ("FY1 EPS", "N/A"),
+                ("毛利率", "58.20%"),
+                ("法人最低目標價", "未取得"),
+            ],
         )
 
-        selected_prompt = "RESEARCH_PROMPT\n\nTECH_SUFFIX"
-        self.assertEqual(suffix_calls, ["加入技術面摘要 + 技術線圖輔助規則"])
-        self.assertEqual(fake_st.text_area_calls[0]["value"], selected_prompt)
-        self.assertIn("copy_prompt_textarea_2330_research_", fake_st.text_area_calls[0]["key"])
-        self.assertIn(json.dumps(selected_prompt, ensure_ascii=False), fake_components.html_calls[0]["body"])
-        self.assertNotIn("BUY_PROMPT", fake_st.text_area_calls[0]["value"])
+        self.assertIn("現價：980.00元", prompt)
+        self.assertIn("毛利率：58.20%", prompt)
+        self.assertNotIn("TTM EPS：", prompt)
+        self.assertNotIn("FY1 EPS：", prompt)
+        self.assertNotIn("法人最低目標價：", prompt)
+        self.assertNotIn("N/A", prompt)
 
     def test_financial_panel_m10_margin_summary_renders_with_fake_streamlit(self):
         from ui_panels import financials
@@ -2704,7 +2775,7 @@ class UIRegressionTests(unittest.TestCase):
         self.assertTrue(fake_st.button_calls[0]["disabled"])
         self.assertEqual(fake_st.button_calls[1]["key"], "toggle_ai_raw_btn_2330")
         self.assertFalse(fake_st.session_state["show_ai_raw_panel_2330"])
-        self.assertIn("驅動核心", markdown_text)
+        self.assertIn("已校對", markdown_text)
         self.assertIn("Gemini 3.1 Pro Preview", markdown_text)
         self.assertTrue(any("AI 財報 JSON 已觸發合理性校驗" in text for text in fake_st.warning_calls))
 

@@ -149,25 +149,31 @@ def _render_candidate_review_panel(*, curr_id, temp_ai_fin):
     return merged_candidates
 
 
-def _build_programmatic_analyst_fill_scope(info):
-    """Return protected programmatic values and the analyst fields still needing AI fill."""
+def _build_programmatic_analyst_fill_scope(info, current_price=None):
+    """Return protected system values and the exact core fields still needing AI fill."""
     info = info if isinstance(info, dict) else {}
     field_map = {
-        "target_price_high": "targetHighPrice",
-        "target_price_avg": "targetMeanPrice",
-        "target_price_low": "targetLowPrice",
-        "target_price_analyst_count": "numberOfAnalystOpinions",
-        "forward_eps_fy1": "forwardEpsFY1",
-        "forward_eps_fy1_year": "forwardEpsFY1Year",
-        "forward_eps_fy2": "forwardEpsFY2",
-        "forward_eps_fy2_year": "forwardEpsFY2Year",
-        "forward_eps_fy3": "forwardEpsFY3",
-        "forward_eps_fy3_year": "forwardEpsFY3Year",
+        "current_price": current_price,
+        "ttm_eps": info.get("trailingEps"),
+        "forward_eps_fy1": info.get("forwardEpsFY1"),
+        "forward_eps_fy1_year": info.get("forwardEpsFY1Year"),
+        "forward_eps_fy2": info.get("forwardEpsFY2"),
+        "forward_eps_fy2_year": info.get("forwardEpsFY2Year"),
+        "forward_eps_fy3": info.get("forwardEpsFY3"),
+        "forward_eps_fy3_year": info.get("forwardEpsFY3Year"),
+        "gross_margin": info.get("grossMargins"),
+        "operating_margin": info.get("operatingMargins"),
+        # 只接受已明確標示為月營收 YoY 的程式值，不把 yfinance revenueGrowth 冒充單月 YoY。
+        "yoy": info.get("monthlyRevenueYoY"),
+        "target_price": info.get("targetMeanPrice"),
+        "target_price_avg": info.get("targetMeanPrice"),
+        "target_price_low": info.get("targetLowPrice"),
+        "target_price_high": info.get("targetHighPrice"),
+        "target_price_analyst_count": info.get("numberOfAnalystOpinions"),
     }
     snapshot = {}
     missing_fields = []
-    for ai_key, info_key in field_map.items():
-        raw_value = info.get(info_key)
+    for ai_key, raw_value in field_map.items():
         if ai_key.endswith("_year"):
             value = raw_value if str(raw_value or "").strip() else None
         else:
@@ -184,26 +190,24 @@ def _build_programmatic_analyst_fill_scope(info):
     return snapshot, missing_fields
 
 
-def render_ai_financial_audit_control(*, curr_id, stock_name, info=None):
+def render_ai_financial_audit_control(*, curr_id, stock_name, info=None, current_price=None, compact=False):
     """Render the AI financial audit control and return current AI financial state."""
-    programmatic_snapshot, missing_analyst_fields = _build_programmatic_analyst_fill_scope(info)
-    col_fin_title, col_fin_btn = st.columns([0.6, 0.4])
-    with col_fin_title:
+    programmatic_snapshot, missing_analyst_fields = _build_programmatic_analyst_fill_scope(info, current_price)
+    if not compact:
         st.markdown("#### 💼 股票預估價")
         if programmatic_snapshot:
             st.caption(
-                f"程式已取得 {len([key for key in programmatic_snapshot if key.startswith(('target_price_', 'forward_eps_fy')) and not key.endswith(('_source', '_basis'))])} 個法人目標價 / FY EPS 欄位；"
+                f"程式已取得 {len([key for key in programmatic_snapshot if not key.endswith(('_source', '_basis'))])} 個核心欄位；"
                 f"AI 功能僅補剩餘 {len(missing_analyst_fields)} 個缺值並校對。"
             )
         else:
-            st.caption("程式未取得法人目標價 / FY EPS；可用 AI 全方位校對功能補齊缺值。")
-    with col_fin_btn:
-        if st.button(
-            "🪄 啟動 AI 全方位校對與補齊財報",
-            disabled=not st.session_state.api_key,
-            use_container_width=True,
-            help="程式資料優先保留；AI 上網搜尋只補齊缺值並進行交叉校對",
-        ):
+            st.caption("程式未取得核心財務欄位；可用 AI 全方位校對功能補齊缺值。")
+    if st.button(
+        "🪄 AI 全方位校對與補齊財報" if compact else "🪄 啟動 AI 全方位校對與補齊財報",
+        disabled=not st.session_state.api_key,
+        use_container_width=True,
+        help="程式值優先；校對現價、TTM/FY1/FY2/FY3 EPS、毛利率、營益率、YoY 與法人目標價高/均/低，AI 只補缺值。",
+    ):
             with st.spinner("AI 正在聯網為您強行抓取最新財報數據，請稍候...（Pro Only 最多重試 3 次，約需 30-90 秒）"):
                 selected_model = get_selected_model_id()
                 fetched_data = get_financials_from_ai(
@@ -217,6 +221,7 @@ def render_ai_financial_audit_control(*, curr_id, stock_name, info=None):
 
                 if isinstance(fetched_data, dict) and "error" not in fetched_data:
                     core_fin_keys = [
+                        "current_price",
                         "pe",
                         "trailing_eps",
                         "ttm_eps",
@@ -274,22 +279,23 @@ def render_ai_financial_audit_control(*, curr_id, stock_name, info=None):
                 else:
                     st.error("🚨 AI 暫時無法找到確切數據，或請求遭拒。")
 
-        temp_ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
-        if not isinstance(temp_ai_fin, dict):
+    temp_ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
+    if not isinstance(temp_ai_fin, dict):
+        temp_ai_fin = {}
+    if isinstance(temp_ai_fin, dict) and temp_ai_fin:
+        bound_stock_id = str(temp_ai_fin.get("_stock_id") or curr_id)
+        if bound_stock_id != str(curr_id):
+            st.session_state.ai_fetched_financials.pop(curr_id, None)
             temp_ai_fin = {}
-        if isinstance(temp_ai_fin, dict) and temp_ai_fin:
-            bound_stock_id = str(temp_ai_fin.get("_stock_id") or curr_id)
-            if bound_stock_id != str(curr_id):
-                st.session_state.ai_fetched_financials.pop(curr_id, None)
-                temp_ai_fin = {}
-        has_ai_fin_fetch = bool(temp_ai_fin)
-        if temp_ai_fin.get("model_used"):
-            st.markdown(
-                f"<div style='text-align:right; color:#FFD700; font-size:0.85rem; margin-top:5px;'>🤖 驅動核心: <b>{temp_ai_fin['model_used']}</b></div>",
-                unsafe_allow_html=True,
-            )
-            if temp_ai_fin.get("_ai_validation_warnings"):
-                st.warning("🧪 AI 財報 JSON 已觸發合理性校驗；部分欄位已自動校正或設為 NULL，詳情可展開原始回報面板查看。")
+    has_ai_fin_fetch = bool(temp_ai_fin)
+    if temp_ai_fin.get("model_used"):
+        st.markdown(
+            f"<div style='text-align:right; color:#FFD700; font-size:0.78rem; margin-top:4px;'>✅ 已校對｜<b>{temp_ai_fin['model_used']}</b></div>",
+            unsafe_allow_html=True,
+        )
+        if temp_ai_fin.get("_ai_validation_warnings"):
+            st.warning("🧪 AI 財報 JSON 已觸發合理性校驗；部分欄位已自動校正或設為 NULL。")
+        if not compact:
             raw_state_key = f"show_ai_raw_panel_{curr_id}"
             if raw_state_key not in st.session_state:
                 st.session_state[raw_state_key] = False
@@ -318,6 +324,90 @@ def render_ai_financial_audit_control(*, curr_id, stock_name, info=None):
                     st.success(temp_ai_fin.get("_ai_validation_status"))
                 st.json(temp_ai_fin)
     return temp_ai_fin, has_ai_fin_fetch
+
+
+def build_eps_price_calculation_rows(
+    *,
+    ttm_eps=None,
+    fy1_eps=None,
+    fy2_eps=None,
+    fy3_eps=None,
+    fy1_year=None,
+    fy2_year=None,
+    fy3_year=None,
+    base_cap=None,
+    soft_cap=None,
+    hard_cap=None,
+    cap_eps_basis="",
+):
+    """Build compact TTM/FY price calculations; non-matching v18.2 bases stay scenario-only."""
+    def _positive(value):
+        value = s_float(value)
+        return value if value is not None and value > 0 else None
+
+    base = _positive(base_cap)
+    soft = _positive(soft_cap)
+    hard = _positive(hard_cap)
+    basis = str(cap_eps_basis or "").strip().lower()
+    items = [
+        ("TTM", "近四季", ttm_eps),
+        ("FY1", str(fy1_year or "年度未取得"), fy1_eps),
+        ("FY2", str(fy2_year or "年度未取得"), fy2_eps),
+        ("FY3", str(fy3_year or "年度未取得"), fy3_eps),
+    ]
+    rows = []
+    for tier, period, raw_eps in items:
+        eps = _positive(raw_eps)
+        if basis == "ttm_only":
+            position = "v18.2 正式 TTM 口徑" if tier == "TTM" else "跨口徑情境換算，非正式估值"
+        elif basis in {"fy1_forward", "forward_fy1", "fy1"}:
+            position = "v18.2 正式 FY1 前瞻口徑" if tier == "FY1" else ("歷史基準情境換算" if tier == "TTM" else "遠期情境換算，不可直接作買點")
+        else:
+            position = "情境換算，需再確認 EPS 與倍率口徑"
+        if eps is None:
+            position = f"未取得 {tier} EPS｜{position}"
+        rows.append({
+            "tier": tier,
+            "period": period,
+            "eps": eps,
+            "base_cap": base,
+            "base_price": eps * base if eps is not None and base is not None else None,
+            "soft_cap": soft,
+            "soft_price": eps * soft if eps is not None and soft is not None else None,
+            "hard_cap": hard,
+            "hard_price": eps * hard if eps is not None and hard is not None else None,
+            "position": position,
+        })
+    return rows
+
+
+def render_eps_price_calculation_panel(rows, *, cap_eps_basis=""):
+    """Render the compact TTM/FY1/FY2/FY3 calculated-price area."""
+    st.markdown("#### 💰 股票預估價｜TTM / FY1 / FY2 / FY3")
+    st.caption("Base / Soft / Hard 全數來自 Dynamic Cap v18.2；計算價 = EPS × 倍率。與 v18.2 EPS 口徑不同的列只是情境換算，不直接作買點。")
+
+    def _fmt(value, suffix=""):
+        value = s_float(value)
+        return "—" if value is None else f"{value:.2f}{suffix}"
+
+    display_rows = []
+    for row in rows or []:
+        display_rows.append({
+            "口徑": row.get("tier"),
+            "期間": row.get("period"),
+            "EPS": _fmt(row.get("eps")),
+            "Base": _fmt(row.get("base_cap"), "x"),
+            "Base計算價": _fmt(row.get("base_price"), "元"),
+            "Soft": _fmt(row.get("soft_cap"), "x"),
+            "Soft計算價": _fmt(row.get("soft_price"), "元"),
+            "Hard": _fmt(row.get("hard_cap"), "x"),
+            "Hard計算價": _fmt(row.get("hard_price"), "元"),
+            "定位": row.get("position"),
+        })
+    st_dataframe(pd.DataFrame(display_rows), hide_index=True)
+    if not any(row.get("eps") is not None for row in (rows or [])):
+        st.info("目前尚未取得可用 EPS；可點選上方 AI 全方位校對與補齊財報。")
+    return rows
 
 
 def render_eps_breakdown_panel(eps_report_df):

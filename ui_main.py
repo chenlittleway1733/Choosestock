@@ -1,5 +1,4 @@
 import re
-from html import escape
 """
 主畫面 UI 模組：
 包含個股儀表板、AI 分析、財務資料、圖表、ETF 曝險等主要畫面。
@@ -8,6 +7,7 @@ from app_version import APP_PAGE_TITLE
 from ui_common import *
 from ui_panels.overview import render_empty_stock_prompt
 from ui_panels.financials import (
+    build_eps_price_calculation_rows,
     render_ai_financial_audit_control,
     render_anomaly_detection_panel,
     render_defense_health_cards,
@@ -15,6 +15,7 @@ from ui_panels.financials import (
     render_final_signal_panel,
     render_financial_metric_cards,
     render_financial_quality_report_panel,
+    render_eps_price_calculation_panel,
     render_target_price_panel,
     render_valuation_detail_panel,
 )
@@ -31,6 +32,7 @@ from ui_context.financial_context import build_ai_financial_context, build_finan
 from ui_context.implied_context import build_implied_pe_context
 from ui_context.multiple_context import build_multiple_context, fmt_cap, fmt_eps, fmt_price
 from ui_context.prompt_context import (
+    build_essential_version_prompt,
     build_prompt_target_context,
     prompt_ai_source_summary,
     prompt_dynamic_cap_core,
@@ -57,58 +59,6 @@ from ui_context.quality_context import build_quality_report_context, fy_year_dis
 from ui_context.valuation_context import build_dynamic_cap_context
 
 
-TOP_SECTION_NAV_ITEMS = (
-    ("overview", "個股概覽"),
-    ("etf", "ETF"),
-    ("financial-news", "財報新聞"),
-    ("stock-forecast", "股票預估價"),
-    ("valuation-risk", "估值風控"),
-    ("target-price", "法人目標價"),
-    ("chips", "籌碼"),
-    ("ai-analysis", "AI 分析"),
-    ("peer-river", "同業河流"),
-    ("technical", "技術分析"),
-)
-
-
-def build_top_section_nav_html(items=TOP_SECTION_NAV_ITEMS):
-    links = "".join(
-        f'<a href="#{escape(str(section_id), quote=True)}">{escape(str(label))}</a>'
-        for section_id, label in items
-    )
-    return f"""
-<style>
-html {{ scroll-behavior: smooth; }}
-.way-section-anchor {{ height: 0; scroll-margin-top: 8.5rem; }}
-.way-top-nav {{
-    display: flex; align-items: center; gap: 0.42rem; overflow-x: auto; white-space: nowrap;
-    padding: 0.55rem 0.65rem; margin: 0.15rem 0 0.85rem 0;
-    border: 1px solid rgba(56, 189, 248, 0.42); border-radius: 0.75rem;
-    background: rgba(15, 23, 42, 0.96); box-shadow: 0 6px 18px rgba(2, 6, 23, 0.28);
-}}
-.way-top-nav-label {{ color: #7DD3FC; font-weight: 800; padding: 0 0.25rem; }}
-.way-top-nav a {{
-    color: #E2E8F0 !important; background: #1E293B; border: 1px solid #334155;
-    border-radius: 999px; padding: 0.33rem 0.68rem; text-decoration: none !important;
-    font-size: 0.88rem; line-height: 1.2;
-}}
-.way-top-nav a:hover {{ color: #0F172A !important; background: #7DD3FC; border-color: #7DD3FC; }}
-div[data-testid="stElementContainer"]:has(.way-top-nav) {{ position: sticky; top: 3.2rem; z-index: 999; }}
-@media (max-width: 768px) {{
-    .way-top-nav {{ padding: 0.48rem 0.5rem; }}
-    .way-top-nav a {{ font-size: 0.82rem; padding: 0.3rem 0.58rem; }}
-}}
-</style>
-<nav class="way-top-nav" aria-label="頁面區塊導覽">
-  <span class="way-top-nav-label">快速跳轉</span>{links}
-</nav>
-""".strip()
-
-
-def build_section_anchor_html(section_id):
-    safe_id = escape(str(section_id), quote=True)
-    return f'<div id="{safe_id}" class="way-section-anchor" aria-hidden="true"></div>'
-
 def render_main_page(sidebar_state=None):
     """渲染主畫面。"""
 
@@ -121,8 +71,6 @@ def render_main_page(sidebar_state=None):
         s = re.sub(r'\s+', ' ', s)
         return s.strip() if s.strip() else "NULL"
 
-    def _section_anchor(section_id):
-        st.markdown(build_section_anchor_html(section_id), unsafe_allow_html=True)
     hi_val = None
     me_val = None
     lo_val = None
@@ -136,8 +84,6 @@ def render_main_page(sidebar_state=None):
     st.markdown(f"## 📈 {APP_PAGE_TITLE}")
 
     curr_id = str(st.session_state.get("selected_stock", "") or "").strip()
-    if curr_id:
-        st.markdown(build_top_section_nav_html(), unsafe_allow_html=True)
 
     if st.session_state.fugle_key and not f_ok:
         st.error("🚨 **系統警報**：您輸入的「富果 (Fugle) API Key」驗證失敗！請至左側欄檢查金鑰是否輸入正確。")
@@ -180,10 +126,19 @@ def render_main_page(sidebar_state=None):
                 st.info(f"💡 備援提示：{note}")
 
         if hist is not None and not hist.empty:
-            _section_anchor("overview")
             sector_disp, industry_profile = render_stock_header_panel(curr_id=curr_id, stock_name=c_name, info=info)
 
-            quote_snapshot = render_quote_panel(hist=hist, info=info)
+            quote_snapshot = render_quote_panel(
+                hist=hist,
+                info=info,
+                header_action=lambda current_price: render_ai_financial_audit_control(
+                    curr_id=curr_id,
+                    stock_name=c_name,
+                    info=info,
+                    current_price=current_price,
+                    compact=True,
+                ),
+            )
             curr_p = quote_snapshot.get("curr_p", 0)
             open_p = quote_snapshot.get("open_p", 0)
             high_p = quote_snapshot.get("high_p", 0)
@@ -197,28 +152,29 @@ def render_main_page(sidebar_state=None):
             amp = quote_snapshot.get("amp", 0)
             avg_price = quote_snapshot.get("avg_price", 0)
             turnover_100m = quote_snapshot.get("turnover_100m", 0)
+            _header_ai_result = quote_snapshot.get("header_action_result")
+            if isinstance(_header_ai_result, tuple) and len(_header_ai_result) == 2:
+                temp_ai_fin, has_ai_fin_fetch = _header_ai_result
+            else:
+                temp_ai_fin, has_ai_fin_fetch = {}, False
+
+            # 先保留位置，待 EPS / Dynamic Cap / 法人資料完成後回填；畫面順序固定在即時報價正下方。
+            eps_price_slot = st.container()
+            broker_target_slot = st.container()
 
             # ==========================================
             # 📌 主要 ETF 持有概況 + 獨立 AI ETF 補查
             # ==========================================
-            _section_anchor("etf")
             etf_holders = render_etf_exposure_panel(curr_id=curr_id, stock_name=c_name)
 
             # ==========================================
             # 📰 近期財報與法說會新聞
             # ==========================================
-            _section_anchor("financial-news")
             render_financial_news_panel(curr_id=curr_id)
 
             # ==========================================
             # 💼 股票預估價
             # ==========================================
-            _section_anchor("stock-forecast")
-            temp_ai_fin, has_ai_fin_fetch = render_ai_financial_audit_control(
-                curr_id=curr_id,
-                stock_name=c_name,
-                info=info,
-            )
             financial_base = build_financial_base_context(
                 stock_id=curr_id,
                 info=info,
@@ -1186,7 +1142,7 @@ def render_main_page(sidebar_state=None):
                 broker_target_high=ai_hi_val,
                 broker_target_low=ai_lo_val,
                 ttm_eps=eff_t_eps,
-                fy1_eps=cap_adopted_forward_eps,
+                fy1_eps=ai_forward_eps_fy1,
                 fy2_eps=ai_forward_eps_fy2,
                 fy3_eps=ai_forward_eps_fy3,
                 fy1_year=ai_forward_eps_fy1_year,
@@ -1217,6 +1173,38 @@ def render_main_page(sidebar_state=None):
                 _ft_summary_safe = {}
             pricing_horizon_pack = _ft_summary_safe.get("pricing_horizon", {}) if isinstance(_ft_summary_safe, dict) else {}
             future_evidence_pack = _ft_summary_safe.get("future_evidence", {}) if isinstance(_ft_summary_safe, dict) else {}
+
+            eps_price_rows = build_eps_price_calculation_rows(
+                ttm_eps=eff_t_eps,
+                fy1_eps=cap_adopted_forward_eps,
+                fy2_eps=ai_forward_eps_fy2,
+                fy3_eps=ai_forward_eps_fy3,
+                fy1_year=ai_forward_eps_fy1_year,
+                fy2_year=ai_forward_eps_fy2_year,
+                fy3_year=ai_forward_eps_fy3_year,
+                base_cap=base_pe_cap_for_calc,
+                soft_cap=soft_pe_cap_for_calc,
+                hard_cap=hard_pe_cap_for_calc,
+                cap_eps_basis=dynamic_cap_pack.get("cap_eps_basis"),
+            )
+            with eps_price_slot:
+                render_eps_price_calculation_panel(
+                    eps_price_rows,
+                    cap_eps_basis=dynamic_cap_pack.get("cap_eps_basis"),
+                )
+            with broker_target_slot:
+                target_panel_for_prompt, target_confidence = render_target_price_panel(
+                    curr_p=curr_p,
+                    ai_hi_val=ai_hi_val,
+                    ai_me_val=ai_me_val,
+                    ai_lo_val=ai_lo_val,
+                    ai_analyst_count=ai_analyst_count,
+                    ai_target_rationale=ai_target_rationale,
+                    target_confidence=target_confidence,
+                    ai_label=ai_label,
+                    ai_period_val=ai_period_val,
+                    target_price_source=target_price_source,
+                )
             # ==========================================
             # 🧪 第 17-C-9c-hotfix44：產業模型單次快照稽核表
             # ==========================================
@@ -1270,7 +1258,6 @@ def render_main_page(sidebar_state=None):
                 </div>
             </div>
             """
-            _section_anchor("valuation-risk")
             render_valuation_detail_panel(
                 val_html=val_html,
                 target_price_html=target_price_html,
@@ -1383,21 +1370,6 @@ def render_main_page(sidebar_state=None):
                 fs_str=fs_str,
             )
 
-            _section_anchor("target-price")
-            target_panel_for_prompt, target_confidence = render_target_price_panel(
-                curr_p=curr_p,
-                ai_hi_val=ai_hi_val,
-                ai_me_val=ai_me_val,
-                ai_lo_val=ai_lo_val,
-                ai_analyst_count=ai_analyst_count,
-                ai_target_rationale=ai_target_rationale,
-                target_confidence=target_confidence,
-                ai_label=ai_label,
-                ai_period_val=ai_period_val,
-                target_price_source=target_price_source,
-            )
-
-            _section_anchor("chips")
             chip_panel_state = render_chip_panels(curr_id=curr_id, info=info, ai_shares=ai_shares, eff_eg=eff_eg)
             if chip_panel_state.get("has_institutional_data"):
                 f_10d = chip_panel_state.get("f_10d")
@@ -2042,22 +2014,64 @@ def render_main_page(sidebar_state=None):
 """
 
 
+            def _essential_num(value, digits=2, suffix=""):
+                value = s_float(value)
+                return f"{value:.{digits}f}{suffix}" if value is not None else None
+
+            def _essential_pct(value):
+                value = s_float(value)
+                return f"{value * 100:.2f}%" if value is not None else None
+
+            essential_prompt_fields = [
+                ("現價", _essential_num(curr_p, 2, "元")),
+                ("TTM EPS", _essential_num(eff_t_eps)),
+                (f"FY1 EPS ({ai_forward_eps_fy1_year})" if ai_forward_eps_fy1_year else "FY1 EPS", _essential_num(ai_forward_eps_fy1)),
+                (f"FY2 EPS ({ai_forward_eps_fy2_year})" if ai_forward_eps_fy2_year else "FY2 EPS", _essential_num(ai_forward_eps_fy2)),
+                (f"FY3 EPS ({ai_forward_eps_fy3_year})" if ai_forward_eps_fy3_year else "FY3 EPS", _essential_num(ai_forward_eps_fy3)),
+                ("毛利率", _essential_pct(eff_gm)),
+                ("營益率", _essential_pct(eff_om)),
+                ("最新月營收 YoY", _essential_pct(eff_rg)),
+                ("Dynamic Cap Base", _essential_num(base_pe_cap_for_calc, 2, "x")),
+                ("Dynamic Cap Soft", _essential_num(soft_pe_cap_for_calc, 2, "x")),
+                ("Dynamic Cap Hard", _essential_num(hard_pe_cap_for_calc, 2, "x")),
+                ("法人代表目標價", _essential_num(ai_target_price, 2, "元")),
+                ("法人平均目標價", _essential_num(ai_me_val, 2, "元")),
+                ("法人最低目標價", _essential_num(ai_lo_val, 2, "元")),
+                ("法人最高目標價", _essential_num(ai_hi_val, 2, "元")),
+                ("法人樣本數", f"{int(ai_analyst_count)}位" if s_float(ai_analyst_count) is not None else None),
+                ("法人目標價來源", target_price_source if any(v is not None for v in (ai_target_price, ai_me_val, ai_lo_val, ai_hi_val)) else None),
+                ("系統最終燈號", final_signal.get("signal") if isinstance(final_signal, dict) else None),
+                ("系統操作建議", final_signal.get("advice") if isinstance(final_signal, dict) else None),
+            ]
+            for row in eps_price_rows:
+                scenario_parts = []
+                for cap_name, price_key in (("Base", "base_price"), ("Soft", "soft_price"), ("Hard", "hard_price")):
+                    price_text = _essential_num(row.get(price_key), 2, "元")
+                    if price_text:
+                        scenario_parts.append(f"{cap_name} {price_text}")
+                if scenario_parts:
+                    essential_prompt_fields.append((f"{row.get('tier')} 計算價", " / ".join(scenario_parts)))
+
+            essential_prompt_for_copy = build_essential_version_prompt(
+                app_title=APP_PAGE_TITLE,
+                stock_id=curr_id,
+                stock_name=c_name,
+                fields=essential_prompt_fields,
+            )
+
+
             def _build_prompt_technical_suffix(mode: str) -> str:
                 return prompt_technical_suffix(mode, hist=hist, curr_p=curr_p)
             
             # 第 17-C-2：打包提示詞分成「買進決策版 / 研究完整版」
-            _section_anchor("ai-analysis")
             render_prompt_pack_panel(
                 curr_id=curr_id,
-                buy_decision_prompt=buy_decision_prompt_for_copy,
-                research_prompt=research_prompt_for_copy,
-                build_technical_suffix=_build_prompt_technical_suffix,
+                prompt=essential_prompt_for_copy,
             )
             
             st.markdown("---")
 
             # ⚔️ 產業同業 PK
-            _section_anchor("peer-river")
             render_peer_compare_panel(curr_id=curr_id, stock_name=c_name)
 
             # 🌊 雙河流圖 (Tabs)
@@ -2066,7 +2080,6 @@ def render_main_page(sidebar_state=None):
             # ==========================================
             # 🚀 專業技術線圖與 KD 指標
             # ==========================================
-            _section_anchor("technical")
             render_technical_chart_panel(curr_id=curr_id, hist=hist)
         else:
             st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")

@@ -718,6 +718,7 @@ def get_etf_master_cache_status():
 
 
 AI_FINANCIAL_FIELD_LABELS = {
+    "current_price": "目前股價",
     "pe": "歷史本益比 P/E",
     "trailing_eps": "近四季 EPS（legacy）",
     "forward_eps": "法人預估 EPS（legacy）",
@@ -851,6 +852,7 @@ def get_financials_from_ai(
     系統已先用程式抓取可取得的法人資料。既有程式值如下：{programmatic_snapshot_text}。
     本次優先補齊欄位：{fill_scope_text}。
     你可以回傳完整 JSON 供交叉校對，但不得要求覆蓋既有程式值；正式合併時只採用你對缺值欄位的補齊結果。
+    0. 「目前股價 (current_price)」：抓取查詢當下或最近交易日成交/收盤價，僅供交叉校對；正式採用仍以系統行情為準。
     1. 「歷史本益比 (P/E)」
     2. 「最新單月 / 自結 EPS (latest_month_eps)」：若公司因注意股、重大訊息或新聞公告最近月份自結獲利，請填該單月 EPS，例如 2026年4月單月 EPS 13.95；沒有明確單月 EPS 請填 null。
     2-0. 「最新單季 EPS (latest_quarter_eps)」：最新已公告季度 EPS，例如 2026Q1 EPS。
@@ -868,8 +870,8 @@ def get_financials_from_ai(
     7. 「毛利率」
     8. 「營益率」
     9. 「ROE(股東權益報酬率)」
-    10. 「法人預估未來 1~3 年獲利複合成長率 (CAGR)，若無則用最新營收 YoY 替代」
-    11. 「國內外法人最新預估目標價 (Target Price)」
+    10. 「最新公告月份單月營收 YoY (yoy)」；若查不到單月 YoY 才可用未來 1~3 年獲利 CAGR，且必須在來源備註標明口徑。
+    11. 「國內外法人最新預估目標價」：同時回傳 target_price（主要/代表目標價）、target_price_avg（平均）、target_price_low（最低）、target_price_high（最高）。
     12. 「負債權益比 (Debt-to-Equity Ratio)」
     13. 「最新單月營收月增率(MoM)」
     14. 「預估現金殖利率 (Dividend Yield)」(例如：擬配發現金股利2元，最新股價900元，殖利率應為 0.0022)
@@ -928,7 +930,7 @@ def get_financials_from_ai(
     {{"pe": 15.2, "latest_month_eps": 0.42, "latest_quarter_eps": 1.35, "previous_quarter_eps": 1.10, "last_two_quarter_eps": 2.45, "ttm_eps": 5.4, "fiscal_year_eps": 4.9, "forward_eps_system": null, "forward_eps_ai": 6.0, "forward_eps_consensus": 6.2, "forward_eps_fy1": 6.2, "forward_eps_fy2": 7.4, "forward_eps_fy3": 8.6, "forward_eps_fy1_year": 2026, "forward_eps_fy2_year": 2027, "forward_eps_fy3_year": 2028, "forward_eps_fy_source_note": "券商共識 FY1/FY2，FY3 為高成長情境", "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2026/05/15", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000, "industry_classification": {{"suggested_primary_taxon": "AI_SERVER_ODM", "suggested_display_name": "AI 伺服器 ODM / 組裝", "suggested_themes": ["AI伺服器", "資料中心"], "confidence": "medium", "reason": "主要成長動能來自 AI 伺服器，但仍需確認營收比重。", "evidence": "近期法說與新聞提及 AI 伺服器出貨動能。", "needs_manual_review": true}}, "_sources": {{"pe": {{"source": "Yahoo股市", "published_date": "2026/05/31", "source_url": "https://example.com", "note": "最新可得本益比"}}, "latest_month_eps": {{"source": "公司自結公告", "published_date": "2026/05/10", "source_url": "https://example.com", "note": "2026年4月單月 EPS"}}, "ttm_eps": {{"source": "最新財報/公開資訊觀測站", "published_date": "2026Q1", "source_url": "https://example.com", "note": "近四季 EPS 合計"}}, "last_two_quarter_eps": {{"source": "最新財報/公開資訊觀測站", "published_date": "2026Q1", "source_url": "https://example.com", "note": "近二季 EPS 合計，用於 Run-rate 動能估值"}}, "forward_eps_consensus": {{"source": "券商/法人預估彙整", "published_date": "2026/05/20", "source_url": "https://example.com", "note": "{target_year} 年度 EPS 共識預估"}}, "target_price_avg": {{"source": "券商目標價彙整", "published_date": "2026/05/20", "source_url": "https://example.com", "note": "最新法人目標價均值"}}}}, "source_urls": ["https://example.com"]}}
     絕對不要輸出 markdown 標記或其他文字。"""
 
-    prompt_text = f"請啟用搜尋引擎，【務必尋找最新日期】查詢台股 {stock_name} ({stock_id}) 最新財報新聞、最新單月/自結 EPS、最新單季 EPS、前一季 EPS、近二季 EPS 合計、營收 MoM、FY1/FY2/FY3 法人預測 EPS、未來三年複合成長率(CAGR)與最新目標價。程式已取得資料：{programmatic_snapshot_text}；請優先補齊：{fill_scope_text}。請務必確認並標示出 EPS 對應年月/季度/年度、資料發布日期與來源！不要查詢 ETF 持股，ETF 持股由獨立功能處理。"
+    prompt_text = f"請啟用搜尋引擎，【務必尋找最新日期】查詢台股 {stock_name} ({stock_id}) 現價、TTM EPS、FY1/FY2/FY3 法人預測 EPS、毛利率、營益率、最新公告月份單月營收 YoY，以及法人目標價的代表值/平均/最低/最高。程式已取得資料：{programmatic_snapshot_text}；請優先補齊：{fill_scope_text}。請務必確認並標示 EPS 年度、資料發布日期與逐欄來源！不要查詢 ETF 持股，ETF 持股由獨立功能處理。"
 
     def _make_config(search_enabled=True):
         kwargs = {
@@ -1387,8 +1389,20 @@ def _mops_revenue_month_candidates(today=None, max_back_months=6):
     return [base - i for i in range(max_back_months)]
 
 
-def get_mops_monthly_revenue(stock_id, today=None, max_back_months=6):
-    """Fetch latest official MOPS monthly revenue for listed/OTC stocks."""
+def get_mops_monthly_revenue(
+    stock_id,
+    today=None,
+    max_back_months=2,
+    request_timeout=(0.8, 1.8),
+    allow_legacy_fallback=False,
+):
+    """Fetch official MOPS revenue with a bounded fast path.
+
+    Streamlit Cloud may block or throttle MOPS. The primary request path only
+    checks the three OpenData markets with short connect/read timeouts. The old
+    month-by-month HTML crawl is opt-in because its worst case could block the
+    whole page for several minutes.
+    """
     opendata_markets = [
         ("L", "上市"),
         ("O", "上櫃"),
@@ -1398,7 +1412,7 @@ def get_mops_monthly_revenue(stock_id, today=None, max_back_months=6):
     for suffix, market_label in opendata_markets:
         url = f"https://mopsfin.twse.com.tw/opendata/t187ap05_{suffix}.csv"
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(url, headers=headers, timeout=request_timeout)
             ok = res.status_code == 200
             log_data_health("MOPS OpenData", ok, res.status_code)
             if not ok:
@@ -1417,6 +1431,9 @@ def get_mops_monthly_revenue(stock_id, today=None, max_back_months=6):
             log_exception("MOPS", f"get_mops_monthly_revenue_opendata:{stock_id}:{suffix}", e)
             log_data_health("MOPS OpenData", False, f"ERR:{str(e)[:120]}")
 
+    if not allow_legacy_fallback:
+        return pd.DataFrame()
+
     markets = [
         ("sii", "上市"),
         ("otc", "上櫃"),
@@ -1429,7 +1446,7 @@ def get_mops_monthly_revenue(stock_id, today=None, max_back_months=6):
         for market_key, market_label in markets:
             url = f"https://mops.twse.com.tw/nas/t21/{market_key}/t21sc03_{roc_year}_{month}_0.html"
             try:
-                res = requests.get(url, headers=headers, timeout=10)
+                res = requests.get(url, headers=headers, timeout=request_timeout)
                 ok = res.status_code == 200
                 log_data_health("MOPS", ok, res.status_code)
                 if not ok:
@@ -1480,7 +1497,7 @@ def merge_mops_latest_revenue(history_df, mops_df):
     return merged
 
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=43200, show_spinner="正在快速取得月營收（逾時將自動跳過）…")
 def get_monthly_revenue(stock_id, fm_key=""):
     """取得月營收資料，並明確保留「實際公告月份」。
 
@@ -1530,11 +1547,11 @@ def get_monthly_revenue(stock_id, fm_key=""):
         out["revenue_month"] = out["revenue_month"].astype(str).map(normalize_revenue_month)
         return out
 
-    mops_df = get_mops_monthly_revenue(stock_id)
-
+    # Fast-first order: Yahoo -> FinMind -> bounded MOPS fallback.  The former
+    # MOPS-first order could issue up to 21 sequential 10-second requests.
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
-        y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=(1.5, 4.0))
         log_data_health("Yahoo", y_res.status_code == 200, y_res.status_code)
         if y_res.status_code == 200:
             json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
@@ -1601,7 +1618,7 @@ def get_monthly_revenue(stock_id, fm_key=""):
                                 source_url=y_url,
                                 source_rule="Yahoo monthly revenue yearMonth; same-month YoY/MoM; not yfinance revenueGrowth",
                             )
-                            return merge_mops_latest_revenue(yahoo_df, mops_df)
+                            return yahoo_df
     except Exception as e:
         log_exception("Yahoo", f"get_monthly_revenue:yahoo:{stock_id}", e)
 
@@ -1610,7 +1627,7 @@ def get_monthly_revenue(stock_id, fm_key=""):
         start_str = f"{today.year - 2}-{today.month:02d}-01"
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id={stock_id}&start_date={start_str}"
         if fm_key: url += f"&token={fm_key}"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=(1.5, 4.0))
         ok = (res.status_code == 200)
         status_val = res.status_code
         data = res.json()
@@ -1636,22 +1653,28 @@ def get_monthly_revenue(stock_id, fm_key=""):
                     source_url=url.split('&token=')[0],
                     source_rule="FinMind TaiwanStockMonthRevenue; same-month YoY/MoM; not yfinance revenueGrowth",
                 )
-                return merge_mops_latest_revenue(finmind_df, mops_df)
+                return finmind_df
     except Exception as e:
         log_exception("FinMind", f"get_monthly_revenue:finmind:{stock_id}", e)
         log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
+    mops_df = get_mops_monthly_revenue(
+        stock_id,
+        max_back_months=2,
+        request_timeout=(0.8, 1.8),
+        allow_legacy_fallback=False,
+    )
     if mops_df is not None and not mops_df.empty:
         return mops_df
     return None
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=43200, show_spinner="正在取得 P/E、P/B 歷史資料（逾時將自動跳過）…")
 def get_pe_pb_data(stock_id, fm_key=""):
     try:
         today = datetime.date.today()
         start_str = f"{today.year - 5}-{today.month:02d}-01"
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPER&data_id={stock_id}&start_date={start_str}"
         if fm_key: url += f"&token={fm_key}"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=(1.5, 4.0))
         if res.status_code == 200:
             data = res.json()
             if data.get('status') == 200 and data.get('data'): 
@@ -1665,14 +1688,14 @@ def get_pe_pb_data(stock_id, fm_key=""):
         log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
     return None
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=43200, show_spinner="正在取得財務健康資料（逾時將自動跳過）…")
 def get_finmind_financial_health(stock_id, fm_key=""):
     try:
         today = datetime.date.today()
         start_str = f"{today.year - 2}-01-01" 
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockFinancialStatements&data_id={stock_id}&start_date={start_str}"
         if fm_key: url += f"&token={fm_key}"
-        res = requests.get(url, timeout=15)
+        res = requests.get(url, timeout=(1.5, 5.0))
         data = res.json()
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
