@@ -1,0 +1,35 @@
+# Local secrets
+.streamlit/secrets.toml
+
+# Python/runtime cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS metadata
+.DS_Store
+._*
+*/._*
+
+# Build/package outputs and historical workspace files
+dist/
+*.zip
+download
+download (*)
+ui_mainold.py
+__init__ (*).py
+
+# Generated reports and temporary render files
+output/
+tmp/
+/valuation_*.md
+/valuation_*.json
+
+# Local virtual environments and repository metadata
+.venv/
+venv/
+env/
+.git/
+.agents/
+.codex/

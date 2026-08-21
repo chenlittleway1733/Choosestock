@@ -3,7 +3,7 @@ import re
 主畫面 UI 模組：
 包含個股儀表板、AI 分析、財務資料、圖表、ETF 曝險等主要畫面。
 """
-from app_version import APP_DISPLAY_VERSION
+from app_version import APP_PAGE_TITLE
 from ui_common import *
 from ui_panels.overview import render_empty_stock_prompt
 from ui_panels.financials import (
@@ -29,6 +29,7 @@ from ui_panels.technical import render_technical_chart_panel
 from ui_context.financial_context import build_ai_financial_context, build_financial_base_context
 from ui_context.implied_context import build_implied_pe_context
 from ui_context.multiple_context import build_multiple_context, fmt_cap, fmt_eps, fmt_price
+from ui_context.navigation_context import build_section_anchor_html, build_top_section_nav_html
 from ui_context.prompt_context import (
     build_prompt_target_context,
     prompt_ai_source_summary,
@@ -66,6 +67,9 @@ def render_main_page(sidebar_state=None):
         s = s.replace("N/A", "NULL").replace("無資料", "NULL").replace("未捕捉到", "NULL")
         s = re.sub(r'\s+', ' ', s)
         return s.strip() if s.strip() else "NULL"
+
+    def _section_anchor(section_id):
+        st.markdown(build_section_anchor_html(section_id), unsafe_allow_html=True)
     hi_val = None
     me_val = None
     lo_val = None
@@ -76,14 +80,16 @@ def render_main_page(sidebar_state=None):
     # ==========================================
     # 5. 主畫面開始
     # ==========================================
-    st.markdown(f"## 📈 WAY AI 投資戰情室 版本{APP_DISPLAY_VERSION}")
+    st.markdown(f"## 📈 {APP_PAGE_TITLE}")
+
+    curr_id = str(st.session_state.get("selected_stock", "") or "").strip()
+    if curr_id:
+        st.markdown(build_top_section_nav_html(), unsafe_allow_html=True)
 
     if st.session_state.fugle_key and not f_ok:
         st.error("🚨 **系統警報**：您輸入的「富果 (Fugle) API Key」驗證失敗！請至左側欄檢查金鑰是否輸入正確。")
     if st.session_state.finmind_key and not m_ok:
         st.error("🚨 **系統警報**：您輸入的「FinMind API Key」驗證失敗！請至左側欄檢查金鑰是否輸入正確。")
-
-    curr_id = str(st.session_state.get("selected_stock", "") or "").strip()
 
     # 2.2-hotfix：首次進入系統、尚未選股時，主畫面顯示明確操作提示，
     # 避免右側畫面只有標題與大片空白，尤其在 iPad / 平板檢視時容易誤以為系統未載入。
@@ -121,6 +127,7 @@ def render_main_page(sidebar_state=None):
                 st.info(f"💡 備援提示：{note}")
 
         if hist is not None and not hist.empty:
+            _section_anchor("overview")
             sector_disp, industry_profile = render_stock_header_panel(curr_id=curr_id, stock_name=c_name, info=info)
 
             quote_snapshot = render_quote_panel(hist=hist, info=info)
@@ -141,16 +148,19 @@ def render_main_page(sidebar_state=None):
             # ==========================================
             # 📌 主要 ETF 持有概況 + 獨立 AI ETF 補查
             # ==========================================
+            _section_anchor("etf")
             etf_holders = render_etf_exposure_panel(curr_id=curr_id, stock_name=c_name)
 
             # ==========================================
             # 📰 近期財報與法說會新聞
             # ==========================================
+            _section_anchor("financial-news")
             render_financial_news_panel(curr_id=curr_id)
 
             # ==========================================
-            # 💼 財務基本面與獲利基準微調
+            # 💼 股票預估價
             # ==========================================
+            _section_anchor("stock-forecast")
             temp_ai_fin, has_ai_fin_fetch = render_ai_financial_audit_control(
                 curr_id=curr_id,
                 stock_name=c_name,
@@ -1207,6 +1217,7 @@ def render_main_page(sidebar_state=None):
                 </div>
             </div>
             """
+            _section_anchor("valuation-risk")
             render_valuation_detail_panel(
                 val_html=val_html,
                 target_price_html=target_price_html,
@@ -1319,6 +1330,7 @@ def render_main_page(sidebar_state=None):
                 fs_str=fs_str,
             )
 
+            _section_anchor("target-price")
             target_panel_for_prompt, target_confidence = render_target_price_panel(
                 curr_p=curr_p,
                 ai_hi_val=ai_hi_val,
@@ -1332,6 +1344,7 @@ def render_main_page(sidebar_state=None):
                 target_price_source=target_price_source,
             )
 
+            _section_anchor("chips")
             chip_panel_state = render_chip_panels(curr_id=curr_id, info=info, ai_shares=ai_shares, eff_eg=eff_eg)
             if chip_panel_state.get("has_institutional_data"):
                 f_10d = chip_panel_state.get("f_10d")
@@ -1691,10 +1704,10 @@ def render_main_page(sidebar_state=None):
             def _prompt_model_library_feedback_request():
                 return prompt_model_library_feedback_request(industry_profile)
             context_str = f"""
-【0. WAY AI 投資戰情室 {APP_DISPLAY_VERSION} 精簡判讀總覽】
+【0. {APP_PAGE_TITLE} 精簡判讀總覽】
 - 股票: {c_name} ({curr_id})
 - 最新收盤價: {_nullize_text(curr_p)} 元
-- 系統版本: {APP_DISPLAY_VERSION}
+- 系統版本: {APP_PAGE_TITLE}
 - 最終操作燈號: {_nullize_text(final_signal.get('signal') if isinstance(final_signal, dict) else 'NULL')}
 - 操作含義: {_nullize_text(final_signal.get('advice') if isinstance(final_signal, dict) else 'NULL')}
 - 資料可信度 / 估值可信度 / 操作可信度: {_nullize_text(final_signal.get('data_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('valuation_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('operation_confidence') if isinstance(final_signal, dict) else 'NULL')}
@@ -1811,7 +1824,7 @@ def render_main_page(sidebar_state=None):
 【0. 系統判讀總覽】
 - 股票: {c_name} ({curr_id})
 - 最新收盤價: {_nullize_text(curr_p)} 元
-- 系統版本: {APP_DISPLAY_VERSION}
+- 系統版本: {APP_PAGE_TITLE}
 - 最終操作燈號: {_nullize_text(final_signal.get('signal') if isinstance(final_signal, dict) else 'NULL')}
 - 系統建議: {_nullize_text(final_signal.get('advice') if isinstance(final_signal, dict) else 'NULL')}
 - 資料 / 估值 / 操作可信度: {_nullize_text(final_signal.get('data_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('valuation_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('operation_confidence') if isinstance(final_signal, dict) else 'NULL')}
@@ -1895,10 +1908,10 @@ def render_main_page(sidebar_state=None):
 """
 
 
-            full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方 WAY AI 投資戰情室 {APP_DISPLAY_VERSION} 數據。
+            full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方 {APP_PAGE_TITLE} 數據。
 
 重要原則：
-1) 請優先尊重系統 {APP_DISPLAY_VERSION} 已產出的「月營收公告月份、EPS 拆欄、分歧警告、資料品質報告、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號」。
+1) 請優先尊重 {APP_PAGE_TITLE} 已產出的「月營收公告月份、EPS 拆欄、分歧警告、資料品質報告、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號」。
 2) 公式合理估值與公式極限價只代表模型輸出，不可直接當作買進目標；真正操作請以「可操作估值區間」與最終燈號為主。
 3) 若系統 / AI 分歧警告存在，必須先說明分歧對估值可信度與操作可信度的影響，不可直接給樂觀目標價。
 4) EPS 必須分清楚最新單季 EPS、TTM EPS、完整年度 EPS、系統 Forward EPS、AI Forward EPS、法人共識 Forward EPS，不可混用。
@@ -1911,7 +1924,7 @@ def render_main_page(sidebar_state=None):
 11) 研究完整版請額外輸出「模型庫回饋建議」：這不是買賣建議，而是協助日後修正 stock_mapping.py、industry_taxonomy.py、dynamic_cap_model.py 或法人目標價可信度規則；AI 回饋只能作為候選清單，不可直接覆蓋模型庫。
 
 任務要求：
-1) 先做「{APP_DISPLAY_VERSION} 資料品質盤點」：逐項說明哪些欄位是系統/AI/推估/NULL，並指出最影響結論的 3 個資料風險。
+1) 先做「{APP_PAGE_TITLE} 資料品質盤點」：逐項說明哪些欄位是系統/AI/推估/NULL，並指出最影響結論的 3 個資料風險。
 2) 解讀「分歧警告」：EPS / YoY / PEG / 合理價 / D/E 若有警告，請說明是否會讓估值降級。
 3) 解讀「產業估值模型」：說明這檔股票適合用哪些估值指標，不適合用哪些指標。
 4) 解讀「公式估值 vs 可操作估值」：請分開說明公式合理價、公式極限價、可操作估值區間，不可混成同一個目標價。
@@ -1927,7 +1940,7 @@ def render_main_page(sidebar_state=None):
 
 輸出格式（必須照做）：
 - [投資結論一句話]
-- [{APP_DISPLAY_VERSION} 資料品質與分歧警告]
+- [{APP_PAGE_TITLE} 資料品質與分歧警告]
 - [產業估值模型解讀]
 - [公式估值 vs 可操作估值]
 - [公司優缺點]
@@ -1937,14 +1950,14 @@ def render_main_page(sidebar_state=None):
 - [下月追蹤清單]
 - [模型庫回饋建議｜研究用途，非買賣建議]
 
-以下是系統面板 {APP_DISPLAY_VERSION} 精簡打包數據（只保留會影響外部 AI 判斷的採用值、分歧、估值層級、產業模型、Dynamic Cap 與燈號；無資料為 NULL）。若出現數據不合理，可上網查詢並說明不合理原因，但不可忽略系統已標示的分歧與資料品質警告：
+以下是 {APP_PAGE_TITLE} 精簡打包數據（只保留會影響外部 AI 判斷的採用值、分歧、估值層級、產業模型、Dynamic Cap 與燈號；無資料為 NULL）。若出現數據不合理，可上網查詢並說明不合理原因，但不可忽略系統已標示的分歧與資料品質警告：
 {context_str}
 """
 
             research_prompt_for_copy = full_prompt_for_copy
             buy_decision_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，協助我判斷這檔股票「現在是否值得買進」。
 
-請優先尊重 WAY AI 投資戰情室 {APP_DISPLAY_VERSION} 的判讀，尤其是：月營收公告月份、EPS 拆欄、分歧警告、資料品質、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號。
+請優先尊重 {APP_PAGE_TITLE} 的判讀，尤其是：月營收公告月份、EPS 拆欄、分歧警告、資料品質、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號。
 
 重要規則：
 - 不可把公式合理估值或公式極限價直接當買進目標。
@@ -1971,7 +1984,7 @@ def render_main_page(sidebar_state=None):
 11. [EPS 年期判斷]：請先用 TTM EPS 判斷目前實際獲利估值，再說明目前股價與法人目標價比較像用 FY1、FY2 還是 FY3 EPS 定價；FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年。若用 FY2/FY3 才合理，請說明風險與是否能作為買進依據。
 12. [產業模型是否需更新]：請根據「17-C-9c-hotfix44 單次快照稽核」回答：不建議更新模型 / 暫時觀察 / 建議檢查 hybrid 權重 / 建議檢查 primary_taxon / 建議檢查整個產業倍率。若建議檢查，請說明是市場過熱、法人過度樂觀、EPS/營收尚未落地，還是公司營運型態已改變；不可因單次現價高於 hard ceiling 就直接調高模型。
 
-以下是 WAY AI 投資戰情室 {APP_DISPLAY_VERSION}「買進決策版」系統資料。這不是完整研究資料包，只保留會直接影響買進判斷的採用值、系統值/AI值、分歧、估值層級、產業模型、Dynamic Cap 與燈號。若資料不合理，可上網查證，但不可忽略系統標示的資料品質與分歧警告：
+以下是 {APP_PAGE_TITLE}「買進決策版」系統資料。這不是完整研究資料包，只保留會直接影響買進判斷的採用值、系統值/AI值、分歧、估值層級、產業模型、Dynamic Cap 與燈號。若資料不合理，可上網查證，但不可忽略系統標示的資料品質與分歧警告：
 {decision_context_str}
 """
 
@@ -1980,6 +1993,7 @@ def render_main_page(sidebar_state=None):
                 return prompt_technical_suffix(mode, hist=hist, curr_p=curr_p)
             
             # 第 17-C-2：打包提示詞分成「買進決策版 / 研究完整版」
+            _section_anchor("ai-analysis")
             render_prompt_pack_panel(
                 curr_id=curr_id,
                 buy_decision_prompt=buy_decision_prompt_for_copy,
@@ -1990,6 +2004,7 @@ def render_main_page(sidebar_state=None):
             st.markdown("---")
 
             # ⚔️ 產業同業 PK
+            _section_anchor("peer-river")
             render_peer_compare_panel(curr_id=curr_id, stock_name=c_name)
 
             # 🌊 雙河流圖 (Tabs)
@@ -1998,6 +2013,7 @@ def render_main_page(sidebar_state=None):
             # ==========================================
             # 🚀 專業技術線圖與 KD 指標
             # ==========================================
+            _section_anchor("technical")
             render_technical_chart_panel(curr_id=curr_id, hist=hist)
         else:
             st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")

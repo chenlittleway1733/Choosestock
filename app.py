@@ -6,7 +6,7 @@
 
 import streamlit as st
 
-from app_version import APP_DISPLAY_VERSION, APP_PAGE_TITLE
+from app_version import APP_PAGE_TITLE
 from ui import render_main_page, render_sidebar
 from utils import init_session_state
 
@@ -27,7 +27,7 @@ def check_password():
 
     # 繪製置中的登入畫面
     st.markdown(
-        f"<h1 style='text-align: center; margin-top: 10vh;'>🔒 WAY AI 投資戰情室 {APP_DISPLAY_VERSION}</h1>",
+        f"<h1 style='text-align: center; margin-top: 10vh;'>🔒 {APP_PAGE_TITLE}</h1>",
         unsafe_allow_html=True,
     )
     st.markdown("<h4 style='text-align: center; color: gray;'>此為專屬系統，請輸入密碼以繼續</h4>", unsafe_allow_html=True)
