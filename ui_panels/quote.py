@@ -11,9 +11,8 @@ def _quote_color(value, base):
     return "#ffffff"
 
 
-def render_quote_panel(*, hist, info):
+def render_quote_panel(*, hist, info, header_action=None):
     """Render latest quote data and return values reused by valuation logic."""
-    st.markdown("#### ⚡ 即時報價與交易資訊")
     info = info or {}
     today_data = hist.iloc[-1]
     prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
@@ -33,6 +32,14 @@ def render_quote_panel(*, hist, info):
     amp = ((high_p - low_p) / prev_close) * 100 if prev_close and prev_close > 0 else 0
     avg_price = (high_p + low_p + curr_p) / 3 if curr_p else 0
     turnover_100m = (vol_shares * avg_price) / 100000000
+
+    action_result = None
+    col_title, col_action = st.columns([0.62, 0.38])
+    with col_title:
+        st.markdown("#### ⚡ 即時報價與交易資訊")
+    with col_action:
+        if callable(header_action):
+            action_result = header_action(curr_p)
 
     c_curr = _quote_color(curr_p, prev_close)
     c_open = _quote_color(open_p, prev_close)
@@ -79,4 +86,5 @@ def render_quote_panel(*, hist, info):
         "amp": amp,
         "avg_price": avg_price,
         "turnover_100m": turnover_100m,
+        "header_action_result": action_result,
     }

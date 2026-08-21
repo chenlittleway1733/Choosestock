@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a clean zip package for moving the app to another computer."""
+"""Build a clean Streamlit-repository zip with app.py at the archive root."""
 
 from __future__ import annotations
 
@@ -82,12 +82,14 @@ def build_package(output_path: Path) -> tuple[int, int]:
     with ZipFile(output_path, "w", compression=ZIP_DEFLATED) as archive:
         for path in files:
             rel_path = _as_posix(path.relative_to(ROOT))
-            archive.write(path, arcname=f"way_stock/{rel_path}")
+            archive.write(path, arcname=rel_path)
     return len(files), output_path.stat().st_size
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build a clean WAY stock app zip.")
+    parser = argparse.ArgumentParser(
+        description="Build a clean WAY stock Streamlit repository zip with app.py at its root."
+    )
     parser.add_argument(
         "--output",
         type=Path,

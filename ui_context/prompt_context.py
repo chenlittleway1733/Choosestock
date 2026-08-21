@@ -4,6 +4,52 @@ from ui_common import *
 from ui_context.financial_context import first_valid_analyst_count
 
 
+def build_essential_version_prompt(*, app_title, stock_id, stock_name, fields):
+    """Build one compact prompt and silently omit every uncaptured field."""
+    missing_markers = ("n/a", "null", "none", "nan", "無資料", "未取得", "未捕捉到", "未知")
+
+    def _usable_text(value):
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+        text = re.sub(r"\s+", " ", str(value)).strip()
+        if not text or any(marker in text.lower() for marker in missing_markers):
+            return ""
+        return text
+
+    data_lines = []
+    for item in fields or []:
+        if isinstance(item, dict):
+            label = _usable_text(item.get("label"))
+            value = _usable_text(item.get("value"))
+        elif isinstance(item, (tuple, list)) and len(item) >= 2:
+            label = _usable_text(item[0])
+            value = _usable_text(item[1])
+        else:
+            continue
+        if label and value:
+            data_lines.append(f"- {label}：{value}")
+
+    stock_label = f"{_usable_text(stock_name)} ({_usable_text(stock_id)})".strip()
+    if stock_label == "()":
+        stock_label = "目前標的"
+    core_data = "\n".join(data_lines) if data_lines else "- 請先查證核心數據後再分析"
+    return (
+        f"你是台股估值與風險分析助手。請用繁體中文，僅根據下列 {app_title} "
+        f"已取得的核心數據分析 {stock_label}。\n\n"
+        f"【核心數據】\n{core_data}\n\n"
+        "【任務】\n"
+        "1. 判斷現價相對 TTM、FY1、FY2、FY3 情境價與法人目標價是低估、合理或偏高。\n"
+        "2. 分析毛利率、營益率與 YoY 是否支撐預估 EPS；FY2/FY3 只作遠期風險情境。\n"
+        "3. 給出一句話結論、分批買進條件、減碼/停損條件，以及最重要的 3 個風險。\n"
+        "4. 若需外部查證，請另列來源與日期，不得擅自替換上列系統值。"
+    )
+
+
 def prompt_nullize_text(value):
     value = str(value) if value is not None else ""
     value = re.sub(r"<[^>]+>", " ", value)

@@ -1,6 +1,7 @@
 """Schema helpers for AI financial-fill responses."""
 
 AI_FINANCIAL_FIELD_LABELS = {
+    "current_price": "目前股價",
     "pe": "歷史本益比 P/E",
     "trailing_eps": "近四季 EPS（legacy）",
     "forward_eps": "法人預估 EPS（legacy）",
