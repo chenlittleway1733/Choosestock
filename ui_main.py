@@ -228,7 +228,7 @@ def render_main_page(sidebar_state=None):
     st.markdown(f"## 📈 {APP_PAGE_TITLE}")
 
     if _DEPLOYMENT_COMPAT_WARNINGS:
-        st.warning("⚠️ 雲端專案檢測到新舊模組混用，已啟用相容備援以避免啟動失敗。請將 ZIP 內 way_stock 資料夾的全部檔案一次覆蓋雲端專案。")
+        st.warning("⚠️ 雲端專案檢測到新舊模組混用，已啟用相容備援以避免啟動失敗。請將 ZIP 解壓後最外層的全部檔案與資料夾，一次覆蓋雲端專案根目錄。")
         for warning in dict.fromkeys(_DEPLOYMENT_COMPAT_WARNINGS):
             st.caption(f"- {warning}")
 

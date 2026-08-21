@@ -6,6 +6,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from zipfile import ZipFile
 
 import pandas as pd
 
@@ -227,6 +228,21 @@ class ApplicationBrandAndNavigationTests(unittest.TestCase):
         self.assertTrue(callable(module.build_eps_price_calculation_rows))
         self.assertTrue(callable(module.build_essential_version_prompt))
         self.assertEqual(len(module._DEPLOYMENT_COMPAT_WARNINGS), 2)
+
+    def test_deployment_zip_uses_streamlit_repository_root_layout(self):
+        from tools.build_clean_package import build_package
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_path = Path(temp_dir) / "WAY_Stock_2.5.zip"
+            build_package(package_path)
+            with ZipFile(package_path) as archive:
+                names = set(archive.namelist())
+
+        self.assertIn("app.py", names)
+        self.assertIn("ui_main.py", names)
+        self.assertIn("ui_panels/financials.py", names)
+        self.assertIn("ui_context/prompt_context.py", names)
+        self.assertFalse(any(name.startswith("way_stock/") for name in names))
 
 
 class StockMappingConsistencyTests(unittest.TestCase):
