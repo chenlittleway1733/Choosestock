@@ -21,8 +21,9 @@ WAY投資戰情室-2.5版 Streamlit 專案。
 
 ## 法人目標價與 FY EPS
 
-- 法人目標價先由 yfinance `analyst_price_targets` 程式抓取，缺欄再用 `Ticker.info` 與 Yahoo 頁面解析備援。
-- FY1 / FY2 / FY3 EPS 先由 yfinance `earnings_estimate`、`eps_trend` 程式抓取；無年份的單一 `forwardEps` 不會冒充 FY1。
+- 法人目標價先由 yfinance `analyst_price_targets` 程式抓取，缺值再依序使用 `Ticker.info`、Yahoo 頁面與 FactSet／鉅亨網公開預估文章備援。
+- FY1 / FY2 / FY3 EPS 先由 yfinance `earnings_estimate`、`eps_trend` 程式抓取；缺值再讀取 FactSet／鉅亨網明確年度表，採法人中位數並保留發布日期、來源網址與分析師人數。
+- 無年份的單一 `forwardEps` 不會冒充 FY1；FactSet 文章若股票代號不符、沒有明確年度表或年份不是目前 FY1～FY3，也不會納入。
 - 點擊「啟動 AI 全方位校對與補齊財報」後，程式既有值會被保護，AI 只補仍為空白的欄位並交叉校對。
 - AI 的 FY EPS 必須帶有可解析且連續的年度；目標價與 FY EPS 必須有可追蹤來源，否則不納入正式估值。
 

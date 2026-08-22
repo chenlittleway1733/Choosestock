@@ -928,6 +928,109 @@ class FieldSourcePriorityTests(unittest.TestCase):
         self.assertIn("Ticker.info", snapshot["targetLowPriceSource"])
         self.assertIn("eps_trend", snapshot["forwardEpsFY3Source"])
 
+    def test_cnyes_factset_parser_extracts_three_explicit_years_and_target(self):
+        html = """
+        <html><body>
+          <h1>Factset 最新調查：大立光(3008-TW)EPS預估下修，預估目標價為4300元</h1>
+          <p>鉅亨網新聞中心 2026-07-10 08:10</p>
+          <p>根據FactSet最新調查，共18位分析師，對大立光(3008-TW)做出2026年EPS預估。</p>
+          <h2>市場預估EPS</h2>
+          <table>
+            <tr><th>預估值</th><th>2026年(前值)</th><th>2027年</th><th>2028年</th></tr>
+            <tr><td>最高值</td><td>211.7(211.7)</td><td>228.5</td><td>291.3</td></tr>
+            <tr><td>最低值</td><td>176.23(176.23)</td><td>180.53</td><td>190.8</td></tr>
+            <tr><td>平均值</td><td>191.24(191.55)</td><td>209.26</td><td>241.6</td></tr>
+            <tr><td>中位數</td><td>189.72(190.88)</td><td>211.49</td><td>239.9</td></tr>
+          </table>
+        </body></html>
+        """
+        snapshot = services.parse_cnyes_factset_forecast_html(
+            html,
+            "3008",
+            expected_fy1_year=2026,
+            source_url="https://news.cnyes.com/news/id/6530344",
+        )
+
+        self.assertEqual(snapshot["forwardEpsFY1"], 189.72)
+        self.assertEqual(snapshot["forwardEpsFY2"], 211.49)
+        self.assertEqual(snapshot["forwardEpsFY3"], 239.9)
+        self.assertEqual(snapshot["forwardEpsFY1Year"], 2026)
+        self.assertEqual(snapshot["forwardEpsFY2Year"], 2027)
+        self.assertEqual(snapshot["forwardEpsFY3Year"], 2028)
+        self.assertEqual(snapshot["targetMeanPrice"], 4300)
+        self.assertEqual(snapshot["numberOfAnalystOpinions"], 18)
+        self.assertIn("中位數", snapshot["forwardEpsFYBasis"])
+        self.assertIn("6530344", snapshot["forwardEpsFY1SourceURL"])
+
+    def test_cnyes_factset_parser_rejects_wrong_stock_and_yearless_values(self):
+        wrong_stock_html = """
+        <html><body><p>FactSet 市場預估EPS：聯發科(2454-TW)</p>
+        <table><tr><th>預估值</th><th>2026年</th></tr>
+        <tr><td>中位數</td><td>100</td></tr></table></body></html>
+        """
+        yearless_html = """
+        <html><body><p>FactSet 市場預估EPS：大立光(3008-TW)，forward EPS 190</p></body></html>
+        """
+
+        self.assertEqual(
+            services.parse_cnyes_factset_forecast_html(wrong_stock_html, "3008", expected_fy1_year=2026),
+            {},
+        )
+        self.assertEqual(
+            services.parse_cnyes_factset_forecast_html(yearless_html, "3008", expected_fy1_year=2026),
+            {},
+        )
+
+    def test_cnyes_factset_fetch_selects_exact_stock_article(self):
+        class FakeResponse:
+            def __init__(self, status_code=200, payload=None, text=""):
+                self.status_code = status_code
+                self._payload = payload or {}
+                self.text = text
+
+            def json(self):
+                return self._payload
+
+        article_html = """
+        <html><body><h1>FactSet 大立光(3008-TW) EPS預估，預估目標價為4300元</h1>
+        <p>根據FactSet最新調查，共18位分析師，大立光(3008-TW)</p><h2>市場預估EPS</h2>
+        <table><tr><th>預估值</th><th>2026年</th><th>2027年</th><th>2028年</th></tr>
+        <tr><td>中位數</td><td>189.72</td><td>211.49</td><td>239.9</td></tr></table>
+        </body></html>
+        """
+        old_get = services.requests.get
+        try:
+            def fake_get(url, *args, **kwargs):
+                if "search/news" in url:
+                    return FakeResponse(payload={"items": {"data": [
+                        {
+                            "newsId": 111,
+                            "title": "FactSet 聯發科(2454-TW)EPS預估",
+                            "publishAt": 1780000000,
+                        },
+                        {
+                            "newsId": 6530344,
+                            "title": "FactSet 大立光(<mark>3008</mark>-TW)EPS預估",
+                            "publishAt": 1783630000,
+                        },
+                    ]}})
+                self.assertEqual(url, "https://news.cnyes.com/news/id/6530344")
+                return FakeResponse(text=article_html)
+
+            services.requests.get = fake_get
+            snapshot = services.fetch_cnyes_factset_analyst_snapshot(
+                "3008",
+                "大立光",
+                expected_fy1_year=2026,
+            )
+        finally:
+            services.requests.get = old_get
+
+        self.assertEqual(snapshot["forwardEpsFY1"], 189.72)
+        self.assertEqual(snapshot["forwardEpsFY2"], 211.49)
+        self.assertEqual(snapshot["forwardEpsFY3"], 239.9)
+        self.assertEqual(snapshot["targetMeanPrice"], 4300)
+
     def test_financial_context_keeps_programmatic_values_and_uses_ai_only_for_gaps(self):
         source_trace = {
             field: {

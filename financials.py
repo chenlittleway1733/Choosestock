@@ -454,8 +454,20 @@ def render_eps_price_calculation_panel(
         selection = dual.get("selection") if isinstance(dual.get("selection"), dict) else {}
         reason = str(selection.get("reason") or "").strip()
         st.info("第二產業已辨識、倍率資料不足；不使用預設倍率或主要價格帶填補。" + (f" 原因：{reason}" if reason else ""))
-    if not any(row.get("eps") is not None for row in (rows or [])):
-        st.info("目前尚未取得可用 EPS；可點選上方 AI 全方位校對與補齊財報。")
+    missing_fy = [
+        str(row.get("tier"))
+        for row in (rows or [])
+        if str(row.get("tier")) in {"FY1", "FY2", "FY3"} and row.get("eps") is None
+    ]
+    if missing_fy:
+        missing_text = "／".join(missing_fy)
+        if st.session_state.get("api_key"):
+            st.info(f"程式來源尚未取得 {missing_text} EPS；請按即時報價右上方「AI 全方位校對與補齊財報」補缺。")
+        else:
+            st.warning(
+                f"程式來源尚未取得 {missing_text} EPS；請先在左側載入 key.txt，"
+                "再按即時報價右上方「AI 全方位校對與補齊財報」。"
+            )
     return rows
 
 

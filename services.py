@@ -5,6 +5,7 @@ yfinance、Fugle、FinMind、Yahoo、Gemini 等 API 存取都集中在這裡。
 """
 import datetime
 import email.utils
+import html as html_lib
 import io
 import json
 import math
@@ -2171,6 +2172,204 @@ def extract_yfinance_analyst_snapshot(ticker, base_info=None, today=None):
     return snapshot
 
 
+def _forecast_cell_number(value):
+    """Parse the current forecast value from cells such as ``189.72(190.88)``."""
+    text = html_lib.unescape(str(value or "")).replace(",", "").strip()
+    if not text or text.lower() in {"nan", "none", "null", "--", "-"}:
+        return None
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    value = s_float(match.group(0)) if match else None
+    if value is None or not math.isfinite(value) or abs(value) > 10000:
+        return None
+    return value
+
+
+def parse_cnyes_factset_forecast_html(
+    raw_html,
+    stock_id,
+    *,
+    expected_fy1_year=None,
+    source_url="",
+    published_date="",
+):
+    """Extract explicit annual FactSet EPS estimates from a Cnyes article.
+
+    Only a table that names the requested stock and explicit calendar years is
+    accepted. The median row is preferred over the average row so outlier
+    analyst estimates do not distort FY1/FY2/FY3. A year-less forward EPS is
+    deliberately never promoted into an FY slot.
+    """
+    if not raw_html or not str(stock_id or "").strip():
+        return {}
+
+    stock_id = str(stock_id).strip()
+    cleaned_html = html_lib.unescape(str(raw_html))
+    visible_text = re.sub(
+        r"<script[\s\S]*?</script>|<style[\s\S]*?</style>",
+        " ",
+        cleaned_html,
+        flags=re.I,
+    )
+    visible_text = re.sub(r"<[^>]+>", " ", visible_text)
+    visible_text = " ".join(visible_text.split())
+    stock_pattern = rf"(?:\(|（)\s*{re.escape(stock_id)}\s*-\s*TW\s*(?:\)|）)"
+    if not re.search(stock_pattern, visible_text, flags=re.I):
+        return {}
+    if "factset" not in visible_text.lower() or "市場預估EPS" not in visible_text.replace(" ", ""):
+        return {}
+
+    if expected_fy1_year is None:
+        expected_fy1_year = datetime.date.today().year
+    try:
+        expected_fy1_year = int(expected_fy1_year)
+    except Exception:
+        return {}
+
+    source_date = str(published_date or "").strip()
+    if not source_date:
+        date_match = re.search(r"(20\d{2})[-/]([01]?\d)[-/]([0-3]?\d)", visible_text)
+        if date_match:
+            source_date = f"{int(date_match.group(1)):04d}-{int(date_match.group(2)):02d}-{int(date_match.group(3)):02d}"
+    source_label = "FactSet／鉅亨網"
+    if source_date:
+        source_label += f"（{source_date}）"
+
+    snapshot = {}
+    for raw_table in _read_html_tables_with_fallback(cleaned_html):
+        if raw_table is None or raw_table.empty:
+            continue
+        table = _flatten_table_columns(raw_table).fillna("")
+        columns = list(table.columns)
+        year_columns = {}
+        for column in columns:
+            year_match = re.search(r"(20\d{2})\s*年", str(column))
+            if year_match:
+                year_columns[int(year_match.group(1))] = column
+        if expected_fy1_year not in year_columns:
+            continue
+
+        label_column = columns[0]
+        label_values = table[label_column].astype(str).str.replace(r"\s+", "", regex=True)
+        selected_row = None
+        selected_stat = ""
+        for statistic in ("中位數", "平均值"):
+            matches = table[label_values.str.contains(statistic, na=False)]
+            if not matches.empty:
+                selected_row = matches.iloc[0]
+                selected_stat = statistic
+                break
+        if selected_row is None:
+            continue
+
+        for tier in (1, 2, 3):
+            year = expected_fy1_year + tier - 1
+            column = year_columns.get(year)
+            if column is None:
+                continue
+            eps_value = _forecast_cell_number(selected_row.get(column))
+            if eps_value is None:
+                continue
+            prefix = f"forwardEpsFY{tier}"
+            snapshot[prefix] = eps_value
+            snapshot[f"{prefix}Year"] = year
+            snapshot[f"{prefix}Source"] = f"{source_label} 法人 EPS {selected_stat}"
+            if source_url:
+                snapshot[f"{prefix}SourceURL"] = str(source_url)
+
+        if snapshot:
+            snapshot["forwardEpsFYBasis"] = f"FactSet 法人年度 EPS {selected_stat}（程式抓取）"
+            break
+
+    analyst_match = re.search(r"共\s*(\d{1,3})\s*位分析師", visible_text)
+    if analyst_match:
+        analyst_count = int(analyst_match.group(1))
+        if 0 < analyst_count <= 100:
+            snapshot["numberOfAnalystOpinions"] = analyst_count
+            snapshot["numberOfAnalystOpinionsSource"] = source_label
+
+    target_match = re.search(r"預估目標價(?:為|約)?\s*([0-9][0-9,]*(?:\.\d+)?)\s*元", visible_text)
+    target_value = _forecast_cell_number(target_match.group(1)) if target_match else None
+    if target_value is not None and target_value > 0:
+        snapshot["targetMeanPrice"] = target_value
+        snapshot["targetMeanPriceSource"] = f"{source_label} FactSet 代表目標價"
+        snapshot["targetPriceSource"] = f"{source_label} FactSet 代表目標價（非高低區間）"
+        if source_url:
+            snapshot["targetMeanPriceSourceURL"] = str(source_url)
+
+    return snapshot
+
+
+@st.cache_data(ttl=21600)
+def fetch_cnyes_factset_analyst_snapshot(stock_id, stock_name="", expected_fy1_year=None):
+    """Fetch the newest exact-stock FactSet forecast article with bounded latency."""
+    stock_id = str(stock_id or "").strip()
+    if not stock_id:
+        return {}
+    if expected_fy1_year is None:
+        expected_fy1_year = datetime.date.today().year
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; WAY-Stock-Research/2.5)",
+        "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+    }
+    try:
+        search_response = requests.get(
+            "https://api.cnyes.com/media/api/v1/search/news",
+            params={"q": f"{stock_id} FactSet EPS預估", "page": 1},
+            headers=headers,
+            timeout=3.5,
+        )
+        if search_response.status_code != 200:
+            log_data_health("CnyesForecast", False, search_response.status_code)
+            return {}
+        payload = search_response.json()
+        items = ((payload.get("items") or {}).get("data") or []) if isinstance(payload, dict) else []
+        exact_candidates = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = re.sub(r"</?mark>", "", html_lib.unescape(str(item.get("title") or "")), flags=re.I)
+            title_key = title.lower().replace(" ", "")
+            if "factset" not in title_key or "eps預估" not in title_key:
+                continue
+            if not re.search(rf"(?:\(|（){re.escape(stock_id)}-TW(?:\)|）)", title, flags=re.I):
+                continue
+            news_id = item.get("newsId")
+            if news_id is None:
+                continue
+            exact_candidates.append((int(item.get("publishAt") or 0), str(news_id)))
+        exact_candidates.sort(reverse=True)
+        if not exact_candidates:
+            log_data_health("CnyesForecast", False, "NO_EXACT_ARTICLE")
+            return {}
+
+        publish_at, news_id = exact_candidates[0]
+        article_url = f"https://news.cnyes.com/news/id/{news_id}"
+        article_response = requests.get(article_url, headers=headers, timeout=3.5)
+        if article_response.status_code != 200 or not article_response.text:
+            log_data_health("CnyesForecast", False, article_response.status_code)
+            return {}
+        published_date = ""
+        if publish_at > 0:
+            published_date = datetime.datetime.fromtimestamp(
+                publish_at,
+                tz=datetime.timezone.utc,
+            ).astimezone(datetime.timezone(datetime.timedelta(hours=8))).date().isoformat()
+        snapshot = parse_cnyes_factset_forecast_html(
+            article_response.text,
+            stock_id,
+            expected_fy1_year=expected_fy1_year,
+            source_url=article_url,
+            published_date=published_date,
+        )
+        log_data_health("CnyesForecast", bool(snapshot), 200 if snapshot else "PARSE_EMPTY")
+        return snapshot
+    except Exception as exc:
+        log_exception("CnyesForecast", f"fetch:{stock_id}", exc)
+        log_data_health("CnyesForecast", False, f"ERR:{str(exc)[:120]}")
+        return {}
+
+
 @st.cache_data(ttl=3600)
 def fetch_finmind_price_history(stock_id, fm_key="", days=1825):
     """Fetch TaiwanStockPrice history from FinMind as price fallback / cross-check."""
@@ -2234,6 +2433,30 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
         except Exception as e:
             log_exception("Yahoo", f"_get_base_stock_data:yfinance:{stock_id}{ext}", e)
             continue
+
+    # Yahoo 對部分台股不提供 earnings_estimate / eps_trend；再以鉅亨網
+    # FactSet 明確年度表補齊。只填缺值，不覆蓋 yfinance 已取得的程式資料。
+    analyst_core_keys = (
+        "forwardEpsFY1", "forwardEpsFY2", "forwardEpsFY3",
+        "targetMeanPrice",
+    )
+    if any(s_float(info_data.get(key)) is None for key in analyst_core_keys):
+        expected_fy1_year = _infer_analyst_fy1_year(info_data)
+        cnyes_snapshot = fetch_cnyes_factset_analyst_snapshot(
+            stock_id,
+            stock_name=str(info_data.get("longName") or info_data.get("shortName") or ""),
+            expected_fy1_year=expected_fy1_year,
+        )
+        filled_from_cnyes = 0
+        for key, value in cnyes_snapshot.items():
+            current_value = info_data.get(key)
+            if current_value in (None, "") or str(current_value).lower() in {"nan", "none", "null"}:
+                info_data[key] = value
+                filled_from_cnyes += 1
+        if filled_from_cnyes:
+            if info_source is None:
+                info_source = "FactSet／鉅亨網法人預估備援"
+            fallback_notes.append(f"已由 FactSet／鉅亨網明確年度表補齊 {filled_from_cnyes} 個法人預估欄位。")
             
     if hist is None or hist.empty:
         for ext in [".TW", ".TWO"]:
