@@ -40,7 +40,8 @@ def build_essential_version_prompt(*, app_title, stock_id, stock_name, fields):
     core_data = "\n".join(data_lines) if data_lines else "- 請先查證核心數據後再分析"
     return (
         f"你是台股估值與風險分析助手。請用繁體中文，僅根據下列 {app_title} "
-        f"已取得的核心數據分析 {stock_label}。\n\n"
+        f"已取得的核心數據分析 {stock_label}。若有資料缺失，請先上網查詢儘量補齊，再來判斷；"
+        "外部補齊值必須標示來源與日期，且不得覆蓋系統已取得值。\n\n"
         f"【核心數據】\n{core_data}\n\n"
         "【任務】\n"
         "1. 判斷現價相對 TTM、FY1、FY2、FY3 情境價與法人目標價是低估、合理或偏高。\n"

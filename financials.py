@@ -381,33 +381,94 @@ def build_eps_price_calculation_rows(
     return rows
 
 
-def render_eps_price_calculation_panel(rows, *, cap_eps_basis=""):
-    """Render the compact TTM/FY1/FY2/FY3 calculated-price area."""
-    st.markdown("#### 💰 股票預估價｜TTM / FY1 / FY2 / FY3")
-    st.caption("Base / Soft / Hard 全數來自 Dynamic Cap v18.2；計算價 = EPS × 倍率。與 v18.2 EPS 口徑不同的列只是情境換算，不直接作買點。")
+def render_eps_price_calculation_panel(
+    rows,
+    *,
+    cap_eps_basis="",
+    dual_valuation=None,
+    secondary_rows=None,
+):
+    """Render one formal price band, or two independent bands for hybrid companies."""
+    dual = dual_valuation if isinstance(dual_valuation, dict) else {}
+    display_two_prices = bool(dual.get("display_two_prices"))
+    primary = dual.get("primary") if isinstance(dual.get("primary"), dict) else {}
+    selected = dual.get("selected") if isinstance(dual.get("selected"), dict) else {}
+    selected_ready = selected.get("status") == "ready"
+
+    if display_two_prices:
+        st.markdown("#### 💰 股票預估價｜轉型／混合型雙估值")
+        st.caption("主要實際業務與市場共識第二定價為兩套獨立價格帶；禁止平均成第三套價格。計算價 = 同口徑 EPS × 各自倍率。")
+        primary_col, secondary_col = st.columns(2)
+        with primary_col:
+            primary_multiples = primary.get("multiples") or {}
+            st.markdown("##### ① 主要實際業務估值")
+            st.caption(
+                f"產業：{primary.get('display_name') or '—'}｜可信度：{primary.get('confidence') or '—'}｜資料日：{primary.get('as_of') or dual.get('as_of') or '—'}"
+            )
+            st.markdown(
+                f"**Base / Soft / Hard：{_format_multiple_triplet(primary_multiples)}**"
+            )
+        with secondary_col:
+            st.markdown("##### ② 市場共識第二定價")
+            st.caption(
+                f"產業：{selected.get('display_name') or '—'}｜可信度：{selected.get('confidence') or '—'}｜資料日：{selected.get('as_of') or dual.get('as_of') or '—'}"
+            )
+            if selected_ready:
+                st.markdown(
+                    f"**Base / Soft / Hard：{_format_multiple_triplet(selected.get('multiples') or {})}**"
+                )
+            else:
+                st.markdown("**第二產業已辨識，倍率資料不足（—／—／—）**")
+    else:
+        st.markdown("#### 💰 股票預估價｜TTM / FY1 / FY2 / FY3")
+        st.caption("Base / Soft / Hard 全數來自 Dynamic Cap v18.2；計算價 = EPS × 倍率。與 v18.2 EPS 口徑不同的列只是情境換算，不直接作買點。")
 
     def _fmt(value, suffix=""):
         value = s_float(value)
         return "—" if value is None else f"{value:.2f}{suffix}"
 
     display_rows = []
-    for row in rows or []:
-        display_rows.append({
-            "口徑": row.get("tier"),
-            "期間": row.get("period"),
-            "EPS": _fmt(row.get("eps")),
-            "Base": _fmt(row.get("base_cap"), "x"),
-            "Base計算價": _fmt(row.get("base_price"), "元"),
-            "Soft": _fmt(row.get("soft_cap"), "x"),
-            "Soft計算價": _fmt(row.get("soft_price"), "元"),
-            "Hard": _fmt(row.get("hard_cap"), "x"),
-            "Hard計算價": _fmt(row.get("hard_price"), "元"),
-            "定位": row.get("position"),
-        })
+
+    def _append_rows(source_rows, valuation_label):
+        for row in source_rows or []:
+            display_rows.append({
+                "估值視角": valuation_label,
+                "口徑": row.get("tier"),
+                "期間": row.get("period"),
+                "EPS": _fmt(row.get("eps")),
+                "Base": _fmt(row.get("base_cap"), "x"),
+                "Base計算價": _fmt(row.get("base_price"), "元"),
+                "Soft": _fmt(row.get("soft_cap"), "x"),
+                "Soft計算價": _fmt(row.get("soft_price"), "元"),
+                "Hard": _fmt(row.get("hard_cap"), "x"),
+                "Hard計算價": _fmt(row.get("hard_price"), "元"),
+                "定位": row.get("position"),
+            })
+
+    _append_rows(rows, "主要實際業務" if display_two_prices else "正式估值")
+    if display_two_prices and selected_ready:
+        _append_rows(secondary_rows, "市場共識第二定價")
+
     st_dataframe(pd.DataFrame(display_rows), hide_index=True)
+    if display_two_prices and not selected_ready:
+        selection = dual.get("selection") if isinstance(dual.get("selection"), dict) else {}
+        reason = str(selection.get("reason") or "").strip()
+        st.info("第二產業已辨識、倍率資料不足；不使用預設倍率或主要價格帶填補。" + (f" 原因：{reason}" if reason else ""))
     if not any(row.get("eps") is not None for row in (rows or [])):
         st.info("目前尚未取得可用 EPS；可點選上方 AI 全方位校對與補齊財報。")
     return rows
+
+
+def _format_multiple_triplet(multiples):
+    def _one(value):
+        value = s_float(value)
+        return "—" if value is None else f"{value:.2f}x"
+
+    return " / ".join([
+        _one((multiples or {}).get("base_pe")),
+        _one((multiples or {}).get("soft_ceiling_pe")),
+        _one((multiples or {}).get("hard_ceiling_pe")),
+    ])
 
 
 def render_eps_breakdown_panel(eps_report_df):

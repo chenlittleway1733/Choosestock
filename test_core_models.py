@@ -172,6 +172,16 @@ class ApplicationBrandAndNavigationTests(unittest.TestCase):
         self.assertNotIn("way-top-nav", main_source)
         self.assertNotIn("_section_anchor", main_source)
 
+    def test_prompt_pack_slot_is_directly_below_broker_target_slot(self):
+        main_source = (ROOT / "ui_main.py").read_text(encoding="utf-8")
+        broker_slot = main_source.index("broker_target_slot = st.container()")
+        prompt_slot = main_source.index("prompt_pack_slot = st.container()")
+        etf_panel = main_source.index("render_etf_exposure_panel", prompt_slot)
+        prompt_render = main_source.index("with prompt_pack_slot:")
+        self.assertLess(broker_slot, prompt_slot)
+        self.assertLess(prompt_slot, etf_panel)
+        self.assertGreater(prompt_render, prompt_slot)
+
     def test_financial_forecast_heading_is_renamed(self):
         source = (ROOT / "ui_panels" / "financials.py").read_text(encoding="utf-8")
         self.assertIn("股票預估價", source)
@@ -317,13 +327,26 @@ class StockMappingConsistencyTests(unittest.TestCase):
             dq_warnings=[],
         )
         self.assertEqual(cap_pack["model_version"], "Dynamic Cap 2.0 calibration 18.2")
-        self.assertAlmostEqual(cap_pack["base_multiple"], 31.07)
-        self.assertAlmostEqual(cap_pack["optimistic_cap"], 36.51)
-        self.assertAlmostEqual(cap_pack["structural_hard_ceiling_cap"], 38.38)
-        self.assertAlmostEqual(cap_pack["hard_ceiling_cap"], 38.38)
+        self.assertAlmostEqual(cap_pack["base_multiple"], 26.23)
+        self.assertAlmostEqual(cap_pack["optimistic_cap"], 28.76)
+        self.assertAlmostEqual(cap_pack["structural_hard_ceiling_cap"], 51.4)
+        self.assertAlmostEqual(cap_pack["hard_ceiling_cap"], 51.4)
         self.assertFalse(cap_pack["market_condition_hard_adjustment"]["adjusted"])
         self.assertIn("關閉市場 hard overlay", cap_pack["market_condition_hard_adjustment"]["reason"])
-        self.assertTrue(cap_pack["v18_2_special_case_review"])
+        self.assertFalse(cap_pack["v18_2_special_case_review"])
+        dual = profile["dynamic_cap_v18_2_dual_valuation"]
+        self.assertTrue(dual["display_two_prices"])
+        self.assertEqual(dual["primary"]["display_name"], "平台型 IC 龍頭")
+        self.assertEqual(dual["selected"]["display_name"], "高能見度 AI ASIC / Custom Silicon")
+        self.assertEqual(dual["selected"]["status"], "ready")
+        self.assertEqual(
+            (
+                dual["selected"]["multiples"]["base_pe"],
+                dual["selected"]["multiples"]["soft_ceiling_pe"],
+                dual["selected"]["multiples"]["hard_ceiling_pe"],
+            ),
+            (43.66, 47.55, 56.05),
+        )
 
     def test_taxonomy_pe_caps_are_ordered_when_present(self):
         for taxon, profile in industry_taxonomy.INDUSTRY_TAXONOMY.items():
@@ -353,12 +376,19 @@ class DynamicCapV182RegistryTests(unittest.TestCase):
         self.assertEqual(validation["stock_count"], 277)
         self.assertEqual(validation["caps_available_count"], 249)
         self.assertEqual(validation["unavailable_or_not_applicable_count"], 28)
-        self.assertEqual(validation["special_case_review_count"], 25)
+        self.assertEqual(validation["special_case_review_count"], 15)
+        self.assertEqual(validation["hybrid_or_transition_count"], 23)
+        self.assertEqual(validation["dual_valuation_ready_count"], 19)
+
+        registry = __import__("model_data_loader").load_dynamic_cap_v18_2_registry()
+        self.assertEqual(registry["as_of"], "2026-08-22")
+        self.assertEqual(registry["policy_revision"], "v18.2-only-2026-08-22-r9-persistent-regime-anchor")
+        self.assertTrue(registry["policy"]["dual_valuation_never_weighted_average"])
 
         expected = {
-            "2330": (24.82, 26.06, 27.37),
-            "2368": (35.62, 39.61, 44.21),
-            "8046": (70.41, 87.58, 94.42),
+            "2330": (21.7, 23.9, 26.38),
+            "2368": (13.35, 29.22, 37.68),
+            "8046": (57.75, 68.97, 86.53),
         }
         for stock_id, caps in expected.items():
             row = get_dynamic_cap_v18_2_by_stock_id(stock_id)
@@ -371,12 +401,17 @@ class DynamicCapV182RegistryTests(unittest.TestCase):
         self.assertEqual(get_dynamic_cap_v18_2_by_stock_id("2408")["eps_basis"], "not_applicable")
         self.assertEqual(get_dynamic_cap_v18_2_by_stock_id("2201")["eps_basis"], "insufficient")
 
+        insufficient_dual = get_dynamic_cap_v18_2_by_stock_id("2313")["dual_valuation"]
+        self.assertTrue(insufficient_dual["display_two_prices"])
+        self.assertEqual(insufficient_dual["selected"]["status"], "insufficient")
+        self.assertIsNone(insufficient_dual["selected"]["multiples"]["base_pe"])
+
     def test_stock_profile_and_engine_use_exact_caps_without_dynamic_overlay(self):
         profile = get_industry_valuation_profile("2330", "台積電")
         self.assertEqual(profile["model_build_version"], "18.2")
-        self.assertEqual(profile["base_pe"], 24.82)
-        self.assertEqual(profile["soft_ceiling_pe"], 26.06)
-        self.assertEqual(profile["hard_ceiling_pe"], 27.37)
+        self.assertEqual(profile["base_pe"], 21.7)
+        self.assertEqual(profile["soft_ceiling_pe"], 23.9)
+        self.assertEqual(profile["hard_ceiling_pe"], 26.38)
         self.assertTrue(profile["disable_market_hard_overlay"])
 
         pack = calculate_dynamic_cap_v2(
@@ -390,10 +425,10 @@ class DynamicCapV182RegistryTests(unittest.TestCase):
             ttm_eps=50,
             system_forward_eps=60,
         )
-        self.assertEqual(pack["base_multiple"], 24.82)
-        self.assertEqual(pack["formula_cap"], 24.82)
-        self.assertEqual(pack["optimistic_cap"], 26.06)
-        self.assertEqual(pack["hard_ceiling_cap"], 27.37)
+        self.assertEqual(pack["base_multiple"], 21.7)
+        self.assertEqual(pack["formula_cap"], 21.7)
+        self.assertEqual(pack["optimistic_cap"], 23.9)
+        self.assertEqual(pack["hard_ceiling_cap"], 26.38)
         self.assertFalse(pack["market_condition_hard_adjustment"]["adjusted"])
         self.assertEqual(pack["growth_premium"]["factor"], 1.0)
         self.assertTrue(pack["hit_hard_ceiling"])
@@ -430,7 +465,7 @@ class DynamicCapV182RegistryTests(unittest.TestCase):
         )
         self.assertEqual(context["formula_eps_for_calc"], 5)
         self.assertEqual(context["current_eps_source"], "TTM EPS")
-        self.assertAlmostEqual(context["sys_target_price_est"], 5 * 8.88)
+        self.assertAlmostEqual(context["sys_target_price_est"], 5 * 34.24)
         self.assertIsNone(context["ai_target_price_est"])
         self.assertIsNone(context["run_rate_reference_target_price"])
         for key in (
@@ -2561,6 +2596,52 @@ class UIRegressionTests(unittest.TestCase):
         self.assertIn("正式 TTM", rows[0]["position"])
         self.assertIn("非正式估值", rows[1]["position"])
 
+    def test_hybrid_price_panel_renders_two_independent_valuation_views(self):
+        from ui_panels import financials
+
+        primary_rows = financials.build_eps_price_calculation_rows(
+            ttm_eps=100,
+            fy1_eps=110,
+            base_cap=26.23,
+            soft_cap=28.76,
+            hard_cap=51.4,
+            cap_eps_basis="fy1_forward",
+        )
+        secondary_rows = financials.build_eps_price_calculation_rows(
+            ttm_eps=100,
+            fy1_eps=110,
+            base_cap=43.66,
+            soft_cap=47.55,
+            hard_cap=56.05,
+            cap_eps_basis="fy1_forward",
+        )
+        dual = get_dynamic_cap_v18_2_by_stock_id("2454")["dual_valuation"]
+        fake_st = _FakePanelStreamlit()
+        rendered_frames = []
+        original_st = financials.st
+        original_st_dataframe = financials.st_dataframe
+        try:
+            financials.st = fake_st
+            financials.st_dataframe = lambda frame, **kwargs: rendered_frames.append(frame)
+            financials.render_eps_price_calculation_panel(
+                primary_rows,
+                cap_eps_basis="fy1_forward",
+                dual_valuation=dual,
+                secondary_rows=secondary_rows,
+            )
+        finally:
+            financials.st = original_st
+            financials.st_dataframe = original_st_dataframe
+
+        markdown_text = "\n".join(call["text"] for call in fake_st.markdown_calls)
+        self.assertIn("轉型／混合型雙估值", markdown_text)
+        self.assertIn("主要實際業務估值", markdown_text)
+        self.assertIn("市場共識第二定價", markdown_text)
+        self.assertIn("26.23x / 28.76x / 51.40x", markdown_text)
+        self.assertIn("43.66x / 47.55x / 56.05x", markdown_text)
+        self.assertEqual(len(rendered_frames), 1)
+        self.assertEqual(set(rendered_frames[0]["估值視角"]), {"主要實際業務", "市場共識第二定價"})
+
     def _render_prompt_pack_with_fakes(self, *, prompt):
         from ui_panels import prompt_pack
 
@@ -2611,6 +2692,7 @@ class UIRegressionTests(unittest.TestCase):
         self.assertNotIn("FY1 EPS：", prompt)
         self.assertNotIn("法人最低目標價：", prompt)
         self.assertNotIn("N/A", prompt)
+        self.assertIn("若有資料缺失，請先上網查詢儘量補齊，再來判斷", prompt)
 
     def test_financial_panel_m10_margin_summary_renders_with_fake_streamlit(self):
         from ui_panels import financials

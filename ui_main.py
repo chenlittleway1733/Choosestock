@@ -22,6 +22,8 @@ from ui_panels.financials import (
 _DEPLOYMENT_COMPAT_NOTES = []
 try:
     from ui_panels.financials import build_eps_price_calculation_rows, render_eps_price_calculation_panel
+    if "dual_valuation" not in inspect.signature(render_eps_price_calculation_panel).parameters:
+        raise ImportError("financial panel does not support v18.2 dual valuation")
 except ImportError:
     _DEPLOYMENT_COMPAT_NOTES.append("使用 ui_main 內建 TTM/FY 計算面板。")
 
@@ -62,22 +64,71 @@ except ImportError:
             })
         return rows
 
-    def render_eps_price_calculation_panel(rows, *, cap_eps_basis=""):
-        st.markdown("#### 💰 股票預估價｜TTM / FY1 / FY2 / FY3")
-        st.caption("Base / Soft / Hard 來自 Dynamic Cap v18.2；計算價 = EPS × 倍率。跨口徑列只作情境換算。")
+    def render_eps_price_calculation_panel(
+        rows,
+        *,
+        cap_eps_basis="",
+        dual_valuation=None,
+        secondary_rows=None,
+    ):
+        dual = dual_valuation if isinstance(dual_valuation, dict) else {}
+        display_two_prices = bool(dual.get("display_two_prices"))
+        primary = dual.get("primary") if isinstance(dual.get("primary"), dict) else {}
+        selected = dual.get("selected") if isinstance(dual.get("selected"), dict) else {}
+        selected_ready = selected.get("status") == "ready"
+
+        def _triplet(multiples):
+            def _one(value):
+                value = s_float(value)
+                return "—" if value is None else f"{value:.2f}x"
+            return " / ".join([
+                _one((multiples or {}).get("base_pe")),
+                _one((multiples or {}).get("soft_ceiling_pe")),
+                _one((multiples or {}).get("hard_ceiling_pe")),
+            ])
+
+        if display_two_prices:
+            st.markdown("#### 💰 股票預估價｜轉型／混合型雙估值")
+            st.caption("主要實際業務與市場共識第二定價為兩套獨立價格帶；禁止平均成第三套價格。計算價 = 同口徑 EPS × 各自倍率。")
+            primary_col, secondary_col = st.columns(2)
+            with primary_col:
+                st.markdown("##### ① 主要實際業務估值")
+                st.caption(f"產業：{primary.get('display_name') or '—'}｜可信度：{primary.get('confidence') or '—'}｜資料日：{primary.get('as_of') or dual.get('as_of') or '—'}")
+                st.markdown(f"**Base / Soft / Hard：{_triplet(primary.get('multiples') or {})}**")
+            with secondary_col:
+                st.markdown("##### ② 市場共識第二定價")
+                st.caption(f"產業：{selected.get('display_name') or '—'}｜可信度：{selected.get('confidence') or '—'}｜資料日：{selected.get('as_of') or dual.get('as_of') or '—'}")
+                if selected_ready:
+                    st.markdown(f"**Base / Soft / Hard：{_triplet(selected.get('multiples') or {})}**")
+                else:
+                    st.markdown("**第二產業已辨識，倍率資料不足（—／—／—）**")
+        else:
+            st.markdown("#### 💰 股票預估價｜TTM / FY1 / FY2 / FY3")
+            st.caption("Base / Soft / Hard 來自 Dynamic Cap v18.2；計算價 = EPS × 倍率。跨口徑列只作情境換算。")
 
         def _fmt(value, suffix=""):
             value = s_float(value)
             return "—" if value is None else f"{value:.2f}{suffix}"
 
-        display_rows = [{
-            "口徑": row.get("tier"), "期間": row.get("period"), "EPS": _fmt(row.get("eps")),
-            "Base": _fmt(row.get("base_cap"), "x"), "Base計算價": _fmt(row.get("base_price"), "元"),
-            "Soft": _fmt(row.get("soft_cap"), "x"), "Soft計算價": _fmt(row.get("soft_price"), "元"),
-            "Hard": _fmt(row.get("hard_cap"), "x"), "Hard計算價": _fmt(row.get("hard_price"), "元"),
-            "定位": row.get("position"),
-        } for row in (rows or [])]
+        display_rows = []
+        def _append(source_rows, label):
+            for row in source_rows or []:
+                display_rows.append({
+                    "估值視角": label,
+                    "口徑": row.get("tier"), "期間": row.get("period"), "EPS": _fmt(row.get("eps")),
+                    "Base": _fmt(row.get("base_cap"), "x"), "Base計算價": _fmt(row.get("base_price"), "元"),
+                    "Soft": _fmt(row.get("soft_cap"), "x"), "Soft計算價": _fmt(row.get("soft_price"), "元"),
+                    "Hard": _fmt(row.get("hard_cap"), "x"), "Hard計算價": _fmt(row.get("hard_price"), "元"),
+                    "定位": row.get("position"),
+                })
+        _append(rows, "主要實際業務" if display_two_prices else "正式估值")
+        if display_two_prices and selected_ready:
+            _append(secondary_rows, "市場共識第二定價")
         st_dataframe(pd.DataFrame(display_rows), hide_index=True)
+        if display_two_prices and not selected_ready:
+            selection = dual.get("selection") if isinstance(dual.get("selection"), dict) else {}
+            reason = str(selection.get("reason") or "").strip()
+            st.info("第二產業已辨識、倍率資料不足；不使用預設倍率或主要價格帶填補。" + (f" 原因：{reason}" if reason else ""))
         return rows
 from ui_panels.etf import render_etf_exposure_panel
 from ui_panels.chips import render_chip_panels
@@ -137,7 +188,8 @@ except ImportError:
                 data_lines.append(f"- {label}：{value}")
         core_data = "\n".join(data_lines) if data_lines else "- 請先查證核心數據後再分析"
         return (
-            f"你是台股估值與風險分析助手。請用繁體中文，根據 {app_title} 分析 {stock_name} ({stock_id})。\n\n"
+            f"你是台股估值與風險分析助手。請用繁體中文，根據 {app_title} 分析 {stock_name} ({stock_id})。"
+            "若有資料缺失，請先上網查詢儘量補齊，再來判斷；外部補齊值必須標示來源與日期，且不得覆蓋系統已取得值。\n\n"
             f"【核心數據】\n{core_data}\n\n"
             "【任務】\n1. 判斷現價相對 TTM/FY1/FY2/FY3 情境價與法人目標價。\n"
             "2. 檢查毛利率、營益率與 YoY 是否支撐 EPS。\n"
@@ -300,6 +352,7 @@ def render_main_page(sidebar_state=None):
             # 先保留位置，待 EPS / Dynamic Cap / 法人資料完成後回填；畫面順序固定在即時報價正下方。
             eps_price_slot = st.container()
             broker_target_slot = st.container()
+            prompt_pack_slot = st.container()
 
             # ==========================================
             # 📌 主要 ETF 持有概況 + 獨立 AI ETF 補查
@@ -1326,10 +1379,38 @@ def render_main_page(sidebar_state=None):
                 hard_cap=hard_pe_cap_for_calc,
                 cap_eps_basis=dynamic_cap_pack.get("cap_eps_basis"),
             )
+            dual_valuation = (
+                industry_profile.get("dynamic_cap_v18_2_dual_valuation") or {}
+                if isinstance(industry_profile, dict)
+                else {}
+            )
+            secondary_eps_price_rows = []
+            dual_selected = (
+                dual_valuation.get("selected")
+                if isinstance(dual_valuation.get("selected"), dict)
+                else {}
+            )
+            if dual_valuation.get("display_two_prices") and dual_selected.get("status") == "ready":
+                secondary_multiples = dual_selected.get("multiples") or {}
+                secondary_eps_price_rows = build_eps_price_calculation_rows(
+                    ttm_eps=eff_t_eps,
+                    fy1_eps=cap_adopted_forward_eps,
+                    fy2_eps=ai_forward_eps_fy2,
+                    fy3_eps=ai_forward_eps_fy3,
+                    fy1_year=ai_forward_eps_fy1_year,
+                    fy2_year=ai_forward_eps_fy2_year,
+                    fy3_year=ai_forward_eps_fy3_year,
+                    base_cap=secondary_multiples.get("base_pe"),
+                    soft_cap=secondary_multiples.get("soft_ceiling_pe"),
+                    hard_cap=secondary_multiples.get("hard_ceiling_pe"),
+                    cap_eps_basis=dynamic_cap_pack.get("cap_eps_basis"),
+                )
             with eps_price_slot:
                 render_eps_price_calculation_panel(
                     eps_price_rows,
                     cap_eps_basis=dynamic_cap_pack.get("cap_eps_basis"),
+                    dual_valuation=dual_valuation,
+                    secondary_rows=secondary_eps_price_rows,
                 )
             with broker_target_slot:
                 target_panel_for_prompt, target_confidence = render_target_price_panel(
@@ -2182,6 +2263,22 @@ def render_main_page(sidebar_state=None):
                 ("系統最終燈號", final_signal.get("signal") if isinstance(final_signal, dict) else None),
                 ("系統操作建議", final_signal.get("advice") if isinstance(final_signal, dict) else None),
             ]
+            if dual_valuation.get("display_two_prices"):
+                dual_primary = dual_valuation.get("primary") if isinstance(dual_valuation.get("primary"), dict) else {}
+                dual_selection = dual_valuation.get("selection") if isinstance(dual_valuation.get("selection"), dict) else {}
+                secondary_multiples = dual_selected.get("multiples") if isinstance(dual_selected.get("multiples"), dict) else {}
+                essential_prompt_fields.extend([
+                    ("估值型態", "轉型／混合型雙估值（兩套禁止平均）"),
+                    ("主要實際業務產業", dual_primary.get("display_name")),
+                    ("市場共識第二定價產業", dual_selected.get("display_name")),
+                    ("第二定價狀態", "倍率可用" if dual_selected.get("status") == "ready" else "已辨識但倍率資料不足"),
+                    ("第二定價 Base", _essential_num(secondary_multiples.get("base_pe"), 2, "x")),
+                    ("第二定價 Soft", _essential_num(secondary_multiples.get("soft_ceiling_pe"), 2, "x")),
+                    ("第二定價 Hard", _essential_num(secondary_multiples.get("hard_ceiling_pe"), 2, "x")),
+                    ("第二定價可信度", dual_selected.get("confidence")),
+                    ("雙估值資料日", dual_valuation.get("as_of")),
+                    ("第二定價選擇依據", dual_selection.get("reason")),
+                ])
             for row in eps_price_rows:
                 scenario_parts = []
                 for cap_name, price_key in (("Base", "base_price"), ("Soft", "soft_price"), ("Hard", "hard_price")):
@@ -2190,6 +2287,14 @@ def render_main_page(sidebar_state=None):
                         scenario_parts.append(f"{cap_name} {price_text}")
                 if scenario_parts:
                     essential_prompt_fields.append((f"{row.get('tier')} 計算價", " / ".join(scenario_parts)))
+            for row in secondary_eps_price_rows:
+                scenario_parts = []
+                for cap_name, price_key in (("Base", "base_price"), ("Soft", "soft_price"), ("Hard", "hard_price")):
+                    price_text = _essential_num(row.get(price_key), 2, "元")
+                    if price_text:
+                        scenario_parts.append(f"{cap_name} {price_text}")
+                if scenario_parts:
+                    essential_prompt_fields.append((f"第二定價 {row.get('tier')} 計算價", " / ".join(scenario_parts)))
 
             essential_prompt_for_copy = build_essential_version_prompt(
                 app_title=APP_PAGE_TITLE,
@@ -2203,10 +2308,11 @@ def render_main_page(sidebar_state=None):
                 return prompt_technical_suffix(mode, hist=hist, curr_p=curr_p)
             
             # 第 17-C-2：打包提示詞分成「買進決策版 / 研究完整版」
-            _render_prompt_pack_compat(
-                curr_id=curr_id,
-                prompt=essential_prompt_for_copy,
-            )
+            with prompt_pack_slot:
+                _render_prompt_pack_compat(
+                    curr_id=curr_id,
+                    prompt=essential_prompt_for_copy,
+                )
             
             st.markdown("---")
 

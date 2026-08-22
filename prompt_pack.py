@@ -9,7 +9,7 @@ def render_prompt_pack_panel(*, curr_id, prompt):
     """Render one compact prompt; missing fields are omitted by its builder."""
     with st.expander("📋 點此複製【精簡提示詞】至 Gemini Advanced 或 ChatGPT 發問", expanded=True):
         selected_prompt = str(prompt or "").strip()
-        st.caption("只打包系統已取得的核心資料；沒有抓到的欄位不放入提示詞。")
+        st.caption("只打包系統已取得的核心資料；缺失欄位不放入資料包，但提示詞會要求外部 AI 先上網查詢、儘量補齊後再判斷。")
 
         safe_prompt_js = json.dumps(selected_prompt, ensure_ascii=False)
         components.html(

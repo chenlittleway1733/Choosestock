@@ -29,7 +29,8 @@ EXPECTED_VALUATION_UNIVERSE_COUNT = 157
 EXPECTED_MARGIN_QUALITY_COUNTS = {"A": 37, "B": 35, "C": 15, "N/A": 3}
 EXPECTED_DYNAMIC_CAP_V18_2_STOCK_COUNT = 277
 EXPECTED_DYNAMIC_CAP_V18_2_AVAILABLE_COUNT = 249
-EXPECTED_DYNAMIC_CAP_V18_2_SPECIAL_CASE_COUNT = 25
+EXPECTED_DYNAMIC_CAP_V18_2_SPECIAL_CASE_COUNT = 15
+EXPECTED_DYNAMIC_CAP_V18_2_HYBRID_COUNT = 23
 
 
 def _normalize_stock_id(value: Any) -> str:
@@ -141,6 +142,10 @@ def merge_dynamic_cap_v18_2_into_profile(profile: Dict[str, Any], stock_id: Any)
     cap = build_dynamic_cap_v18_2_profile(stock_id)
     merged.update({
         "dynamic_cap_v18_2": cap,
+        "dynamic_cap_v18_2_dual_valuation": cap.get("dual_valuation") or {},
+        "dynamic_cap_v18_2_display_two_prices": bool(
+            (cap.get("dual_valuation") or {}).get("display_two_prices")
+        ),
         "dynamic_cap_v18_2_coverage_enforced": True,
         "dynamic_cap_v18_2_found": bool(cap.get("found")),
         "dynamic_cap_v18_2_caps_available": bool(cap.get("caps_available")),
@@ -151,7 +156,7 @@ def merge_dynamic_cap_v18_2_into_profile(profile: Dict[str, Any], stock_id: Any)
         "dynamic_cap_v18_2_special_case_review": bool(cap.get("special_case_review")),
         "model_build_version": "18.2",
         "model_built_at": "2026-08-20",
-        "model_build_note": "採用使用者上傳的 Dynamic Cap v18.2 逐股倍率清冊；不回退 v18.1。",
+        "model_build_note": "採用 2026-08-22 Dynamic Cap v18.2 逐股倍率及轉型／混合雙估值清冊；不回退 v18.1。",
     })
 
     if cap.get("caps_available"):
@@ -380,12 +385,16 @@ def validate_dynamic_cap_v18_2_data() -> Dict[str, Any]:
     issues: List[str] = []
     available = [row for row in rows if row.get("caps_available")]
     special = [row for row in rows if row.get("special_case_review")]
+    hybrid = [row for row in rows if row.get("valuation_type") == "轉型／混合雙估值"]
+    dual_ready = []
     if len(rows) != EXPECTED_DYNAMIC_CAP_V18_2_STOCK_COUNT:
         issues.append(f"stock_count={len(rows)}")
     if len(available) != EXPECTED_DYNAMIC_CAP_V18_2_AVAILABLE_COUNT:
         issues.append(f"available_count={len(available)}")
     if len(special) != EXPECTED_DYNAMIC_CAP_V18_2_SPECIAL_CASE_COUNT:
         issues.append(f"special_case_count={len(special)}")
+    if len(hybrid) != EXPECTED_DYNAMIC_CAP_V18_2_HYBRID_COUNT:
+        issues.append(f"hybrid_count={len(hybrid)}")
     for row in rows:
         if not row.get("caps_available"):
             continue
@@ -397,6 +406,28 @@ def validate_dynamic_cap_v18_2_data() -> Dict[str, Any]:
             continue
         if numeric != sorted(numeric):
             issues.append(f"unordered_caps_{row.get('stock_id')}")
+    for row in hybrid:
+        dual = row.get("dual_valuation") or {}
+        selected = dual.get("selected") or {}
+        if not dual.get("display_two_prices"):
+            issues.append(f"dual_display_disabled_{row.get('stock_id')}")
+        if selected.get("status") == "ready":
+            selected_multiples = selected.get("multiples") or {}
+            values = [
+                selected_multiples.get("base_pe"),
+                selected_multiples.get("soft_ceiling_pe"),
+                selected_multiples.get("hard_ceiling_pe"),
+            ]
+            try:
+                numeric = [float(value) for value in values]
+            except Exception:
+                issues.append(f"invalid_secondary_caps_{row.get('stock_id')}")
+                continue
+            if numeric != sorted(numeric):
+                issues.append(f"unordered_secondary_caps_{row.get('stock_id')}")
+            dual_ready.append(row)
+        elif selected.get("status") != "insufficient":
+            issues.append(f"invalid_secondary_status_{row.get('stock_id')}")
     return {
         "ok": not issues,
         "issues": issues,
@@ -405,6 +436,8 @@ def validate_dynamic_cap_v18_2_data() -> Dict[str, Any]:
         "caps_available_count": len(available),
         "unavailable_or_not_applicable_count": len(rows) - len(available),
         "special_case_review_count": len(special),
+        "hybrid_or_transition_count": len(hybrid),
+        "dual_valuation_ready_count": len(dual_ready),
         "engine_counts": (registry.get("summary") or {}).get("engine_counts", {}),
     }
 
