@@ -22,6 +22,7 @@ STOCK_MODEL_MARGIN_FILE = "stock_model_data_with_margin.json"
 VALUATION_UNIVERSE_MARGIN_FILE = "valuation_universe_with_margin.json"
 MARGIN_RULES_FILE = "margin_benchmark_rules.json"
 DYNAMIC_CAP_V18_2_FILE = "dynamic_cap_v18_2_stock_caps.json"
+DYNAMIC_CAP_V18_2_ROOT_PATH = Path(__file__).resolve().parent / DYNAMIC_CAP_V18_2_FILE
 
 EXPECTED_INDUSTRY_CATEGORY_COUNT = 90
 EXPECTED_STOCK_MODEL_COUNT = 276
@@ -94,9 +95,22 @@ def load_margin_benchmark_rules() -> Dict[str, Any]:
 
 
 def load_dynamic_cap_v18_2_registry() -> Dict[str, Any]:
-    """Return the stock-level Dynamic Cap v18.2 registry extracted from the supplied PDF."""
-    data = _load_json(DYNAMIC_CAP_V18_2_FILE)
+    """Return v18.2 registry, preferring the deployment-safe project-root copy."""
+    data = _load_dynamic_cap_v18_2_registry_cached()
+    data = _json_safe_copy(data)
     return data if isinstance(data, dict) else {}
+
+
+@lru_cache(maxsize=1)
+def _load_dynamic_cap_v18_2_registry_cached() -> Any:
+    """Prefer the root registry so GitHub uploads cannot leave a stale nested copy active."""
+    candidates = [DYNAMIC_CAP_V18_2_ROOT_PATH, MODEL_DATA_DIR / DYNAMIC_CAP_V18_2_FILE]
+    for path in candidates:
+        if not path.exists():
+            continue
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
 
 def get_dynamic_cap_v18_2_by_stock_id(stock_id: Any) -> Optional[Dict[str, Any]]:

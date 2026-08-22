@@ -257,6 +257,7 @@ class ApplicationBrandAndNavigationTests(unittest.TestCase):
         self.assertIn("ui_main.py", names)
         self.assertIn("ui_panels/financials.py", names)
         self.assertIn("ui_context/prompt_context.py", names)
+        self.assertIn("dynamic_cap_v18_2_stock_caps.json", names)
         self.assertFalse(any(name.startswith("way_stock/") for name in names))
 
 
@@ -384,6 +385,14 @@ class DynamicCapV182RegistryTests(unittest.TestCase):
         self.assertEqual(registry["as_of"], "2026-08-22")
         self.assertEqual(registry["policy_revision"], "v18.2-only-2026-08-22-r9-persistent-regime-anchor")
         self.assertTrue(registry["policy"]["dual_valuation_never_weighted_average"])
+        root_registry_path = ROOT / "dynamic_cap_v18_2_stock_caps.json"
+        nested_registry_path = ROOT / "model_data" / "dynamic_cap_v18_2_stock_caps.json"
+        self.assertTrue(root_registry_path.exists())
+        self.assertEqual(
+            root_registry_path.read_bytes(),
+            nested_registry_path.read_bytes(),
+            "deployment-safe root registry must match the canonical nested registry",
+        )
 
         expected = {
             "2330": (21.7, 23.9, 26.38),
